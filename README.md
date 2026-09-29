@@ -115,6 +115,13 @@ work from an equirectangular count grid, which DuckDB bins in a single
   `terminal`), with a colorbar legend;
 * the limb and graticule are a braille outline, and RA increases to the left.
 
+## Versions
+
+The version comes from git tags via [setuptools-scm](https://setuptools-scm.readthedocs.io/), as in
+acid: a tagged commit `vX.Y.Z` is version `X.Y.Z`, and anything after it is a dev version such as
+`0.2.dev3+g1a2b3c4`. `pqx --version` prints it. To release, tag and push: `git tag v0.2.0 && git
+push origin v0.2.0`.
+
 ## Development
 
 ```

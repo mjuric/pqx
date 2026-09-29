@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68", "wheel", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pqx"
-version = "0.1.0"
+dynamic = ["version"]  # from git tags via setuptools-scm (vX.Y.Z)
 description = "A fast, friendly terminal explorer for Parquet files (Textual + DuckDB)"
 readme = "README.md"
 license = { text = "BSD-3-Clause" }
@@ -26,6 +26,9 @@ pqx = "pqx.cli:main"
 
 [tool.setuptools]
 packages = ["pqx"]
+
+[tool.setuptools_scm]
+version_file = "pqx/_version.py"
 
 [tool.setuptools.package-data]
 pqx = ["*.tcss"]
