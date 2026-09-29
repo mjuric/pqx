@@ -1,0 +1,38 @@
+name: Publish to PyPI
+
+# Publishing a GitHub Release (which creates its vX.Y.Z tag) builds pqx and
+# uploads it to PyPI; setuptools-scm takes the version from that tag. The same
+# tag also runs the full test matrix (ci.yml).
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write   # OIDC for PyPI trusted publishing: no API token stored
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # setuptools-scm needs full history
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Build package
+        env:
+          UV_PYTHON: "3.12"
+        run: uv build
+
+      - name: Check the version matches the release tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ls dist
+          test -f "dist/pqx-${tag}-py3-none-any.whl" || { echo "built version != tag ${GITHUB_REF_NAME}"; exit 1; }
+
+      - name: Publish to PyPI (trusted publishing)
+        run: uv publish --trusted-publishing always
