@@ -8,7 +8,8 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Input, Label, Markdown, RadioButton, RadioSet, SelectionList
+from textual.widgets import (Button, Checkbox, Input, Label, Markdown, OptionList, RadioButton, RadioSet,
+                             SelectionList)
 from textual.widgets.selection_list import Selection
 
 HELP = """\
@@ -28,7 +29,8 @@ Press **/** and type either
   `select band, count(*), avg(mag) from t group by 1 order by 1`
 
 **Enter** applies, **Esc** returns to the grid, **↑/↓** browse history and
-**→** accepts a column-name completion. **x** clears the filter.
+**→** accepts a column-name completion. **x** clears the filter, and
+**Ctrl+X** does too, even while you are typing in the filter box.
 The filter applies everywhere: grid, stats, plots and export.
 
 ## Data grid
@@ -43,6 +45,7 @@ The filter applies everywhere: grid, stats, plots and export.
 | **d** or Enter | toggle the row detail panel (full precision, sexagesimal, UTC dates) |
 | **c** | choose visible columns; **-** hides the cursor column |
 | **p** | pin columns up to the cursor (stay visible when scrolling right) |
+| Home / End | first / last column. **‹ ›** beside the header mean more columns that way (click to page); the panel's bottom edge reads e.g. *‹ 11 · columns 12–21 of 64 · 43 ›* |
 | **f** | toggle smart / raw number formatting |
 | **y** | copy cell value to the clipboard |
 | **i** | open statistics for the cursor column |
@@ -51,18 +54,29 @@ The filter applies everywhere: grid, stats, plots and export.
 
 | key | action |
 |---|---|
-| **1**–**5** | Data / Schema / Stats / Plot / Metadata tabs |
+| **1**–**5** · **Ctrl+← →** | go to a tab · previous / next tab (or click a name in a panel's top border) |
 | **e** | export the current view (filter + sort) to Parquet / CSV / JSON |
 | **m** | toggle sampling for stats and plots on large files |
 | **Esc** | cancel running queries |
-| **Ctrl+P** | command palette (themes, …) |
+| **Ctrl+P** | command palette |
 | **?** | this help · **q** quit |
 
 ## Stats and Plot tabs
 
 Stats: **l** toggles log-scale counts, **L** log-scale values, **[ ]** fewer / more bins.
-Plot: choose *Sky (Mollweide)* or *Scatter*, the columns and the colormap;
-**r** rotates the sky map centre between RA 0° and 180°.
+Plot: click a field of the settings line (mode, columns, centre, colour), or
+move to it with **tab** and press **enter**, to open a drop-down; type to
+narrow long column lists. **← →** steps the current field; **r** rotates the sky map centre
+between RA 0° and 180°. The colormaps are drawn in exact 256-colour values;
+*terminal* uses only your terminal's palette.
+
+## Look
+
+pqx uses your terminal's own background and 16 colours. Choose the focus
+colour with `--accent` (blue, cyan, magenta, green, yellow), how secondary
+text is dimmed with `--dim` (faint, or bright-black for terminals without the
+faint attribute) and the unfocused border colour with `--border`; or set
+`PQX_ACCENT`, `PQX_DIM` and `PQX_BORDER` in your shell.
 """
 
 
@@ -218,3 +232,98 @@ class ExportScreen(ModalScreen[dict | None]):
     @on(Button.Pressed, "#cancel")
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class FieldDropdown(ModalScreen[str | None]):
+    """A drop-down list under a settings field: type to narrow, ↑↓/enter or click to pick."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel"),
+                Binding("up", "move(-1)", "Up", show=False, priority=True),
+                Binding("down", "move(1)", "Down", show=False, priority=True),
+                Binding("pageup", "move(-10)", "Page up", show=False, priority=True),
+                Binding("pagedown", "move(10)", "Page down", show=False, priority=True)]
+
+    def __init__(self, title: str, options: list[str], current: str, x: int, y: int, max_height: int = 16):
+        super().__init__()
+        self.title_text = title
+        self.all = list(options)
+        self.current = current
+        self.at = (x, y)
+        self.max_height = max_height
+        self.width = max([len(o) for o in options] + [len(title) + 12, 16]) + 4
+        self.searchable = len(options) > 8
+
+    def compose(self) -> ComposeResult:
+        from .widgets import CursorList
+
+        with Vertical(id="dropdown"):
+            if self.searchable:
+                yield Input(placeholder="type to filter…", id="dropdown-filter")
+            yield CursorList(id="dropdown-list")
+
+    def on_mount(self) -> None:
+        self.app.call_after_refresh(self.app._render_keys)
+        box = self.query_one("#dropdown")
+        w = min(self.width, max(20, self.app.size.width - 2))
+        h = min(len(self.all), self.max_height) + (1 if self.searchable else 0) + 2
+        x = max(0, min(self.at[0], self.app.size.width - w))
+        y = self.at[1]
+        if y + h > self.app.size.height:  # no room below: open upwards
+            y = max(0, self.at[1] - h - 1)
+        self.box_w = w
+        box.styles.width = w
+        box.styles.height = h
+        box.styles.offset = (x, y)
+        self._fill("")
+        if self.searchable:
+            self.query_one("#dropdown-filter", Input).focus()
+        else:
+            self.query_one("#dropdown-list").focus()
+
+    def _fill(self, flt: str) -> None:
+        from rich.text import Text
+
+        lst = self.query_one("#dropdown-list")
+        f = flt.lower()
+        shown = [o for o in self.all if f in o.lower()]
+        lst.set_items([(o, Text(o, style="bold" if o == self.current else "")) for o in shown],
+                      width=self.box_w - 4)
+        if shown:
+            lst.highlighted = shown.index(self.current) if self.current in shown else 0
+        box = self.query_one("#dropdown")
+        if getattr(self, "box_w", None):
+            box.styles.height = max(1, min(len(shown), self.max_height)) + (1 if self.searchable else 0) + 2
+        n = f"{len(shown)} of {len(self.all)}" if flt else f"{len(self.all)}"
+        box.border_title = f"[dim]{self.title_text}  {n}[/]"
+
+    @on(Input.Changed, "#dropdown-filter")
+    def refilter(self, event: Input.Changed) -> None:
+        self._fill(event.value)
+
+    @on(Input.Submitted, "#dropdown-filter")
+    def submit(self) -> None:
+        lst = self.query_one("#dropdown-list")
+        if lst.highlighted is not None and lst.option_count:
+            self.dismiss(lst.get_option_at_index(lst.highlighted).id)
+
+    @on(OptionList.OptionSelected, "#dropdown-list")
+    def picked(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id)
+
+    def action_move(self, d: int) -> None:
+        lst = self.query_one("#dropdown-list")
+        if not lst.option_count:
+            return
+        cur = lst.highlighted if lst.highlighted is not None else 0
+        lst.highlighted = max(0, min(lst.option_count - 1, cur + d))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_unmount(self) -> None:
+        self.app.call_after_refresh(self.app._render_keys)
+
+    def on_click(self, event) -> None:
+        # a click outside the list closes it, like a native drop-down
+        if self.get_widget_at(event.screen_x, event.screen_y)[0] is self:
+            self.dismiss(None)

@@ -45,6 +45,17 @@ def test_derived():
     assert F.shortest(0.10000000149011612, pa.float32()) == 0.1
 
 
+def test_percent():
+    assert F.percent(1_290_773, 1_290_773) == "100%"     # was "1e+02%"
+    assert F.percent(0, 10) == "0%"
+    assert F.percent(350_100, 500_000) == "70%"
+    assert F.percent(1, 10**6) == "<0.01%"
+    assert F.percent(999_999, 10**6) == ">99.99%"
+    assert F.percent(9_995, 10_000) == "99.95%"
+    assert F.percent(21, 20_000) == "0.105%"
+    assert F.percent(5, 0) == ""
+
+
 def test_human():
     assert F.human_count(4_213_882_112) == "4.21B"
     assert F.human_bytes(35.4 * 1024 ** 2) == "35.4 MiB"
@@ -85,4 +96,10 @@ def test_colormaps():
         for dark in (True, False):
             c = plots.cmap_color(cm, 0.5, dark)
             assert c.startswith("#") and len(c) == 7
+    assert plots.DEFAULT_CMAP == "magma"
+    assert plots.xterm256("#000000") == 16 and plots.xterm256("#ffffff") == 231
+    assert plots.xterm256("#d7af5f") == 179 and plots.xterm256("#808080") == 244
+    assert str(plots.density_style("magma", 0.5).color).startswith("Color('color(")
+    assert plots.density_style("terminal", 0.9).bold
+    assert plots.density_style("terminal", 0.5, accent="cyan").color.name == "cyan"
     assert math.isclose(plots._cell_area_deg2(180, 360, np.arange(180)).sum() * 360, 41252.96, rel_tol=1e-4)

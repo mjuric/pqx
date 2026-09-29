@@ -22,6 +22,8 @@ import pyarrow as pa
 from rich.text import Text
 
 NULL = "∅"
+#: Rich style for secondary text: "dim" (SGR 2 faint) or "bright_black"; set by the app.
+DIM = "dim"
 
 _MJD = re.compile(r"mjd|(^|_)jd($|_)|^jd|epoch|tai$|utc$", re.I)
 _ANGLE = re.compile(r"(^|_)(ra|dec|decl|lon|lat|glon|glat|elon|elat|lambda|beta)($|_)", re.I)
@@ -167,11 +169,11 @@ class CellFormatter:
         s = format_value(v, self.kind, raw=raw)
         justify = "right" if self.right else "left"
         if v is None:
-            return Text(s, style="dim italic", justify=justify)
+            return Text(s, style=DIM, justify=justify)
         if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-            return Text(s, style="dim italic", justify=justify)
+            return Text(s, style=DIM, justify=justify)
         if self.kind == "bool":
-            return Text(s, style="bold green" if v else "dim", justify="center")
+            return Text(s, style="bold" if v else DIM, justify="center")
         return Text(s, justify=justify)
 
 
@@ -236,6 +238,28 @@ def derived(name: str, kind: str, v: Any) -> str:
     if kind == "flux" and v > 0 and "err" not in low:
         return f"{-2.5 * math.log10(v) + 31.4:.3f} AB mag (if nJy)"
     return ""
+
+
+def percent(part: float, whole: float) -> str:
+    """``part`` as a percentage of ``whole``, never misleading at the ends.
+
+    0 and 100 are exact ("0%", "100%"); a non-zero share never rounds to 0 or
+    100 ("<0.01%", ">99.99%"); otherwise 3 significant digits ("4.7%", "70.1%"),
+    or 2 decimals near the top so 99.95% doesn't read as 100%."""
+    if not whole:
+        return ""
+    if part <= 0:
+        return "0%"
+    if part >= whole:
+        return "100%"
+    p = 100.0 * part / whole
+    if p < 0.01:
+        return "<0.01%"
+    if p > 99.99:
+        return ">99.99%"
+    if p >= 99.5:
+        return f"{p:.2f}%"
+    return f"{p:.3g}%"
 
 
 def human_count(n: int | float | None) -> str:

@@ -17,8 +17,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("path", help="Parquet file to open")
     p.add_argument("-w", "--where", default="",
                    help="initial filter: a SQL WHERE expression, or a full 'select … from t' query")
-    p.add_argument("--theme", default=None, help="Textual theme (e.g. tokyo-night, nord, gruvbox, "
-                                                 "textual-light); switch live with Ctrl+P")
+    p.add_argument("--accent", choices=["blue", "cyan", "magenta", "green", "yellow"], default=None,
+                   help="focus colour, from the terminal's palette (default: blue; env PQX_ACCENT)")
+    p.add_argument("--dim", choices=["faint", "bright-black"], default=None,
+                   help="how secondary text is dimmed: the faint attribute (default) or ANSI bright black "
+                        "(env PQX_DIM)")
+    p.add_argument("--border", default=None,
+                   help="colour of unfocused panel borders, an ANSI name such as bright_black (default) or white "
+                        "(env PQX_BORDER)")
+    p.add_argument("--theme", default=None, help="use a Textual theme instead of the terminal's own colours")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--sample", dest="sample", action="store_true", default=None,
                    help="sample rows for stats/plots (default: on above 200M rows or 8 GiB)")
@@ -34,7 +41,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         from .app import PqxApp
-        app = PqxApp(a.path, where=a.where, theme=a.theme, sample=a.sample, threads=a.threads)
+        app = PqxApp(a.path, where=a.where, theme=a.theme, sample=a.sample, threads=a.threads,
+                     accent=a.accent, dim=a.dim, border=a.border)
     except Exception as e:  # noqa: BLE001 — surface unreadable files cleanly
         print(f"pqx: cannot open {a.path}: {e}", file=sys.stderr)
         return 1
