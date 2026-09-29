@@ -324,5 +324,6 @@ async def test_plot_field_dropdown(wide_path):
         await pilot.pause(0.2)
         assert not app.screen.query("#dropdown-filter")
         await pilot.press("down", "enter")
+        await pilot.pause(0.4)  # the replot is debounced
         await settle(pilot, app)
         assert pc.value("colour") == "viridis"

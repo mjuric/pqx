@@ -65,6 +65,20 @@ KEYS = {
 }
 
 
+def _ui(fn):
+    """Mark a main-thread UI update fed by a worker: if the app is tearing down
+    (quit while a query was running), its widgets are gone; skip silently."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(self, *a, **kw):
+        try:
+            return fn(self, *a, **kw)
+        except NoMatches:
+            return None
+    return wrapper
+
+
 def _epoch_label(v: float) -> str:
     return dt.datetime.fromtimestamp(v, dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
 
@@ -506,6 +520,7 @@ class PqxApp(App):
             self._spin = (self._spin + 1) % len(SPINNER)
             self._render_status()
 
+    @_ui
     def _set_busy(self, key: str, label: str | None) -> None:
         if label is None:
             self._busy.pop(key, None)
@@ -613,6 +628,7 @@ class PqxApp(App):
             return
         self.call_from_thread(self._apply_page, page, cursor_abs, column)
 
+    @_ui
     def _apply_page(self, page, cursor_abs: int, column: int | None) -> None:
         grid = self.query_one(GridTable)
         col = grid.cursor_column if column is None else column
@@ -752,6 +768,7 @@ class PqxApp(App):
             return
         self.call_from_thread(self._set_view, view, schema, keep_file_row)
 
+    @_ui
     def _set_view(self, view: View, schema, keep_file_row: int | None = None) -> None:
         inp = self.query_one("#filter", Input)
         self.query_one("#filterbox").remove_class("error")
@@ -799,6 +816,7 @@ class PqxApp(App):
         if view is self.view:
             self.call_from_thread(self._set_total, n, time.time() - t0)
 
+    @_ui
     def _set_total(self, n: int, secs: float | None = None) -> None:
         self.total = n
         self._count_secs = secs
@@ -850,6 +868,7 @@ class PqxApp(App):
         self.history.append(inp.value)
         self.apply_filter(inp.value)
 
+    @_ui
     def _show_error(self, e: Exception, mark_input: bool = False) -> None:
         msg = str(e).strip()
         first = msg.split("\n")[0]
@@ -1019,6 +1038,7 @@ class PqxApp(App):
         finally:
             self.call_from_thread(self._set_busy, "export", None)
         size = F.human_bytes(os.path.getsize(opts["path"])) if os.path.exists(opts["path"]) else "?"
+        # (notify is safe during teardown)
         self.call_from_thread(self.notify, f"✓ Wrote {F.human_count(n)} rows · {size} · {time.time() - t0:.1f} s"
                                            f"\n→ {opts['path']}", timeout=8)
 
@@ -1249,10 +1269,12 @@ class PqxApp(App):
                              (f"   {info.description}" if info and info.description else "", self.dim))
         return Group(line, status)
 
+    @_ui
     def _stats_running(self, name: str) -> None:
         st = Text.assemble((SPINNER[3], self.accent), f" Profiling {name}", (f"   {self._scope(self.view)}", self.dim))
         self.query_one("#stats-head", Static).update(self._stats_head(name, st))
 
+    @_ui
     def _render_stats(self, name: str, typ: pa.DataType, st: ColumnStats, hist, elapsed: float) -> None:
         self._stats_stale = False
         self._stats_shown = name
@@ -1399,9 +1421,8 @@ class PqxApp(App):
         sample = self._sample()
         d = self.dim
         self.call_from_thread(self._set_busy, "plot", f"binning {x} × {y}")
-        self.call_from_thread(self.query_one("#plot-status", Static).update,
-                              Text.assemble((SPINNER[3], self.accent), f" Binning {x} × {y}",
-                                            (f"   {self._scope(view)}", d)))
+        self.call_from_thread(self._plot_show, Text.assemble((SPINNER[3], self.accent), f" Binning {x} × {y}",
+                                                             (f"   {self._scope(view)}", d)), None)
         t0 = time.time()
         try:
             with self.ds.tagged("plot"):
@@ -1434,5 +1455,10 @@ class PqxApp(App):
             status = Text.assemble(("!", "yellow"), f" Binned {x} × {y}, sampled", (rest + "  ·  m scans everything", d))
         else:
             status = Text.assemble(("✓", "green"), f" Binned {x} × {y}", (rest, d))
-        self.call_from_thread(self.query_one("#plot-status", Static).update, status)
-        self.call_from_thread(self.query_one("#plot-body", Static).update, out)
+        self.call_from_thread(self._plot_show, status, out)
+
+    @_ui
+    def _plot_show(self, status: Text, body) -> None:
+        self.query_one("#plot-status", Static).update(status)
+        if body is not None:
+            self.query_one("#plot-body", Static).update(body)

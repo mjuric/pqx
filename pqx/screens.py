@@ -270,7 +270,7 @@ class FieldDropdown(ModalScreen[str | None]):
             y = max(0, self.at[1] - h - 1)
         self.box_w = w
         box.styles.width = w
-        box.styles.max_height = h
+        box.styles.height = h
         box.styles.offset = (x, y)
         self._fill("")
         if self.searchable:
@@ -289,6 +289,8 @@ class FieldDropdown(ModalScreen[str | None]):
         if shown:
             lst.highlighted = shown.index(self.current) if self.current in shown else 0
         box = self.query_one("#dropdown")
+        if getattr(self, "box_w", None):
+            box.styles.height = max(1, min(len(shown), self.max_height)) + (1 if self.searchable else 0) + 2
         n = f"{len(shown)} of {len(self.all)}" if flt else f"{len(self.all)}"
         box.border_title = f"[dim]{self.title_text}  {n}[/]"
 

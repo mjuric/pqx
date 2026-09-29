@@ -375,6 +375,5 @@ FieldDropdown {
 }
 
 #dropdown-list {
-    height: auto;
-    max-height: 100%;
+    height: 1fr;
 }
