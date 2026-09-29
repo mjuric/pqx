@@ -478,12 +478,12 @@ class PqxApp(App):
                     yield Static(id="schema-desc", classes="panel")
             with TabPane("Stats", id="tab-stats"):
                 with Horizontal():
-                    with Vertical(id="stats-cols-panel", classes="panel"):
-                        yield CursorList(id="stats-cols")
                     with VerticalScroll(id="stats-body", classes="panel tabbed"):
                         yield Static(id="stats-head")
                         yield Static(id="stats-summary")
                         yield Static(id="stats-plot")
+                    with Vertical(id="stats-cols-panel", classes="panel"):
+                        yield CursorList(id="stats-cols")
             with TabPane("Plot", id="tab-plot"):
                 with Vertical(id="plot-panel", classes="panel tabbed"):
                     yield PlotControls(id="plot-controls")

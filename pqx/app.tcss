@@ -178,7 +178,7 @@ DataTable:blur > .datatable--cursor {
 #stats-cols-panel {
     width: 36;
     height: 1fr;
-    margin-right: 1;
+    margin-left: 1;
 }
 
 OptionList {
