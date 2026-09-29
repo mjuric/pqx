@@ -14,6 +14,14 @@ with that:
 :func:`install` makes input decoding lenient (an invalid byte becomes the
 character with that code, which is exactly what an X10 coordinate means) and
 translates X10/urxvt mouse events into SGR before Textual parses them.
+
+It also keeps mouse coordinates in character cells. When a terminal says it
+supports in-band resize reports (mode 2048), Textual switches the mouse to
+pixel coordinates (mode 1016) and relies on those reports to convert back to
+cells. iTerm2 accepts 1016 but doesn't send the reports, so every click lands
+at a pixel position far off-screen and does nothing. Textual guards against
+this only when ``TERM_PROGRAM``/``LC_TERMINAL`` name iTerm, which they don't
+over ssh. pqx never needs sub-cell mouse precision, so pixel mode stays off.
 """
 from __future__ import annotations
 
@@ -71,6 +79,13 @@ def install() -> None:
 
         linux_driver.getincrementaldecoder = lenient
     except Exception:  # pragma: no cover - other platforms / Textual versions
+        pass
+
+    try:
+        from textual.drivers.linux_driver import LinuxDriver
+
+        LinuxDriver._enable_mouse_pixels = lambda self: None  # cells, always (see above)
+    except Exception:  # pragma: no cover
         pass
 
     try:

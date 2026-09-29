@@ -34,3 +34,66 @@ def test_input_decoding_survives_invalid_utf8():
     # an X10 click at column 120: 0x98 is not valid UTF-8 and used to kill the input thread
     assert dec.decode(b"\x1b[M \x98-") == "\x1b[M \x98-"
     assert dec.decode("é✓".encode()) == "é✓"   # real UTF-8 is unaffected
+
+
+def test_pixel_mouse_mode_is_never_enabled():
+    from textual.drivers.linux_driver import LinuxDriver
+
+    class FakeDriver:
+        _mouse = True
+        _mouse_pixels = False
+        written = ""
+
+        def write(self, s):
+            self.written += s
+
+    d = FakeDriver()
+    LinuxDriver._enable_mouse_pixels(d)
+    assert "1016" not in d.written and not d._mouse_pixels
+
+
+def test_iterm_over_ssh_handshake_keeps_cell_coordinates(demo_path):
+    """Replay the handshake from an iTerm2-over-ssh keys.log in a real pty.
+
+    iTerm answers the mode-2048 query 'supported', but never sends in-band
+    size reports. pqx must not switch the mouse to pixel coordinates."""
+    import os
+    import select
+    import signal
+    import sys
+    import time
+
+    import pytest
+
+    if not sys.platform.startswith(("linux", "darwin")):
+        pytest.skip("needs a pty")
+    import fcntl
+    import pty
+    import struct
+    import termios
+
+    pid, fd = pty.fork()
+    if pid == 0:  # child: the real pqx CLI
+        env = {k: v for k, v in os.environ.items() if k not in ("TERM_PROGRAM", "LC_TERMINAL")}
+        env["TERM"] = "xterm-256color"
+        os.execve(sys.executable, [sys.executable, "-m", "pqx", demo_path], env)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+    out, answered = b"", False
+    try:
+        end = time.time() + 20
+        while time.time() < end:
+            r, _, _ = select.select([fd], [], [], 0.1)
+            if r:
+                try:
+                    out += os.read(fd, 65536)
+                except OSError:
+                    break
+            if not answered and b"\x1b[?2048$p" in out:
+                os.write(fd, b"\x1b[?2026;2$y\x1b[?2048;2$y")  # exactly what iTerm replied
+                answered, end = True, time.time() + 3
+        assert answered, "pqx never queried mode 2048 (did the app start?)"
+        assert b"\x1b[?1006h" in out  # SGR mouse is on…
+        assert b"\x1b[?1016h" not in out  # …but never in pixel coordinates
+    finally:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
