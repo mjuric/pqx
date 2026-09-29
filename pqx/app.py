@@ -29,11 +29,14 @@ from textual.suggester import Suggester
 from textual.theme import Theme
 from textual.widgets import DataTable, Input, Label, OptionList, Static, TabbedContent, TabPane
 
+from . import _terminal
 from . import fmt as F
 from . import plots
 from .data import ColumnStats, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec, quote_ident
 from .screens import ColumnPicker, ExportScreen, FieldDropdown, GotoScreen, HelpScreen
 from .widgets import CursorList
+
+_terminal.install()  # X10/urxvt mouse (GNU screen) + lenient input decoding; see _terminal.py
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SAMPLE_ROWS = 2_000_000       # rows used for stats/plots when sampling
@@ -530,7 +533,7 @@ class PqxApp(App):
             if tab == active:
                 parts.append(f"[bold ansi_{self.accent}]{name}[/]")
             else:
-                parts.append(f"[{colour} @click=app.tab('{tab}')]{name}[/]")
+                parts.append(f"[{colour}]{name}[/]")  # clicks: see on_click (border titles get none)
         title = f" [{colour}]─[/] ".join(parts)
         for panel in self.query(".tabbed"):
             panel.border_title = title
@@ -564,6 +567,26 @@ class PqxApp(App):
 
     def on_descendant_focus(self, event) -> None:
         self._render_keys()
+
+    def on_click(self, event) -> None:
+        """A click on a panel's top border switches to the tab name under it.
+
+        Textual doesn't route clicks (or ``@click`` actions) from border titles,
+        so the name is found by position: a left-aligned title starts three cells
+        in, after the corner, one rule and a space ("┌─ Data ─ Schema …")."""
+        from textual.content import Content
+
+        w = event.widget
+        if w is None or not w.has_class("tabbed") or event.y != 0:
+            return
+        plain = Content.from_markup(str(w.border_title)).plain
+        x = event.x - 3
+        for tab, name in TABS:
+            i = plain.find(name)
+            if i >= 0 and i <= x < i + len(name):
+                event.stop()
+                self.action_tab(tab)
+                return
 
     def on_screen_resume(self, event) -> None:
         self.call_after_refresh(self._render_keys)

@@ -364,3 +364,20 @@ async def test_hidden_column_hints(wide_path):
         await pilot.pause(0.2)
         assert str(narrow.query_one("#data-panel").border_subtitle) == ""
         assert str(narrow.query_one("#more-right").render()).strip() == ""
+
+
+async def test_click_tab_names_in_border(demo_path):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        tc = app.query_one(TabbedContent)
+        # "┌─ Data ─ Schema ─ Stats ─ Plot ─ Meta": the title starts 3 cells in
+        await pilot.click("#data-panel", offset=(3 + 8, 0))
+        await settle(pilot, app)
+        assert tc.active == "tab-schema"
+        await pilot.click("#schema-panel", offset=(3 + 27, 0))
+        await settle(pilot, app)
+        assert tc.active == "tab-plot"
+        await pilot.click("#plot-panel", offset=(3 + 5, 0))  # the '─' between Data and Schema
+        await pilot.pause(0.2)
+        assert tc.active == "tab-plot"
