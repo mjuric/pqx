@@ -4,3 +4,5 @@ __pycache__/
 *.parquet
 !tests/data/*.parquet
 .pytest_cache/
+# setuptools-scm generated version file
+pqx/_version.py

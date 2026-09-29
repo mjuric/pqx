@@ -103,3 +103,15 @@ def test_colormaps():
     assert plots.density_style("terminal", 0.9).bold
     assert plots.density_style("terminal", 0.5, accent="cyan").color.name == "cyan"
     assert math.isclose(plots._cell_area_deg2(180, 360, np.arange(180)).sum() * 360, 41252.96, rel_tol=1e-4)
+
+
+def test_version_comes_from_git():
+    import subprocess
+    import sys
+
+    import pqx
+
+    # setuptools-scm wrote pqx/_version.py at install time; the fallback means it didn't
+    assert pqx.__version__ != "0.0.0.dev0"
+    out = subprocess.run([sys.executable, "-m", "pqx", "--version"], capture_output=True, text=True).stdout
+    assert out.strip() == f"pqx {pqx.__version__}"
