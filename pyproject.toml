@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pqx"
+version = "0.1.0"
+description = "A fast, friendly terminal explorer for Parquet files (Textual + DuckDB)"
+readme = "README.md"
+license = { text = "BSD-3-Clause" }
+authors = [{ name = "Mario Juric" }]
+requires-python = ">=3.10"
+dependencies = [
+  "textual>=1.0",
+  "duckdb>=1.1",
+  "pyarrow>=14",
+  "numpy>=1.23",
+  "pytz",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pandas"]
+
+[project.scripts]
+pqx = "pqx.cli:main"
+
+[tool.setuptools]
+packages = ["pqx"]
+
+[tool.setuptools.package-data]
+pqx = ["*.tcss"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120

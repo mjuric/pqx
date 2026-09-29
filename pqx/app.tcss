@@ -1,0 +1,198 @@
+Screen {
+    layout: vertical;
+}
+
+#titlebar {
+    height: 1;
+    background: $panel;
+    color: $text;
+    padding: 0 1 0 0;
+}
+
+#filterbar {
+    height: 3;
+    padding: 0 1;
+    background: $surface;
+}
+
+#filter-mode {
+    height: 1;
+    margin: 1 1 0 0;
+    background: $primary;
+    color: $text;
+    text-style: bold;
+}
+
+#filter-mode.sql {
+    background: $secondary;
+}
+
+#filter {
+    width: 1fr;
+    border: tall $surface-lighten-2;
+}
+
+#filter:focus {
+    border: tall $accent;
+}
+
+#filter.error {
+    border: tall $error;
+}
+
+#tabs {
+    height: 1fr;
+}
+
+TabPane {
+    padding: 0;
+}
+
+#grid {
+    width: 1fr;
+    height: 1fr;
+}
+
+#detail {
+    width: 45%;
+    max-width: 80;
+    min-width: 36;
+    height: 1fr;
+    border-left: vkey $primary;
+    padding: 0 1;
+    background: $surface;
+}
+
+#schema-table {
+    height: 1fr;
+}
+
+#schema-desc {
+    height: auto;
+    min-height: 3;
+    padding: 0 1;
+    background: $surface;
+    border-top: hkey $primary;
+}
+
+#stats-cols {
+    width: 32;
+    height: 1fr;
+    border: none;
+    border-right: vkey $primary;
+}
+
+#stats-body {
+    width: 1fr;
+    height: 1fr;
+    padding: 0 2;
+}
+
+#stats-head {
+    margin: 1 0;
+}
+
+#plot-controls {
+    height: 3;
+    padding: 0 1;
+}
+
+#plot-controls Select {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#plot-mode {
+    max-width: 26;
+}
+
+#plot-cmap {
+    max-width: 18;
+}
+
+#plot-head {
+    height: 1;
+    padding: 0 1;
+}
+
+#plot-area {
+    height: 1fr;
+    padding: 0 1;
+}
+
+#meta-overview {
+    margin: 1 2;
+    height: auto;
+}
+
+.section {
+    margin: 1 2 0 2;
+}
+
+#rowgroups {
+    margin: 0 2;
+    height: auto;
+}
+
+#meta-kv {
+    margin: 0 2 1 2;
+    height: auto;
+}
+
+#status {
+    height: 1;
+    background: $panel;
+    padding: 0 1;
+}
+
+/* dialogs */
+ModalScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+.dialog {
+    width: 80;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+    border: thick $primary;
+    background: $surface;
+    padding: 1 2;
+}
+
+.dialog.small {
+    width: 60;
+}
+
+#help-box {
+    width: 96;
+    height: 90%;
+}
+
+#help-foot {
+    margin-top: 1;
+}
+
+#picker-box {
+    height: 80%;
+}
+
+#picker-list {
+    height: 1fr;
+    margin: 1 0;
+}
+
+.buttons {
+    height: auto;
+    align-horizontal: right;
+    margin-top: 1;
+}
+
+.buttons Button {
+    margin-left: 1;
+}
+
+#export-box RadioSet, #export-box Checkbox {
+    margin-top: 1;
+}
