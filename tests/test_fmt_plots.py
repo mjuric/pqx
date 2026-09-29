@@ -45,6 +45,17 @@ def test_derived():
     assert F.shortest(0.10000000149011612, pa.float32()) == 0.1
 
 
+def test_percent():
+    assert F.percent(1_290_773, 1_290_773) == "100%"     # was "1e+02%"
+    assert F.percent(0, 10) == "0%"
+    assert F.percent(350_100, 500_000) == "70%"
+    assert F.percent(1, 10**6) == "<0.01%"
+    assert F.percent(999_999, 10**6) == ">99.99%"
+    assert F.percent(9_995, 10_000) == "99.95%"
+    assert F.percent(21, 20_000) == "0.105%"
+    assert F.percent(5, 0) == ""
+
+
 def test_human():
     assert F.human_count(4_213_882_112) == "4.21B"
     assert F.human_bytes(35.4 * 1024 ** 2) == "35.4 MiB"

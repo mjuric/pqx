@@ -31,6 +31,7 @@ def odd_path(tmp_path_factory):
         "pos": pa.array([{"ra": float(i), "dec": -float(i) / 20} for i in range(n)]),
         "blob": pa.array([bytes([i % 256]) * (i % 20) for i in range(n)], type=pa.binary()),
         "day": pa.array(np.datetime64("2026-01-01") + np.arange(n).astype("timedelta64[D]")),
+        "allnull": pa.nulls(n, pa.int64()),
     })
     pq.write_table(tbl, p, row_group_size=300)
     return str(p)

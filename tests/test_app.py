@@ -381,3 +381,17 @@ async def test_click_tab_names_in_border(demo_path):
         await pilot.click("#plot-panel", offset=(3 + 5, 0))  # the '─' between Data and Schema
         await pilot.pause(0.2)
         assert tc.active == "tab-plot"
+
+
+async def test_schema_all_null_column(odd_path):
+    app = PqxApp(odd_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        t = app.query_one("#schema-table", DataTable)
+        row = [str(c) for c in t.get_row("allnull")]
+        assert row[4] == "1,000  100%"          # nulls: count and share, no "1e+02%"
+        assert row[5] == row[6] == "–"           # no min/max for an all-null column
+        for k in "2345":                        # every tab copes with it
+            await pilot.press(k)
+            await settle(pilot, app)
+        assert not app._last_error

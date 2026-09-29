@@ -240,6 +240,28 @@ def derived(name: str, kind: str, v: Any) -> str:
     return ""
 
 
+def percent(part: float, whole: float) -> str:
+    """``part`` as a percentage of ``whole``, never misleading at the ends.
+
+    0 and 100 are exact ("0%", "100%"); a non-zero share never rounds to 0 or
+    100 ("<0.01%", ">99.99%"); otherwise 3 significant digits ("4.7%", "70.1%"),
+    or 2 decimals near the top so 99.95% doesn't read as 100%."""
+    if not whole:
+        return ""
+    if part <= 0:
+        return "0%"
+    if part >= whole:
+        return "100%"
+    p = 100.0 * part / whole
+    if p < 0.01:
+        return "<0.01%"
+    if p > 99.99:
+        return ">99.99%"
+    if p >= 99.5:
+        return f"{p:.2f}%"
+    return f"{p:.3g}%"
+
+
 def human_count(n: int | float | None) -> str:
     if n is None:
         return "?"

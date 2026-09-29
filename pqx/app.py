@@ -645,8 +645,7 @@ class PqxApp(App):
                 t.append(f" {tot:,} rows" if tot is not None else " rows")
                 bits = []
                 if not self.view.is_trivial and tot is not None and not self.view.sql:
-                    pct = 100.0 * tot / self.ds.num_rows if self.ds.num_rows else 0
-                    bits.append(f"{pct:.3g}% of {F.human_count(self.ds.num_rows)}")
+                    bits.append(f"{F.percent(tot, self.ds.num_rows)} of {F.human_count(self.ds.num_rows)}")
                 if self.view.sql:
                     bits.append("SQL result")
                 if self.view.order_by:
@@ -1181,7 +1180,7 @@ class PqxApp(App):
             if nulls is None:
                 null_txt = Text("–", style=d, justify="right")
             elif nulls:
-                null_txt = Text(f"{nulls:,}  {100 * nulls / self.ds.num_rows:.2g}%", justify="right")
+                null_txt = Text(f"{nulls:,}  {F.percent(nulls, self.ds.num_rows)}", justify="right")
             else:
                 null_txt = Text("0", style=d, justify="right")
             t.add_row(Text(str(i), style=d, justify="right"), Text(c.name, style="bold"),
@@ -1400,7 +1399,7 @@ class PqxApp(App):
         self.query_one("#stats-head", Static).update(self._stats_head(name, status))
 
         def pct(n):
-            return f"{100 * n / st.count:.3g}%" if st.count else ""
+            return F.percent(n, st.count)
 
         is_int = pa.types.is_integer(typ)
 
@@ -1543,7 +1542,7 @@ class PqxApp(App):
                     frac = (grid > 0).sum() / grid.size
                     out = plots.render_skymap(grid, width=mw, height=h - 3, cmap=cmap, center=center,
                                               accent=self.accent, dim=self.dim_style)
-                    detail = f"0.5° cells  ·  {100 * frac:.3g}% of sky"
+                    detail = f"0.5° cells  ·  {F.percent(frac, 1.0)} of sky"
                 else:
                     pw, ph = max(10, w - 12), max(4, h - 5)
                     grid, xl, yl = self.ds.xy_counts(view, x, y, 2 * pw, 2 * ph, sample=sample)
