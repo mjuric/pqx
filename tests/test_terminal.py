@@ -97,3 +97,58 @@ def test_iterm_over_ssh_handshake_keeps_cell_coordinates(demo_path):
     finally:
         os.kill(pid, signal.SIGKILL)
         os.waitpid(pid, 0)
+
+
+def test_quit_clears_screen_before_leaving_alt_screen(demo_path):
+    """If the terminal ignores the alternate screen, quitting must not leave pqx's
+    last frame behind: the screen is cleared before mode 1049 is switched off."""
+    import os
+    import select
+    import signal
+    import sys
+    import time
+
+    import pytest
+
+    if not sys.platform.startswith(("linux", "darwin")):
+        pytest.skip("needs a pty")
+    import fcntl
+    import pty
+    import struct
+    import termios
+
+    pid, fd = pty.fork()
+    if pid == 0:
+        env = dict(os.environ, TERM="xterm-256color")
+        os.execve(sys.executable, [sys.executable, "-m", "pqx", demo_path], env)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+    out = b""
+
+    def pump(t, until=None):
+        nonlocal out
+        end = time.time() + t
+        while time.time() < end:
+            if select.select([fd], [], [], 0.1)[0]:
+                try:
+                    out += os.read(fd, 65536)
+                except OSError:
+                    return
+            if until and until in out:
+                return
+
+    try:
+        pump(20, until=b"rows")  # the app has drawn its first frame
+        pump(1)
+        n = len(out)
+        os.write(fd, b"q")
+        pump(8)
+        tail = out[n:]
+        clear, leave = tail.find(b"\x1b[H\x1b[2J"), tail.find(b"\x1b[?1049l")
+        assert leave >= 0, "pqx did not leave the alternate screen"
+        assert 0 <= clear < leave
+    finally:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        os.waitpid(pid, 0)

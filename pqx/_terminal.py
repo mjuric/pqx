@@ -22,6 +22,14 @@ cells. iTerm2 accepts 1016 but doesn't send the reports, so every click lands
 at a pixel position far off-screen and does nothing. Textual guards against
 this only when ``TERM_PROGRAM``/``LC_TERMINAL`` name iTerm, which they don't
 over ssh. pqx never needs sub-cell mouse precision, so pixel mode stays off.
+
+Finally, quitting always leaves a clean terminal. Textual draws on the
+alternate screen (mode 1049) and switches back on exit, which restores the
+shell's previous contents. Where the alternate screen is unavailable (some
+ssh/container setups, or a terminal or tmux with it turned off), pqx would
+have drawn over the normal screen and left its last frame behind, with the
+prompt in the middle of it. pqx clears the screen just before switching
+back: invisible when the alternate screen works, a clean screen when not.
 """
 from __future__ import annotations
 
@@ -85,6 +93,15 @@ def install() -> None:
         from textual.drivers.linux_driver import LinuxDriver
 
         LinuxDriver._enable_mouse_pixels = lambda self: None  # cells, always (see above)
+
+        stop = LinuxDriver.stop_application_mode
+
+        @functools.wraps(stop)
+        def stop_application_mode(self):
+            self.write("\x1b[0m\x1b[H\x1b[2J")  # reset attributes, home, clear: before leaving 1049
+            stop(self)
+
+        LinuxDriver.stop_application_mode = stop_application_mode
     except Exception:  # pragma: no cover
         pass
 
