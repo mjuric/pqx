@@ -41,7 +41,7 @@ without losing the current view.
 
 | key | action |
 |---|---|
-| `/` · `x` | edit filter · clear filter |
+| `/` · `x` / `Ctrl+X` | edit filter · clear filter (`Ctrl+X` also works while typing in the filter box) |
 | arrows, PgUp/PgDn, Ctrl+Home/End | move; the row window slides seamlessly |
 | `g` | go to row: `1234`, `1.5M`, `50%`, `-1` |
 | `s` | sort by the cursor column (asc → desc → off); clicking a header does the same |
@@ -50,7 +50,7 @@ without losing the current view.
 | `c` · `-` · `p` | choose columns · hide column · pin columns |
 | Home / End | first / last column; `‹` `›` beside the header mark hidden columns (click to page) |
 | `f` · `y` · `i` | raw/smart formatting · copy cell · stats for column |
-| `1`–`5` | switch tabs |
+| `1`–`5` · `Ctrl+←` `Ctrl+→` | go to a tab · previous / next tab (or click a tab name in a panel border) |
 | `e` | export the current view (filter + sort + visible columns) to Parquet/CSV/JSON |
 | `m` | toggle sampling for stats and plots |
 | `l` `L` `[` `]` | Stats: log counts, log values, fewer/more bins |

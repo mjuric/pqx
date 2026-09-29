@@ -410,3 +410,40 @@ async def test_schema_all_null_column(odd_path):
             await pilot.press(k)
             await settle(pilot, app)
         assert not app._last_error
+
+
+async def test_ctrl_keys_tabs_and_clear(demo_path):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        tc = app.query_one(TabbedContent)
+        seen = []
+        for _ in range(5):
+            await pilot.press("ctrl+right")
+            await settle(pilot, app)
+            seen.append(tc.active)
+        assert seen == ["tab-schema", "tab-stats", "tab-plot", "tab-meta", "tab-data"]  # wraps around
+        await pilot.press("ctrl+left")
+        await settle(pilot, app)
+        assert tc.active == "tab-meta"
+        await pilot.press("1")
+        await settle(pilot, app)
+        assert "x clear filter" in plain(app.query_one("#keys", Static))
+
+        # apply a filter, then clear it with ctrl+x from inside the filter box
+        await pilot.press("slash", *"band = 'g'", "enter")
+        await settle(pilot, app)
+        assert not app.view.is_trivial
+        await pilot.press("slash")
+        inp = app.query_one("#filter", Input)
+        await pilot.press("ctrl+left")  # inside the input: word jump, not a tab switch
+        assert tc.active == "tab-data" and app.focused is inp
+        await pilot.press("ctrl+x")
+        await settle(pilot, app)
+        assert app.view.is_trivial and inp.value == "" and app.total == 20_000
+
+        # typed but never applied: ctrl+x just empties the box
+        await pilot.press("slash", *"mag <")
+        await pilot.press("ctrl+x")
+        await pilot.pause(0.1)
+        assert inp.value == "" and app.view.is_trivial

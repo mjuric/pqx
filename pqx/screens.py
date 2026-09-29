@@ -29,7 +29,8 @@ Press **/** and type either
   `select band, count(*), avg(mag) from t group by 1 order by 1`
 
 **Enter** applies, **Esc** returns to the grid, **↑/↓** browse history and
-**→** accepts a column-name completion. **x** clears the filter.
+**→** accepts a column-name completion. **x** clears the filter, and
+**Ctrl+X** does too, even while you are typing in the filter box.
 The filter applies everywhere: grid, stats, plots and export.
 
 ## Data grid
@@ -53,7 +54,7 @@ The filter applies everywhere: grid, stats, plots and export.
 
 | key | action |
 |---|---|
-| **1**–**5** | Data / Schema / Stats / Plot / Metadata tabs |
+| **1**–**5** · **Ctrl+← →** | go to a tab · previous / next tab (or click a name in a panel's top border) |
 | **e** | export the current view (filter + sort) to Parquet / CSV / JSON |
 | **m** | toggle sampling for stats and plots on large files |
 | **Esc** | cancel running queries |

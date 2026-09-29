@@ -53,8 +53,8 @@ SQL_WORDS = ["and", "or", "not", "is", "null", "between", "in", "like", "ilike",
              "regexp_matches(", "abs(", "isnan(", "desc", "asc", "having"]
 
 KEYS = {
-    "tab-data": [("/", "filter"), ("s", "sort"), ("=", "match cell"), ("d", "detail"), ("c", "columns"),
-                 ("g", "go to"), ("e", "export"), ("tab", "next panel"), ("?", "help"), ("q", "quit")],
+    "tab-data": [("/", "filter"), ("x", "clear filter"), ("s", "sort"), ("=", "match cell"), ("d", "detail"),
+                 ("c", "columns"), ("g", "go to"), ("e", "export"), ("?", "help"), ("q", "quit")],
     "tab-schema": [("↑↓", "column"), ("enter", "stats"), ("/", "filter"), ("1-5", "tabs"), ("?", "help"),
                    ("q", "quit")],
     "tab-stats": [("↑↓", "column"), ("l", "log counts"), ("L", "log values"), ("[ ]", "bins"),
@@ -63,7 +63,7 @@ KEYS = {
                  ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
     "tab-meta": [("↑↓", "scroll"), ("tab", "next panel"), ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
     "dropdown": [("type", "to filter"), ("↑↓", "move"), ("enter/click", "pick"), ("esc", "close")],
-    "filter": [("enter", "apply"), ("esc", "back"), ("↑↓", "history"), ("→", "complete"),
+    "filter": [("enter", "apply"), ("esc", "back"), ("ctrl+x", "clear"), ("↑↓", "history"), ("→", "complete"),
                ("select … from t", "full query")],
 }
 
@@ -386,6 +386,10 @@ class PqxApp(App):
     BINDINGS = [
         Binding("slash", "focus_filter", "Filter"),
         Binding("x", "clear_filter", "Clear filter"),
+        # works while typing in the filter box too (priority beats the input's own ctrl+x = cut)
+        Binding("ctrl+x", "clear_filter_anywhere", "Clear filter", show=False, priority=True),
+        Binding("ctrl+right", "tab_step(1)", "Next tab", show=False),
+        Binding("ctrl+left", "tab_step(-1)", "Previous tab", show=False),
         Binding("e", "export", "Export"),
         Binding("m", "toggle_sample", "Sampling"),
         Binding("question_mark,f1", "help", "Help"),
@@ -943,6 +947,14 @@ class PqxApp(App):
         self.apply_filter("", fr)
         self.query_one(GridTable).focus()
 
+    def action_clear_filter_anywhere(self) -> None:
+        """ctrl+x: clear the filter even while typing in the filter box."""
+        inp = self.query_one("#filter", Input)
+        if isinstance(self.focused, Input) and self.focused is inp and inp.value and self.view.is_trivial:
+            inp.value = ""  # only typed, never applied: just empty the box
+            return
+        self.action_clear_filter()
+
     def action_filter_value(self) -> None:
         name, v = self._cursor_value()
         if name is None:
@@ -1082,6 +1094,11 @@ class PqxApp(App):
         self._show_stats_for(self.cols_shown[grid.cursor_column])
 
     # --------------------------------------------------------------- app-wide
+    def action_tab_step(self, d: int) -> None:
+        ids = [t for t, _ in TABS]
+        cur = self.query_one(TabbedContent).active
+        self.action_tab(ids[(ids.index(cur) + d) % len(ids)] if cur in ids else ids[0])
+
     def action_tab(self, tab: str) -> None:
         # Drop focus first: TabbedContent re-activates whichever pane holds the
         # focused widget, which would otherwise snap us back to the old tab.
@@ -1113,7 +1130,7 @@ class PqxApp(App):
     def check_action(self, action: str, parameters) -> bool | None:
         # single-letter app keys must not fire while typing in an input
         if isinstance(self.focused, Input) and action in (
-                "clear_filter", "export", "toggle_sample", "help", "quit", "tab", "hist_log_y",
+                "clear_filter", "export", "toggle_sample", "help", "quit", "tab", "tab_step", "hist_log_y",
                 "hist_log_x", "bins", "rotate_sky", "focus_filter"):
             return False
         return True
