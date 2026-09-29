@@ -352,3 +352,29 @@ Toast.-warning {
 Toast > .toast--title {
     text-style: bold;
 }
+
+FieldDropdown {
+    align: left top;
+    background: transparent;
+}
+
+#dropdown {
+    height: auto;
+    border: solid $primary;
+    border-title-align: left;
+    border-title-color: ansi_default;
+    background: ansi_default;
+    padding: 0 1;
+}
+
+#dropdown-filter {
+    height: 1;
+    border: none;
+    padding: 0;
+    background: ansi_default;
+}
+
+#dropdown-list {
+    height: auto;
+    max-height: 100%;
+}

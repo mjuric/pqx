@@ -53,7 +53,8 @@ without losing the current view.
 | `e` | export the current view (filter + sort + visible columns) to Parquet/CSV/JSON |
 | `m` | toggle sampling for stats and plots |
 | `l` `L` `[` `]` | Stats: log counts, log values, fewer/more bins |
-| `tab` · `← →` | Plot: move between settings fields · change the field's value |
+| click · `enter` | Plot: open a settings field's drop-down (type to narrow the column list) |
+| `tab` · `← →` | Plot: move between settings fields · step the field's value |
 | `r` | Plot: rotate the sky-map centre between RA 0° and 180° |
 | Esc | cancel running queries / leave the filter bar |
 | `?` · `q` | help · quit |

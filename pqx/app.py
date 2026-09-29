@@ -28,12 +28,12 @@ from textual.message import Message
 from textual.suggester import Suggester
 from textual.theme import Theme
 from textual.widgets import DataTable, Input, Label, OptionList, Static, TabbedContent, TabPane
-from textual.widgets.option_list import Option
 
 from . import fmt as F
 from . import plots
 from .data import ColumnStats, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec, quote_ident
-from .screens import ColumnPicker, ExportScreen, GotoScreen, HelpScreen
+from .screens import ColumnPicker, ExportScreen, FieldDropdown, GotoScreen, HelpScreen
+from .widgets import CursorList
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SAMPLE_ROWS = 2_000_000       # rows used for stats/plots when sampling
@@ -56,9 +56,10 @@ KEYS = {
                    ("q", "quit")],
     "tab-stats": [("↑↓", "column"), ("l", "log counts"), ("L", "log values"), ("[ ]", "bins"),
                   ("m", "sampling"), ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
-    "tab-plot": [("tab", "next field"), ("← →", "change"), ("r", "rotate"), ("m", "sampling"), ("e", "export"),
+    "tab-plot": [("enter/click", "pick"), ("tab", "next field"), ("← →", "change"), ("r", "rotate"), ("m", "sampling"), ("e", "export"),
                  ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
     "tab-meta": [("↑↓", "scroll"), ("tab", "next panel"), ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
+    "dropdown": [("type", "to filter"), ("↑↓", "move"), ("enter/click", "pick"), ("esc", "close")],
     "filter": [("enter", "apply"), ("esc", "back"), ("↑↓", "history"), ("→", "complete"),
                ("select … from t", "full query")],
 }
@@ -205,13 +206,14 @@ class GridTable(DataTable):
 
 
 class PlotControls(Static, can_focus=True):
-    """One line of ``label ‹ value ›`` fields: tab moves between them, ← → changes one."""
+    """One line of ``label value ▾`` fields: tab moves between them, ← → steps one, enter or a click opens a drop-down."""
 
     BINDINGS = [
         Binding("left", "step(-1)", "previous value", show=False),
         Binding("right", "step(1)", "next value", show=False),
         Binding("tab", "field(1)", "next field", show=False),
         Binding("shift+tab", "field(-1)", "previous field", show=False),
+        Binding("enter,space", "open", "pick", show=False),
     ]
 
     class Changed(Message):
@@ -224,6 +226,7 @@ class PlotControls(Static, can_focus=True):
         self.options: dict[str, list[str]] = {"mode": ["sky", "xy"], "x": [], "y": [], "centre": ["0°", "180°"],
                                               "colour": list(plots.COLORMAPS)}
         self.cur = 0
+        self._spans: list[tuple[str, int, int]] = []  # (field, first cell, last cell) of each "value ▾"
 
     def fields(self) -> list[str]:
         return ["mode", "x", "y", "centre", "colour"] if self.values["mode"] == "sky" else ["mode", "x", "y",
@@ -255,12 +258,41 @@ class PlotControls(Static, can_focus=True):
         self.cur = (self.cur + d) % len(self.fields())
         self.refresh()
 
+    def _labels(self) -> dict[str, str]:
+        sky = self.values["mode"] == "sky"
+        return {"mode": "mode", "x": "lon" if sky else "x", "y": "lat" if sky else "y", "centre": "centre",
+                "colour": "colour"}
+
+    def action_open(self) -> None:
+        """Open a drop-down for the current field, right under its value."""
+        key = self.fields()[self.cur]
+        opts = self.options[key]
+        if not opts:
+            return
+        start = next((a for k, a, _ in self._spans if k == key), 0)
+        x = self.region.x + start
+        y = self.region.y + 1
+
+        def done(value):
+            if value is not None and value != self.values[key]:
+                self.set_value(key, value)
+        self.app.push_screen(FieldDropdown(self._labels()[key], opts, self.values[key], x, y), done)
+
+    def on_click(self, event) -> None:
+        for i, (key, a, b) in enumerate(self._spans):
+            if a <= event.x <= b:
+                self.focus()
+                self.cur = self.fields().index(key)
+                self.refresh()
+                self.action_open()
+                return
+
     def render(self) -> Text:
         app = self.app
         dim = app.dim_style if isinstance(app, PqxApp) else Style(dim=True)
-        labels = {"mode": "mode", "x": "lon" if self.values["mode"] == "sky" else "x",
-                  "y": "lat" if self.values["mode"] == "sky" else "y", "centre": "centre", "colour": "colour"}
+        labels = self._labels()
         t = Text(no_wrap=True, overflow="ellipsis")
+        spans = []
         for i, key in enumerate(self.fields()):
             if i:
                 t.append("    ")
@@ -269,7 +301,10 @@ class PlotControls(Static, can_focus=True):
             st = Style(bold=True, color="cyan" if obj else None)
             if self.has_focus and i == self.cur:
                 st = st + Style(reverse=True)
-            t.append(f"‹ {self.values[key] or '—'} ›", st)
+            a = t.cell_len
+            t.append(f"{self.values[key] or '—'} ▾", st)
+            spans.append((key, a, t.cell_len - 1))
+        self._spans = spans
         return t
 
 
@@ -366,7 +401,7 @@ class PqxApp(App):
             with TabPane("Stats", id="tab-stats"):
                 with Horizontal():
                     with Vertical(id="stats-cols-panel", classes="panel"):
-                        yield OptionList(id="stats-cols")
+                        yield CursorList(id="stats-cols")
                     with VerticalScroll(id="stats-body", classes="panel tabbed"):
                         yield Static(id="stats-head")
                         yield Static(id="stats-summary")
@@ -440,8 +475,13 @@ class PqxApp(App):
 
     def _render_keys(self) -> None:
         try:
-            ctx = "filter" if isinstance(self.focused, Input) else self.query_one(TabbedContent).active
-        except NoMatches:
+            if isinstance(self.screen, FieldDropdown):
+                ctx = "dropdown"
+            elif isinstance(self.focused, Input):
+                ctx = "filter"
+            else:
+                ctx = self.query_one(TabbedContent).active
+        except NoMatches:  # another modal (help, export) is up
             return
         t = Text(no_wrap=True, overflow="ellipsis")
         for i, (k, label) in enumerate(KEYS.get(ctx, [])):
@@ -449,10 +489,13 @@ class PqxApp(App):
                 t.append("   ")
             t.append(k, "bold")
             t.append(" " + label, self.dim)
-        self.query_one("#keys", Static).update(t)
+        self.screen_stack[0].query_one("#keys", Static).update(t)
 
     def on_descendant_focus(self, event) -> None:
         self._render_keys()
+
+    def on_screen_resume(self, event) -> None:
+        self.call_after_refresh(self._render_keys)
 
     def on_descendant_blur(self, event) -> None:
         self.call_after_refresh(self._render_keys)
@@ -1099,20 +1142,10 @@ class PqxApp(App):
         self.query_one("#meta-kv", Static).update(Group(*parts))
 
     # -------------------------------------------------------------- stats tab
-    def _stat_prompt(self, name: str, typ: pa.DataType, highlighted: bool) -> Text:
-        # The highlight is drawn here, as a real reverse attribute: Textual emulates
-        # reverse by swapping colours, which is a no-op on the terminal's defaults.
-        t = Text.assemble((name.ljust(18), "bold"), "  ", (F.short_type(typ).ljust(12), self.dim))
-        if highlighted:
-            t.stylize("reverse")
-        return t
-
     def _build_stats_list(self) -> None:
-        ol = self.query_one("#stats-cols", OptionList)
-        ol.clear_options()
-        self._stat_hl: int | None = None
-        for name, typ in self.result_schema:
-            ol.add_option(Option(self._stat_prompt(name, typ, False), id=name))
+        ol = self.query_one("#stats-cols", CursorList)
+        ol.set_items([(name, Text.assemble((name.ljust(18), "bold"), "  ", (F.short_type(typ), self.dim)))
+                      for name, typ in self.result_schema], width=32)
         self.query_one("#stats-cols-panel").border_title = self._dim_markup(f"columns  {len(self.result_schema)}")
         if self._stats_col not in dict(self.result_schema):
             self._stats_col = None
@@ -1130,13 +1163,6 @@ class PqxApp(App):
 
     @on(OptionList.OptionHighlighted, "#stats-cols")
     def stats_col_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        ol = self.query_one("#stats-cols", OptionList)
-        prev = getattr(self, "_stat_hl", None)
-        if prev is not None and prev < len(self.result_schema) and prev != event.option_index:
-            ol.replace_option_prompt_at_index(prev, self._stat_prompt(*self.result_schema[prev], False))
-        ol.replace_option_prompt_at_index(event.option_index,
-                                          self._stat_prompt(*self.result_schema[event.option_index], True))
-        self._stat_hl = event.option_index
         name = event.option.id
         if name and name != self._stats_col:
             self._stats_col = name

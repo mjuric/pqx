@@ -2,6 +2,7 @@
 import os
 
 import pyarrow.parquet as pq
+import pytest
 from textual.worker import WorkerState
 from textual.widgets import DataTable, Input, OptionList, Static, TabbedContent
 
@@ -267,3 +268,61 @@ async def test_odd_file_opens(odd_path):
             await pilot.press(k)
             await settle(pilot, app)
         assert not app._last_error
+
+
+@pytest.fixture(scope="module")
+def wide_path(tmp_path_factory):
+    """200 numeric columns: stepping through them with arrows is hopeless."""
+    import numpy as np
+    import pyarrow as pa
+
+    rng = np.random.default_rng(3)
+    cols = {"ra": rng.uniform(0, 360, 2000), "dec": rng.uniform(-60, 20, 2000)}
+    for i in range(198):
+        cols[f"flux_{i:03d}"] = rng.normal(size=2000)
+    p = tmp_path_factory.mktemp("data") / "wide.parquet"
+    pq.write_table(pa.table(cols), p)
+    return str(p)
+
+
+async def test_plot_field_dropdown(wide_path):
+    from pqx.screens import FieldDropdown
+
+    app = PqxApp(wide_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        await pilot.press("4")
+        await settle(pilot, app)
+        pc = app.query_one(PlotControls)
+        assert (pc.value("x"), pc.value("y")) == ("ra", "dec")
+
+        # keyboard: tab to the lat field, enter opens the list, typing narrows it
+        await pilot.press("tab", "tab", "enter")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, FieldDropdown)
+        await pilot.press(*"flux_17")
+        await pilot.pause(0.2)
+        lst = app.screen.query_one("#dropdown-list")
+        assert lst.option_count == 10  # flux_170 … flux_179
+        await pilot.press("down", "enter")
+        await settle(pilot, app)
+        assert not isinstance(app.screen, FieldDropdown)
+        assert pc.value("y") == "flux_171"
+
+        # mouse: clicking the lon field's ‹ value › opens it; esc leaves it unchanged
+        key, a, b = next(s for s in pc._spans if s[0] == "x")
+        await pilot.click(PlotControls, offset=(a + 2, 0))
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, FieldDropdown)
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert not isinstance(app.screen, FieldDropdown) and pc.value("x") == "ra"
+
+        # a short list (colour) opens without a filter box and picks by click
+        key, a, b = next(s for s in pc._spans if s[0] == "colour")
+        await pilot.click(PlotControls, offset=(a + 2, 0))
+        await pilot.pause(0.2)
+        assert not app.screen.query("#dropdown-filter")
+        await pilot.press("down", "enter")
+        await settle(pilot, app)
+        assert pc.value("colour") == "viridis"
