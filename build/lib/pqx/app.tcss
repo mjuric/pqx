@@ -1,0 +1,393 @@
+/* pqx: the terminal's own background and palette, thin panels, one accent.
+   Colours are ANSI roles; $primary is the accent (focus) colour and
+   $pqx-border the unfocused panel border (ANSI bright black by default). */
+
+Screen {
+    layout: vertical;
+    background: ansi_default;
+    color: ansi_default;
+    padding: 0 1;
+}
+
+#titlebar {
+    height: 1;
+    margin: 0 1;
+}
+
+.panel {
+    border: solid $pqx-border;
+    border-title-align: left;
+    border-title-color: ansi_default;
+    border-title-style: none;
+    border-subtitle-color: ansi_default;
+    background: ansi_default;
+    padding: 0 1;
+}
+
+.panel:focus-within {
+    border: solid $primary;
+}
+
+/* ---- filter */
+#filterbox {
+    height: 3;
+    margin-top: 1;
+}
+
+#filterbox.error, #filterbox.error:focus-within {
+    border: solid ansi_red;
+}
+
+#filter-mode {
+    width: auto;
+    color: $primary;
+    margin-right: 1;
+}
+
+#filter {
+    width: 1fr;
+    height: 1;
+    border: none;
+    padding: 0;
+    background: ansi_default;
+}
+
+#filter:focus {
+    border: none;
+    background-tint: ansi_default 0%;
+}
+
+Input > .input--placeholder, Input > .input--suggestion {
+    color: ansi_default;
+    text-style: dim;
+}
+
+Input > .input--selection {
+    background: ansi_default;
+    text-style: reverse;
+}
+
+Input > .input--cursor {
+    background: ansi_default;
+    color: ansi_default;
+    text-style: reverse;
+}
+
+/* ---- tabs live in the panel border titles, not in a tab bar */
+TabbedContent > ContentTabs {
+    display: none;
+}
+
+TabbedContent, TabPane, ContentSwitcher {
+    background: ansi_default;
+    padding: 0;
+    height: 1fr;
+}
+
+TabPane {
+    padding-top: 1;
+}
+
+/* ---- tables */
+DataTable {
+    background: ansi_default;
+    color: ansi_default;
+    scrollbar-size: 1 1;
+}
+
+DataTable > .datatable--header,
+DataTable > .datatable--header-hover,
+DataTable > .datatable--header-cursor,
+DataTable > .datatable--fixed {
+    background: ansi_default;
+    color: ansi_default;
+    text-style: bold;
+}
+
+DataTable > .datatable--hover,
+DataTable > .datatable--even-row,
+DataTable > .datatable--odd-row {
+    background: ansi_default;
+    color: ansi_default;
+    text-style: none;
+}
+
+DataTable > .datatable--cursor,
+DataTable > .datatable--fixed-cursor,
+DataTable:focus > .datatable--cursor {
+    background: ansi_default;
+    color: ansi_default;
+    text-style: reverse;
+}
+
+DataTable:blur > .datatable--cursor {
+    text-style: none;
+}
+
+#grid-row {
+    height: 1fr;
+}
+
+.edge {
+    width: 1;
+    height: 1fr;
+}
+
+#data-panel {
+    border-subtitle-align: right;
+}
+
+#grid {
+    width: 1fr;
+    height: 1fr;
+    scrollbar-size: 0 0;  /* position is in the status line; the header shows cut-off columns */
+}
+
+#grid:blur > .datatable--cursor {
+    text-style: underline;
+}
+
+#status {
+    height: 1;
+    margin-top: 1;
+}
+
+#detail {
+    width: 46;
+    min-width: 36;
+    height: 1fr;
+    margin-left: 1;
+}
+
+/* ---- schema */
+#schema-panel {
+    height: 1fr;
+}
+
+#schema-table {
+    height: 1fr;
+}
+
+#schema-desc {
+    height: auto;
+    min-height: 5;
+    margin-top: 1;
+}
+
+/* ---- stats */
+#stats-cols-panel {
+    width: 36;
+    height: 1fr;
+    margin-left: 1;
+}
+
+OptionList {
+    border: none;
+    background: ansi_default;
+    padding: 0;
+    scrollbar-size: 1 1;
+}
+
+OptionList:focus {
+    border: none;
+    background-tint: ansi_default 0%;
+}
+
+OptionList > .option-list--option-highlighted,
+OptionList:focus > .option-list--option-highlighted {
+    background: ansi_default;
+    color: ansi_default;
+    text-style: reverse;
+}
+
+OptionList > .option-list--option-hover {
+    background: ansi_default;
+    text-style: none;
+}
+
+#stats-cols {
+    height: 1fr;
+}
+
+#stats-body {
+    width: 1fr;
+    height: 1fr;
+    padding: 0 2;
+}
+
+/* ---- plot */
+#plot-panel {
+    height: 1fr;
+    padding: 0 2;
+}
+
+#plot-controls {
+    height: 1;
+    margin-bottom: 1;
+}
+
+#plot-area {
+    height: 1fr;
+    align-horizontal: center;
+}
+
+#plot-body {
+    width: auto;
+}
+
+#plot-status {
+    height: 1;
+    margin-top: 1;
+}
+
+/* ---- metadata */
+#meta-file {
+    width: 1fr;
+    height: 1fr;
+    margin-right: 1;
+    padding: 0 2;
+}
+
+#meta-rg-panel {
+    width: 1fr;
+    height: 1fr;
+}
+
+#rowgroups {
+    height: 1fr;
+}
+
+#meta-status {
+    height: 1;
+    margin-top: 1;
+}
+
+#keys {
+    height: 1;
+    margin: 0 1;
+}
+
+/* ---- dialogs and notifications */
+ModalScreen {
+    align: center middle;
+    background: transparent;
+}
+
+.dialog {
+    width: 80;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+    border: solid $primary;
+    background: ansi_default;
+    padding: 1 2;
+}
+
+.dialog.small {
+    width: 60;
+}
+
+#help-box {
+    width: 96;
+    height: 90%;
+}
+
+#help-foot {
+    margin-top: 1;
+}
+
+#picker-box {
+    height: 80%;
+}
+
+#picker-filter, #goto-input, #export-path {
+    border: solid $pqx-border;
+    background: ansi_default;
+    height: 3;
+}
+
+#picker-filter:focus, #goto-input:focus, #export-path:focus {
+    border: solid $primary;
+}
+
+#picker-list {
+    height: 1fr;
+    margin: 1 0;
+    border: none;
+    background: ansi_default;
+}
+
+.buttons {
+    height: auto;
+    align-horizontal: right;
+    margin-top: 1;
+}
+
+Button {
+    border: none;
+    height: 1;
+    min-width: 10;
+    margin-left: 2;
+    background: ansi_default;
+    color: ansi_default;
+    text-style: bold;
+}
+
+Button:hover, Button:focus {
+    background: ansi_default;
+    text-style: bold reverse;
+}
+
+Button.-primary {
+    color: $primary;
+}
+
+#export-box RadioSet, #export-box Checkbox {
+    margin-top: 1;
+    border: none;
+    background: ansi_default;
+}
+
+Toast {
+    background: ansi_default;
+    border-left: none;
+    border: solid $pqx-border;
+    padding: 0 1;
+}
+
+Toast.-error {
+    border: solid ansi_red;
+}
+
+Toast.-warning {
+    border: solid ansi_yellow;
+}
+
+Toast > .toast--title {
+    text-style: bold;
+}
+
+FieldDropdown {
+    align: left top;
+    background: transparent;
+}
+
+#dropdown {
+    height: auto;
+    border: solid $primary;
+    border-title-align: left;
+    border-title-color: ansi_default;
+    background: ansi_default;
+    padding: 0 1;
+}
+
+#dropdown-filter {
+    height: 1;
+    border: none;
+    padding: 0;
+    background: ansi_default;
+}
+
+#dropdown-list {
+    height: 1fr;
+}
