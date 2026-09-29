@@ -44,6 +44,7 @@ The filter applies everywhere: grid, stats, plots and export.
 | **d** or Enter | toggle the row detail panel (full precision, sexagesimal, UTC dates) |
 | **c** | choose visible columns; **-** hides the cursor column |
 | **p** | pin columns up to the cursor (stay visible when scrolling right) |
+| Home / End | first / last column. **‹ ›** beside the header mean more columns that way (click to page); the panel's bottom edge reads e.g. *‹ 11 · columns 12–21 of 64 · 43 ›* |
 | **f** | toggle smart / raw number formatting |
 | **y** | copy cell value to the clipboard |
 | **i** | open statistics for the cursor column |

@@ -153,6 +153,43 @@ class GridTable(DataTable):
             super().__init__()
             self.row = row
 
+    class HScroll(Message):
+        """The set of horizontally visible columns may have changed."""
+
+    def watch_scroll_x(self, old_value: float, new_value: float) -> None:
+        super().watch_scroll_x(old_value, new_value)
+        self.post_message(self.HScroll())
+
+    def on_resize(self, event) -> None:
+        self.post_message(self.HScroll())
+
+    def column_window(self) -> tuple[int, int, int, int]:
+        """``(first, last, hidden_left, hidden_right)`` over the scrollable columns.
+
+        ``first``/``last`` are 0-based indices of the fully visible columns (a
+        column cut by an edge counts as hidden on that side); pinned columns
+        are excluded. ``(0, -1, 0, 0)`` when there are no scrollable columns."""
+        cols = self.ordered_columns
+        fixed = min(self.fixed_columns, len(cols))
+        widths = [c.get_render_width(self) for c in cols]
+        x0 = self._row_label_column_width + sum(widths[:fixed])
+        left = self.scroll_x + x0
+        right = self.scroll_x + self.scrollable_content_region.width
+        x = x0
+        vis, hl, hr = [], 0, 0
+        for i in range(fixed, len(cols)):
+            a, b = x, x + widths[i]
+            if a < left:
+                hl += 1
+            elif b > right:
+                hr += 1
+            else:
+                vis.append(i)
+            x = b
+        if not vis:
+            return (0, -1, hl, hr)
+        return (vis[0], vis[-1], hl, hr)
+
     offset: int = 0
     total: int | None = None  # rows in the whole view, when known
     window: int = 300
@@ -217,6 +254,23 @@ class GridTable(DataTable):
     def on_mouse_scroll_up(self, event) -> None:
         if self.scroll_y <= 0 and self.offset > 0:
             self.post_message(self.Seek(max(0, self.offset - 1)))
+
+
+class EdgeMarker(Static):
+    """A one-cell column beside the grid showing ‹ / › when columns are hidden that way."""
+
+    def __init__(self, side: int, **kw):
+        super().__init__(**kw)
+        self.side = side  # -1 left, +1 right
+
+    def set_hidden(self, n: int, header_height: int) -> None:
+        glyph = ("‹" if self.side < 0 else "›") if n else " "
+        self.update(Text(glyph, style="bold") if n else Text(" "))
+        self.tooltip = f"{n} more column{'s' if n != 1 else ''} {'left' if self.side < 0 else 'right'}" if n else None
+
+    def on_click(self) -> None:
+        grid = self.app.query_one(GridTable)
+        (grid.action_page_left if self.side < 0 else grid.action_page_right)()
 
 
 class PlotControls(Static, can_focus=True):
@@ -403,7 +457,10 @@ class PqxApp(App):
             with TabPane("Data", id="tab-data"):
                 with Horizontal():
                     with Vertical(id="data-panel", classes="panel tabbed"):
-                        yield GridTable(id="grid", header_height=2, cursor_type="cell")
+                        with Horizontal(id="grid-row"):
+                            yield EdgeMarker(-1, id="more-left", classes="edge")
+                            yield GridTable(id="grid", header_height=2, cursor_type="cell")
+                            yield EdgeMarker(1, id="more-right", classes="edge")
                         yield Static(id="status")
                     with VerticalScroll(id="detail", classes="panel"):
                         yield Static(id="detail-body")
@@ -650,6 +707,35 @@ class PqxApp(App):
             grid.total = self.total
         self._render_status()
         self._update_detail()
+        self.call_after_refresh(self._render_hscroll)
+
+    @on(GridTable.HScroll)
+    def _hscroll(self) -> None:
+        self._debounced("hscroll", 0.03, self._render_hscroll)
+
+    @_ui
+    def _render_hscroll(self) -> None:
+        """Column-position readout in the data panel's bottom border + edge markers."""
+        grid = self.query_one(GridTable)
+        n = len(grid.ordered_columns)
+        first, last, hl, hr = grid.column_window()
+        self.query_one("#more-left", EdgeMarker).set_hidden(hl, grid.header_height)
+        self.query_one("#more-right", EdgeMarker).set_hidden(hr, grid.header_height)
+        panel = self.query_one("#data-panel")
+        if not (hl or hr):
+            panel.border_subtitle = ""
+            return
+        pinned = min(grid.fixed_columns, n)
+        parts = []
+        if hl:
+            parts.append(f"[bold]‹[/] {hl}")
+        rng = f"columns {first + 1}–{last + 1} of {n}" if last >= first else f"{n} columns"
+        if pinned:
+            rng += f" · {pinned} pinned"
+        parts.append(self._dim_markup(rng))
+        if hr:
+            parts.append(f"{hr} [bold]›[/]")
+        panel.border_subtitle = self._dim_markup("  ·  ").join(parts)
 
     @on(GridTable.Seek)
     def seek(self, event: GridTable.Seek) -> None:
@@ -937,6 +1023,7 @@ class PqxApp(App):
     def action_pin_columns(self) -> None:
         grid = self.query_one(GridTable)
         grid.fixed_columns = 0 if grid.fixed_columns else grid.cursor_column + 1
+        self.call_after_refresh(self._render_hscroll)
 
     def action_toggle_raw(self) -> None:
         self.raw = not self.raw

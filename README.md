@@ -48,6 +48,7 @@ without losing the current view.
 | `=` | narrow the filter to rows equal to the cursor cell |
 | `d` / Enter | row detail panel |
 | `c` · `-` · `p` | choose columns · hide column · pin columns |
+| Home / End | first / last column; `‹` `›` beside the header mark hidden columns (click to page) |
 | `f` · `y` · `i` | raw/smart formatting · copy cell · stats for column |
 | `1`–`5` | switch tabs |
 | `e` | export the current view (filter + sort + visible columns) to Parquet/CSV/JSON |

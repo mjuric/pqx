@@ -124,7 +124,21 @@ DataTable:blur > .datatable--cursor {
     text-style: none;
 }
 
+#grid-row {
+    height: 1fr;
+}
+
+.edge {
+    width: 1;
+    height: 1fr;
+}
+
+#data-panel {
+    border-subtitle-align: right;
+}
+
 #grid {
+    width: 1fr;
     height: 1fr;
     scrollbar-size: 0 0;  /* position is in the status line; the header shows cut-off columns */
 }

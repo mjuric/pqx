@@ -327,3 +327,40 @@ async def test_plot_field_dropdown(wide_path):
         await pilot.pause(0.4)  # the replot is debounced
         await settle(pilot, app)
         assert pc.value("colour") == "viridis"
+
+
+async def test_hidden_column_hints(wide_path):
+    app = PqxApp(wide_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        await pilot.pause(0.2)
+        g = app.query_one(GridTable)
+        panel = app.query_one("#data-panel")
+        left, right = app.query_one("#more-left"), app.query_one("#more-right")
+        first, last, hl, hr = g.column_window()
+        assert first == 0 and hl == 0 and hr == 200 - (last + 1)
+        sub = str(panel.border_subtitle)
+        assert f"columns 1–{last + 1} of 200" in sub and f"{hr}" in sub and "‹" not in sub
+        assert str(right.render()) == "›" and str(left.render()).strip() == ""
+
+        await pilot.press("end")  # last column
+        await pilot.pause(0.3)
+        first, last, hl, hr = g.column_window()
+        assert last == 199 and hr == 0 and hl == first
+        assert str(left.render()) == "‹" and str(right.render()).strip() == ""
+        assert "columns" in str(panel.border_subtitle) and "›" not in str(panel.border_subtitle)
+
+        await pilot.click("#more-left")  # clicking a marker pages that way
+        await pilot.pause(0.3)
+        assert g.column_window()[3] > 0
+
+    narrow = PqxApp(wide_path)
+    async with narrow.run_test(size=SIZE) as pilot:  # everything fits: no hints at all
+        await settle(pilot, narrow)
+        narrow.cols_shown = ["ra", "dec"]
+        narrow._rebuild_columns()
+        narrow.load_window(0, 0)
+        await settle(pilot, narrow)
+        await pilot.pause(0.2)
+        assert str(narrow.query_one("#data-panel").border_subtitle) == ""
+        assert str(narrow.query_one("#more-right").render()).strip() == ""
