@@ -53,8 +53,9 @@ SQL_WORDS = ["and", "or", "not", "is", "null", "between", "in", "like", "ilike",
              "regexp_matches(", "abs(", "isnan(", "desc", "asc", "having"]
 
 KEYS = {
-    "tab-data": [("/", "filter"), ("x", "clear filter"), ("s", "sort"), ("=", "match cell"), ("d", "detail"),
-                 ("c", "columns"), ("g", "go to"), ("e", "export"), ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
+    "tab-data": [("/", "filter"), ("x", "clear filter"), ("1-5", "tabs"), ("?", "help"), ("q", "quit"),
+                 ("s", "sort"), ("=", "match cell"), ("d", "detail"), ("c", "columns"), ("g", "go to"),
+                 ("e", "export")],
     "tab-schema": [("↑↓", "column"), ("enter", "stats"), ("/", "filter"), ("1-5", "tabs"), ("?", "help"),
                    ("q", "quit")],
     "tab-stats": [("↑↓", "column"), ("l", "log counts"), ("L", "log values"), ("[ ]", "bins"),
@@ -619,6 +620,14 @@ class PqxApp(App):
         tab = self._tab_at(event)
         if tab != getattr(self, "_tab_hover", None):
             self._tab_hover = tab
+            self._render_tab_titles()
+
+    def on_leave(self, event) -> None:
+        # the pointer left a panel (or the window) straight from its top border:
+        # no further move arrives there, so drop the hover underline here
+        if getattr(self, "_tab_hover", None) and getattr(event, "node", None) is not None \
+                and event.node.has_class("tabbed"):
+            self._tab_hover = None
             self._render_tab_titles()
 
     def on_screen_resume(self, event) -> None:
