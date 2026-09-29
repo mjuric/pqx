@@ -54,7 +54,7 @@ The filter applies everywhere: grid, stats, plots and export.
 
 | key | action |
 |---|---|
-| **1**–**5** · **Ctrl+← →** | go to a tab · previous / next tab (or click a name in a panel's top border) |
+| **1**–**5** · **Ctrl+← →** | go to a tab · previous / next tab. The tab strip in the panel border shows each tab's number and ends with the ^← ^→ reminder; a click on a number or name switches too |
 | **e** | export the current view (filter + sort) to Parquet / CSV / JSON |
 | **m** | toggle sampling for stats and plots on large files |
 | **Esc** | cancel running queries |
