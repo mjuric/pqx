@@ -128,7 +128,8 @@ class ParquetDataset:
         self._lock = threading.Lock()
         self._tls = threading.local()
         self._tagged: dict[str, duckdb.DuckDBPyConnection] = {}
-        self.con = duckdb.connect(":memory:")
+        # database-wide config, so every cursor shows timestamps in UTC rather than local time
+        self.con = duckdb.connect(":memory:", config={"TimeZone": "UTC"})
         if threads:
             self.con.execute(f"SET threads={int(threads)}")
         src = f"read_parquet({quote_str(self.path)}, file_row_number=true)"

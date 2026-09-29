@@ -85,4 +85,10 @@ def test_colormaps():
         for dark in (True, False):
             c = plots.cmap_color(cm, 0.5, dark)
             assert c.startswith("#") and len(c) == 7
+    assert plots.DEFAULT_CMAP == "magma"
+    assert plots.xterm256("#000000") == 16 and plots.xterm256("#ffffff") == 231
+    assert plots.xterm256("#d7af5f") == 179 and plots.xterm256("#808080") == 244
+    assert str(plots.density_style("magma", 0.5).color).startswith("Color('color(")
+    assert plots.density_style("terminal", 0.9).bold
+    assert plots.density_style("terminal", 0.5, accent="cyan").color.name == "cyan"
     assert math.isclose(plots._cell_area_deg2(180, 360, np.arange(180)).sum() * 360, 41252.96, rel_tol=1e-4)

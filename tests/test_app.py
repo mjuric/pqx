@@ -5,7 +5,7 @@ import pyarrow.parquet as pq
 from textual.worker import WorkerState
 from textual.widgets import DataTable, Input, OptionList, Static, TabbedContent
 
-from pqx.app import GridTable, PqxApp
+from pqx.app import GridTable, PlotControls, PqxApp
 from pqx.screens import ColumnPicker, ExportScreen, GotoScreen, HelpScreen
 
 SIZE = (150, 42)
@@ -76,7 +76,8 @@ async def test_filter_sql_and_errors(demo_path):
         exp = int(((truth.mag < 19) & (truth.band == "g")).sum())
         assert app.total == exp
         assert app.focused is g  # back to the grid after a successful filter
-        assert "filter keeps" in plain(app.query_one("#status", Static))
+        status = plain(app.query_one("#status", Static))
+        assert status.startswith("✓") and "% of 20k" in status
 
         # sort cycle on the cursor column (mag)
         g.move_cursor(column=app.cols_shown.index("mag"))
@@ -96,7 +97,8 @@ async def test_filter_sql_and_errors(demo_path):
         inp.value = "mag <"
         await pilot.press("slash", "enter")
         await settle(pilot, app)
-        assert inp.has_class("error") and app._last_error
+        assert app.query_one("#filterbox").has_class("error") and app._last_error
+        assert plain(app.query_one("#status", Static)).startswith("✗ Query failed")
         assert app.total == exp
 
         # full SQL query (focus stayed in the input after the error, so "/" would be text)
@@ -203,15 +205,23 @@ async def test_tabs_stats_plots(demo_path):
         await settle(pilot, app)
         await pilot.pause(0.3)
         await settle(pilot, app)
-        assert "Sky map" in plain(app.query_one("#plot-head", Static))
-        app.query_one("#plot-mode").value = "xy"
+        assert "Binned ra × dec" in plain(app.query_one("#plot-status", Static))
+        pc = app.query_one(PlotControls)
+        assert app.focused is pc and pc.value("colour") == "magma"
+        await pilot.press("left")  # mode field: sky -> xy
         await pilot.pause(0.4)
         await settle(pilot, app)
-        assert "Density" in plain(app.query_one("#plot-head", Static))
+        assert pc.value("mode") == "xy"
+        assert plain(app.query_one("#plot-status", Static)).startswith("✓ Binned")
+        await pilot.press("tab", "tab", "tab", "right")  # colour field: magma -> viridis
+        await pilot.pause(0.4)
+        await settle(pilot, app)
+        assert pc.value("colour") == "viridis"
 
         await pilot.press("m")  # sampling toggle re-runs the plot
         await settle(pilot, app)
         assert app.sampling
+        assert plain(app.query_one("#plot-status", Static)).startswith("! Binned")
 
 
 async def test_export_dialog(demo_path, tmp_path, monkeypatch):
@@ -228,6 +238,21 @@ async def test_export_dialog(demo_path, tmp_path, monkeypatch):
         assert os.path.exists(tmp_path / "y.parquet")
         t = pq.read_table(tmp_path / "y.parquet")
         assert set(t.column("band").to_pylist()) == {"y"} and t.num_rows == app.total
+
+
+async def test_error_hint_and_look(demo_path):
+    app = PqxApp(demo_path, accent="magenta", dim="bright-black")
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        assert app.theme == "pqx-magenta" and app.current_theme.ansi
+        assert app.dim == "bright_black"
+        app.query_one("#filter", Input).value = "magg < 21"
+        await pilot.press("slash", "enter")
+        await settle(pilot, app)
+        status = plain(app.query_one("#status", Static))
+        assert 'unknown column "magg"' in status and 'did you mean "mag"?' in status
+        keys = plain(app.query_one("#keys", Static))
+        assert keys.startswith("enter apply")  # the filter has focus: its keys are shown
 
 
 async def test_odd_file_opens(odd_path):

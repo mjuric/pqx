@@ -124,6 +124,13 @@ def test_export_roundtrip(ds, tmp_path, truth):
         ds.export(View(), ds.path)
 
 
+def test_timestamps_in_utc(ds):
+    page = ds.fetch(View(), 0, 1, ["ingestTime"])
+    assert page.rows[0][0].utcoffset().total_seconds() == 0
+    st = ds.column_stats(View(where="mag < 21"), "ingestTime")
+    assert st.min.utcoffset().total_seconds() == 0
+
+
 def test_metadata(ds):
     rgs = ds.row_groups()
     assert len(rgs) == 8 and rgs[1]["start"] == 2_500

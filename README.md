@@ -53,10 +53,31 @@ without losing the current view.
 | `e` | export the current view (filter + sort + visible columns) to Parquet/CSV/JSON |
 | `m` | toggle sampling for stats and plots |
 | `l` `L` `[` `]` | Stats: log counts, log values, fewer/more bins |
+| `tab` · `← →` | Plot: move between settings fields · change the field's value |
 | `r` | Plot: rotate the sky-map centre between RA 0° and 180° |
 | Esc | cancel running queries / leave the filter bar |
-| Ctrl+P | command palette (themes: `tokyo-night`, `nord`, `gruvbox`, `textual-light`, …) |
 | `?` · `q` | help · quit |
+
+## Look
+
+pqx draws with your terminal's own background and 16-colour palette, so it
+matches whatever scheme you use, and it looks the same with or without 24-bit
+colour. Panels are thin boxes, the focused one in the accent colour. Colour is
+kept for things that mean something: the file name and other object names are
+cyan, and status lines use ✓ (green) for done, ! (yellow) for warnings such as
+sampling, ✗ (red) for errors, and ⠸ while running. The style follows acid's CLI
+design language.
+
+| option | env | |
+|---|---|---|
+| `--accent blue\|cyan\|magenta\|green\|yellow` | `PQX_ACCENT` | focus colour (default blue) |
+| `--dim faint\|bright-black` | `PQX_DIM` | secondary text: the faint attribute (default), or ANSI bright black for terminals that ignore faint |
+| `--border NAME` | `PQX_BORDER` | unfocused panel border, an ANSI colour name (default `bright_black`) |
+| `--theme NAME` | | use a Textual theme instead of the terminal's colours |
+
+Sky maps and density plots default to **magma**; the colormaps (magma,
+viridis, inferno, plasma, gray) are emitted as exact xterm-256 colours, and
+`terminal` draws density with your palette alone (faint, accent, bold).
 
 ## Large files
 
@@ -88,8 +109,8 @@ work from an equirectangular count grid, which DuckDB bins in a single
   least half of a sub-cell is covered, so partial coverage draws as partially
   filled glyphs;
 * **density** is carried by colour: log surface density in deg⁻² through a
-  selectable colormap (viridis, magma, inferno, plasma, gray), with a
-  colorbar legend;
+  selectable colormap (magma by default; viridis, inferno, plasma, gray, or
+  `terminal`), with a colorbar legend;
 * the limb and graticule are a braille outline, and RA increases to the left.
 
 ## Development

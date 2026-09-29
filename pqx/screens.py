@@ -55,14 +55,24 @@ The filter applies everywhere: grid, stats, plots and export.
 | **e** | export the current view (filter + sort) to Parquet / CSV / JSON |
 | **m** | toggle sampling for stats and plots on large files |
 | **Esc** | cancel running queries |
-| **Ctrl+P** | command palette (themes, …) |
+| **Ctrl+P** | command palette |
 | **?** | this help · **q** quit |
 
 ## Stats and Plot tabs
 
 Stats: **l** toggles log-scale counts, **L** log-scale values, **[ ]** fewer / more bins.
-Plot: choose *Sky (Mollweide)* or *Scatter*, the columns and the colormap;
-**r** rotates the sky map centre between RA 0° and 180°.
+Plot: **tab** moves between the fields of the settings line (mode, columns,
+centre, colour) and **← →** changes one; **r** rotates the sky map centre
+between RA 0° and 180°. The colormaps are drawn in exact 256-colour values;
+*terminal* uses only your terminal's palette.
+
+## Look
+
+pqx uses your terminal's own background and 16 colours. Choose the focus
+colour with `--accent` (blue, cyan, magenta, green, yellow), how secondary
+text is dimmed with `--dim` (faint, or bright-black for terminals without the
+faint attribute) and the unfocused border colour with `--border`; or set
+`PQX_ACCENT`, `PQX_DIM` and `PQX_BORDER` in your shell.
 """
 
 

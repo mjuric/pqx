@@ -1,4 +1,10 @@
-"""The pqx Textual application."""
+"""The pqx Textual application.
+
+Visual language (after acid's CLI design spec): the terminal's own background
+and 16-colour palette, thin panels, colour used only where it carries meaning
+(focus, object names, ✓ success / ! warning / ✗ error), secondary text dimmed,
+compact numbers, and terse status lines.
+"""
 from __future__ import annotations
 
 import datetime as dt
@@ -10,6 +16,7 @@ import time
 import duckdb
 import pyarrow as pa
 from rich.console import Group
+from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 from textual import on, work
@@ -19,8 +26,8 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.message import Message
 from textual.suggester import Suggester
-from textual.widgets import (DataTable, Footer, Input, Label, OptionList, Select, Static, TabbedContent,
-                             TabPane)
+from textual.theme import Theme
+from textual.widgets import DataTable, Input, Label, OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
 
 from . import fmt as F
@@ -33,13 +40,58 @@ SAMPLE_ROWS = 2_000_000       # rows used for stats/plots when sampling
 AUTO_SAMPLE_ROWS = 200_000_000        # sampling defaults on above this many rows…
 AUTO_SAMPLE_BYTES = 8 * 1024 ** 3     # …or this file size
 
+ACCENTS = ("blue", "cyan", "magenta", "green", "yellow")
+DIM_MODES = ("faint", "bright-black")
+TABS = [("tab-data", "Data"), ("tab-schema", "Schema"), ("tab-stats", "Stats"), ("tab-plot", "Plot"),
+        ("tab-meta", "Meta")]
+
 SQL_WORDS = ["and", "or", "not", "is", "null", "between", "in", "like", "ilike", "select", "from", "where",
              "group by", "order by", "limit", "count(*)", "avg(", "min(", "max(", "sum(", "distinct",
              "regexp_matches(", "abs(", "isnan(", "desc", "asc", "having"]
 
+KEYS = {
+    "tab-data": [("/", "filter"), ("s", "sort"), ("=", "match cell"), ("d", "detail"), ("c", "columns"),
+                 ("g", "go to"), ("e", "export"), ("tab", "next panel"), ("?", "help"), ("q", "quit")],
+    "tab-schema": [("↑↓", "column"), ("enter", "stats"), ("/", "filter"), ("1-5", "tabs"), ("?", "help"),
+                   ("q", "quit")],
+    "tab-stats": [("↑↓", "column"), ("l", "log counts"), ("L", "log values"), ("[ ]", "bins"),
+                  ("m", "sampling"), ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
+    "tab-plot": [("tab", "next field"), ("← →", "change"), ("r", "rotate"), ("m", "sampling"), ("e", "export"),
+                 ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
+    "tab-meta": [("↑↓", "scroll"), ("tab", "next panel"), ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
+    "filter": [("enter", "apply"), ("esc", "back"), ("↑↓", "history"), ("→", "complete"),
+               ("select … from t", "full query")],
+}
+
 
 def _epoch_label(v: float) -> str:
     return dt.datetime.fromtimestamp(v, dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+
+def pqx_theme(accent: str, border: str) -> Theme:
+    """A theme that is nothing but the terminal's own colours (Textual's ANSI mode)."""
+    a = f"ansi_{accent}"
+    return Theme(
+        name=f"pqx-{accent}", ansi=True, dark=True,
+        primary=a, secondary="ansi_cyan", accent=a, warning="ansi_yellow", error="ansi_red",
+        success="ansi_green", foreground="ansi_default", background="ansi_default",
+        surface="ansi_default", panel="ansi_default", boost="ansi_default",
+        variables={
+            "pqx-border": border, "border": a, "border-blurred": border,
+            "ansi-background": "ansi_black", "ansi-foreground": "ansi_white",
+            "block-cursor-foreground": "ansi_default", "block-cursor-background": "ansi_default",
+            "block-cursor-text-style": "reverse", "block-cursor-blurred-text-style": "reverse",
+            "block-cursor-blurred-background": "ansi_default", "block-cursor-blurred-foreground": "ansi_default",
+            "block-hover-background": "ansi_default",
+            "input-cursor-background": "ansi_default", "input-cursor-foreground": "ansi_default",
+            "input-cursor-text-style": "reverse", "input-selection-background": a,
+            "screen-selection-background": a, "scrollbar": border, "scrollbar-hover": a,
+            "scrollbar-active": a, "scrollbar-background": "ansi_default",
+            "scrollbar-background-hover": "ansi_default", "scrollbar-background-active": "ansi_default",
+            "scrollbar-corner-color": "ansi_default", "footer-background": "ansi_default",
+            "button-color-foreground": "ansi_default",
+        },
+    )
 
 
 class ColumnSuggester(Suggester):
@@ -152,9 +204,79 @@ class GridTable(DataTable):
             self.post_message(self.Seek(max(0, self.offset - 1)))
 
 
+class PlotControls(Static, can_focus=True):
+    """One line of ``label ‹ value ›`` fields: tab moves between them, ← → changes one."""
+
+    BINDINGS = [
+        Binding("left", "step(-1)", "previous value", show=False),
+        Binding("right", "step(1)", "next value", show=False),
+        Binding("tab", "field(1)", "next field", show=False),
+        Binding("shift+tab", "field(-1)", "previous field", show=False),
+    ]
+
+    class Changed(Message):
+        pass
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.values: dict[str, str] = {"mode": "sky", "x": "", "y": "", "centre": "0°",
+                                       "colour": plots.DEFAULT_CMAP}
+        self.options: dict[str, list[str]] = {"mode": ["sky", "xy"], "x": [], "y": [], "centre": ["0°", "180°"],
+                                              "colour": list(plots.COLORMAPS)}
+        self.cur = 0
+
+    def fields(self) -> list[str]:
+        return ["mode", "x", "y", "centre", "colour"] if self.values["mode"] == "sky" else ["mode", "x", "y",
+                                                                                           "colour"]
+
+    def value(self, key: str) -> str:
+        return self.values[key]
+
+    def set_value(self, key: str, value: str, notify: bool = True) -> None:
+        self.values[key] = value
+        self.cur = min(self.cur, len(self.fields()) - 1)
+        self.refresh()
+        if notify:
+            self.post_message(self.Changed())
+
+    def set_columns(self, numeric: list[str]) -> None:
+        self.options["x"] = list(numeric)
+        self.options["y"] = list(numeric)
+
+    def action_step(self, d: int) -> None:
+        key = self.fields()[self.cur]
+        opts = self.options[key]
+        if not opts:
+            return
+        i = opts.index(self.values[key]) if self.values[key] in opts else 0
+        self.set_value(key, opts[(i + d) % len(opts)])
+
+    def action_field(self, d: int) -> None:
+        self.cur = (self.cur + d) % len(self.fields())
+        self.refresh()
+
+    def render(self) -> Text:
+        app = self.app
+        dim = app.dim_style if isinstance(app, PqxApp) else Style(dim=True)
+        labels = {"mode": "mode", "x": "lon" if self.values["mode"] == "sky" else "x",
+                  "y": "lat" if self.values["mode"] == "sky" else "y", "centre": "centre", "colour": "colour"}
+        t = Text(no_wrap=True, overflow="ellipsis")
+        for i, key in enumerate(self.fields()):
+            if i:
+                t.append("    ")
+            t.append(labels[key] + " ", dim)
+            obj = key in ("x", "y")
+            st = Style(bold=True, color="cyan" if obj else None)
+            if self.has_focus and i == self.cur:
+                st = st + Style(reverse=True)
+            t.append(f"‹ {self.values[key] or '—'} ›", st)
+        return t
+
+
 class PqxApp(App):
     CSS_PATH = "app.tcss"
     TITLE = "pqx"
+    ENABLE_COMMAND_PALETTE = True
     BINDINGS = [
         Binding("slash", "focus_filter", "Filter"),
         Binding("x", "clear_filter", "Clear filter"),
@@ -176,7 +298,8 @@ class PqxApp(App):
     ]
 
     def __init__(self, path: str, *, where: str = "", theme: str | None = None,
-                 sample: bool | None = None, threads: int | None = None):
+                 sample: bool | None = None, threads: int | None = None,
+                 accent: str | None = None, dim: str | None = None, border: str | None = None):
         super().__init__()
         self.ds = ParquetDataset(path, threads=threads)
         self.view = View(where=where) if where and not is_sql_query(where) else View(sql=where if where else "")
@@ -191,73 +314,86 @@ class PqxApp(App):
         self.sampling = big if sample is None else sample
         self.history: list[str] = []
         self._hist_pos = 0
-        self._busy: dict[str, str] = {}
+        self._busy: dict[str, tuple[str, float]] = {}
         self._spin = 0
         self._stats_col: str | None = None
         self._hist_bins = 60
         self._hist_log_y = False
         self._hist_log_x = False
-        self._sky_center = 0.0
         self._last_error = ""
         self._stats_stale = True
         self._stats_shown: str | None = None
-        if theme:
-            self.theme = theme
-        else:
-            self.theme = "tokyo-night"
+        self._count_secs: float | None = None
+        # look: accent (focus) colour, how secondary text is dimmed, unfocused border colour
+        self.accent = (accent or os.environ.get("PQX_ACCENT") or "blue").lower()
+        if self.accent not in ACCENTS:
+            self.accent = "blue"
+        self.dim_mode = (dim or os.environ.get("PQX_DIM") or "faint").lower()
+        if self.dim_mode not in DIM_MODES:
+            self.dim_mode = "faint"
+        self.dim = "dim" if self.dim_mode == "faint" else "bright_black"
+        self.dim_style = Style.parse(self.dim)
+        F.DIM = self.dim
+        border = border or os.environ.get("PQX_BORDER") or "ansi_bright_black"
+        if not border.startswith(("ansi_", "#")):
+            border = "ansi_" + border
+        self.register_theme(pqx_theme(self.accent, border))
+        self.theme = theme or f"pqx-{self.accent}"
 
     # ------------------------------------------------------------------ layout
     def compose(self) -> ComposeResult:
         yield Static(id="titlebar")
-        with Horizontal(id="filterbar"):
-            yield Label(" WHERE ", id="filter-mode")
+        with Horizontal(id="filterbox", classes="panel"):
+            yield Label("›", id="filter-mode")
             yield Input(value=self._initial_filter,
-                        placeholder="filter: a SQL WHERE expression (mag < 21 and band = 'r'), "
-                                    "or a full query: select … from t   — press / to focus",
+                        placeholder="SQL WHERE expression — mag < 21 and band = 'r' — or a full query: "
+                                    "select … from t",
                         id="filter",
                         suggester=ColumnSuggester(self.ds.column_names + SQL_WORDS))
         with TabbedContent(id="tabs", initial="tab-data"):
             with TabPane("Data", id="tab-data"):
                 with Horizontal():
-                    yield GridTable(id="grid", zebra_stripes=True, header_height=2, cursor_type="cell")
-                    with VerticalScroll(id="detail"):
+                    with Vertical(id="data-panel", classes="panel tabbed"):
+                        yield GridTable(id="grid", header_height=2, cursor_type="cell")
+                        yield Static(id="status")
+                    with VerticalScroll(id="detail", classes="panel"):
                         yield Static(id="detail-body")
             with TabPane("Schema", id="tab-schema"):
                 with Vertical():
-                    yield DataTable(id="schema-table", zebra_stripes=True, cursor_type="row")
-                    yield Static(id="schema-desc")
+                    with Vertical(id="schema-panel", classes="panel tabbed"):
+                        yield DataTable(id="schema-table", cursor_type="row")
+                    yield Static(id="schema-desc", classes="panel")
             with TabPane("Stats", id="tab-stats"):
                 with Horizontal():
-                    yield OptionList(id="stats-cols")
-                    with VerticalScroll(id="stats-body"):
+                    with Vertical(id="stats-cols-panel", classes="panel"):
+                        yield OptionList(id="stats-cols")
+                    with VerticalScroll(id="stats-body", classes="panel tabbed"):
                         yield Static(id="stats-head")
                         yield Static(id="stats-summary")
                         yield Static(id="stats-plot")
             with TabPane("Plot", id="tab-plot"):
-                with Vertical():
-                    with Horizontal(id="plot-controls"):
-                        yield Select([("Sky (Mollweide)", "sky"), ("Scatter x vs y", "xy")],
-                                     value="sky", allow_blank=False, id="plot-mode")
-                        yield Select([], id="plot-x", prompt="x / lon")
-                        yield Select([], id="plot-y", prompt="y / lat")
-                        yield Select([(c, c) for c in plots.COLORMAPS], value=plots.DEFAULT_CMAP,
-                                     allow_blank=False, id="plot-cmap")
-                    yield Static(id="plot-head")
+                with Vertical(id="plot-panel", classes="panel tabbed"):
+                    yield PlotControls(id="plot-controls")
                     with VerticalScroll(id="plot-area"):
                         yield Static(id="plot-body")
+                    yield Static(id="plot-status")
             with TabPane("Metadata", id="tab-meta"):
-                with VerticalScroll():
-                    yield Static(id="meta-overview")
-                    yield Label("[b]Row groups[/b]", classes="section")
-                    yield DataTable(id="rowgroups", zebra_stripes=True, cursor_type="row")
-                    yield Label("[b]Key-value metadata[/b]", classes="section")
-                    yield Static(id="meta-kv")
-        yield Static(id="status")
-        yield Footer()
+                with Horizontal():
+                    with VerticalScroll(id="meta-file", classes="panel tabbed"):
+                        yield Static(id="meta-overview")
+                        yield Static(id="meta-kv")
+                    with Vertical(id="meta-rg-panel", classes="panel"):
+                        yield DataTable(id="rowgroups", cursor_type="row")
+                        yield Static(id="meta-status")
+        yield Static(id="keys")
 
     def on_mount(self) -> None:
         self.title = f"pqx — {os.path.basename(self.ds.path)}"
+        if self.dim_mode == "bright-black":
+            self.screen.add_class("dim-bright-black")
         self._render_titlebar()
+        self._render_tab_titles("tab-data")
+        self.query_one("#filterbox").border_title = self._dim_markup("filter")
         self._setup_formatters(self.result_schema)
         self.query_one("#detail").display = False
         grid = self.query_one(GridTable)
@@ -274,20 +410,54 @@ class PqxApp(App):
             self._rebuild_columns()
             self.load_window(0, 0)
         grid.focus()
+        self._render_keys()
 
-    # ------------------------------------------------------------ title/status
+    # ------------------------------------------------------------ chrome text
+    def _dim_markup(self, s: str) -> str:
+        colour = "dim" if self.dim_mode == "faint" else "ansi_bright_black"
+        return f"[{colour}]{s}[/]"
+
+    def _render_tab_titles(self, active: str) -> None:
+        colour = "dim" if self.dim_mode == "faint" else "ansi_bright_black"
+        parts = []
+        for tab, name in TABS:
+            if tab == active:
+                parts.append(f"[bold ansi_{self.accent}]{name}[/]")
+            else:
+                parts.append(f"[{colour} @click=app.tab('{tab}')]{name}[/]")
+        title = f" [{colour}]─[/] ".join(parts)
+        for panel in self.query(".tabbed"):
+            panel.border_title = title
+
     def _render_titlebar(self) -> None:
-        ds = self.ds
+        ds, d = self.ds, self.dim
         t = Text.assemble(
-            (" ▦ pqx ", "bold reverse"), "  ",
-            (os.path.basename(ds.path), "bold"),
-            ("  ·  ", "dim"), (f"{ds.num_rows:,}", "bold"), (" rows", "dim"),
-            ("  ·  ", "dim"), (f"{len(ds.columns)}", "bold"), (" columns", "dim"),
-            ("  ·  ", "dim"), (F.human_bytes(ds.file_size), "bold"),
-            ("  ·  ", "dim"), (f"{ds.meta.num_row_groups}", "bold"), (" row groups", "dim"),
+            ("pqx", "bold"), ("  ·  ", d), (os.path.basename(ds.path), "bold cyan"),
+            (f"  ·  {ds.num_rows:,} rows  ·  {len(ds.columns)} columns  ·  {F.human_bytes(ds.file_size)}"
+             f"  ·  {ds.meta.num_row_groups:,} row groups", d),
         )
         self.query_one("#titlebar", Static).update(t)
 
+    def _render_keys(self) -> None:
+        try:
+            ctx = "filter" if isinstance(self.focused, Input) else self.query_one(TabbedContent).active
+        except NoMatches:
+            return
+        t = Text(no_wrap=True, overflow="ellipsis")
+        for i, (k, label) in enumerate(KEYS.get(ctx, [])):
+            if i:
+                t.append("   ")
+            t.append(k, "bold")
+            t.append(" " + label, self.dim)
+        self.query_one("#keys", Static).update(t)
+
+    def on_descendant_focus(self, event) -> None:
+        self._render_keys()
+
+    def on_descendant_blur(self, event) -> None:
+        self.call_after_refresh(self._render_keys)
+
+    # ------------------------------------------------------------ status line
     def _tick(self) -> None:
         if self._busy:
             self._spin = (self._spin + 1) % len(SPINNER)
@@ -297,47 +467,62 @@ class PqxApp(App):
         if label is None:
             self._busy.pop(key, None)
         else:
-            self._busy[key] = label
+            self._busy[key] = (label, time.time())
         self._render_status()
 
     def _render_status(self) -> None:
-        grid = self.query_one(GridTable)
-        parts: list = []
-        if self._busy:
-            parts.append((f" {SPINNER[self._spin]} " + " · ".join(self._busy.values()) + "  ", "bold $accent"))
-        n = grid.row_count
+        try:
+            grid = self.query_one(GridTable)
+            out = self.query_one("#status", Static)
+        except NoMatches:
+            return
+        d = self.dim
+        t = Text(no_wrap=True, overflow="ellipsis")
         tot = self.total
-        if n:
-            a, b = grid.offset + 1, grid.offset + n
-            parts += [("row ", "dim"), (f"{grid.abs_row:,}", "bold"), (" · ", "dim"),
-                      (f"{tot:,}" if tot is not None else "…", "bold"), (" rows", "dim")]
-            parts.append((f"   window {a - 1:,}–{b - 1:,}", "dim"))
-        elif tot == 0:
-            parts.append(("no matching rows", "bold $warning"))
-        if not self.view.is_trivial and tot is not None and not self.view.sql:
-            pct = 100.0 * tot / self.ds.num_rows if self.ds.num_rows else 0
-            parts.append((f"   filter keeps {pct:.3g}% of {F.human_count(self.ds.num_rows)}", "dim"))
-        if self.view.order_by:
-            c, d = self.view.order_by[0]
-            parts.append((f"   sorted by {c} {'↓' if d else '↑'}", "$secondary"))
-        if self.view.sql:
-            parts.append(("   SQL result", "$secondary"))
-        if self.sampling:
-            parts.append((f"   stats/plots sampled ({F.human_count(SAMPLE_ROWS)} rows)", "$warning"))
-        if self.raw:
-            parts.append(("   raw values", "$warning"))
         if self._last_error:
-            parts = [(" ✖ " + self._last_error, "bold $error")] + [("   ", "")] + parts
-        t = Text()
-        for s, style in parts:
-            t.append(s, self._style(style))
-        self.query_one("#status", Static).update(t)
-
-    def _style(self, style: str) -> str:
-        if "$" not in style:
-            return style
-        tv = self.get_css_variables()
-        return re.sub(r"\$([a-z-]+)", lambda m: tv.get(m.group(1), "white"), style)
+            t.append("✗", "red")
+            t.append(" Query failed", "bold")
+            t.append("   reason: ", d)
+            t.append(self._last_error)
+            t.append(f"   → {getattr(self, '_error_hint', 'edit with /')}  ·  previous view kept", d)
+        elif self._busy:
+            label, t0 = next(iter(self._busy.values()))
+            t.append(SPINNER[self._spin], self.accent)
+            t.append(" " + label[:1].upper() + label[1:])
+            extra = []
+            if grid.row_count:
+                extra.append(f"first {grid.row_count:,} shown" if tot is None else f"{tot:,} rows")
+            el = time.time() - t0
+            if el >= 1:
+                extra.append(f"{int(el // 60):02d}:{int(el % 60):02d} elapsed")
+            if extra:
+                t.append("   " + "  ·  ".join(extra), d)
+        else:
+            if tot == 0:
+                t.append("!", "yellow")
+                t.append(" No matching rows", "bold")
+                t.append("   → x clears the filter", d)
+            else:
+                t.append("✓", "green")
+                t.append(f" {tot:,} rows" if tot is not None else " rows")
+                bits = []
+                if not self.view.is_trivial and tot is not None and not self.view.sql:
+                    pct = 100.0 * tot / self.ds.num_rows if self.ds.num_rows else 0
+                    bits.append(f"{pct:.3g}% of {F.human_count(self.ds.num_rows)}")
+                if self.view.sql:
+                    bits.append("SQL result")
+                if self.view.order_by:
+                    c, desc = self.view.order_by[0]
+                    bits.append(f"sorted {c} {'↓' if desc else '↑'}")
+                if self._count_secs is not None and not self.view.is_trivial:
+                    bits.append(f"{self._count_secs:.2f} s")
+                if self.raw:
+                    bits.append("raw values")
+                if grid.row_count:
+                    bits.append(f"row {grid.abs_row:,}")
+                if bits:
+                    t.append("  ·  " + "  ·  ".join(bits), d)
+        out.update(t)
 
     # --------------------------------------------------------------- the grid
     def _setup_formatters(self, schema: list[tuple[str, pa.DataType]]) -> None:
@@ -358,9 +543,11 @@ class PqxApp(App):
             unit = self.ds.column(name).unit if name in self.ds._by_name else ""
             arrow = ""
             if name in order:
-                arrow = " ▼" if order[name] else " ▲"
+                arrow = " ↓" if order[name] else " ↑"
+            fm = self.formatters.get(name) or F.CellFormatter(name, typ)
             label = Text.assemble((name, "bold"), (arrow, "bold"), "\n",
-                                  (F.short_type(typ) + (f" · {unit}" if unit else ""), "dim italic"))
+                                  (F.short_type(typ) + (f"·{unit}" if unit else ""), self.dim),
+                                  justify="right" if fm.right else "left")
             grid.add_column(label, key=name)
 
     @work(thread=True, exclusive=True, group="page")
@@ -391,12 +578,9 @@ class PqxApp(App):
         grid.offset = page.offset
         fm = [self.formatters.get(n) or F.CellFormatter(n, t) for n, t in zip(page.columns, page.types)]
         raw = self.raw
-        rows = []
         for i, row in enumerate(page.rows):
             label_n = page.row_numbers[i] if page.row_numbers[i] is not None else page.offset + i
-            rows.append(([f(v, raw) for f, v in zip(fm, row)], Text(f"{label_n:,}", style="dim")))
-        for cells, label in rows:
-            grid.add_row(*cells, label=label)
+            grid.add_row(*[f(v, raw) for f, v in zip(fm, row)], label=Text(f"{label_n:,}", style=self.dim))
         self.page = page
         if page.rows:
             r = max(0, min(len(page.rows) - 1, cursor_abs - page.offset))
@@ -463,8 +647,8 @@ class PqxApp(App):
         r = min(grid.cursor_row, len(self.page.rows) - 1)
         row = self.page.rows[r]
         rn = self.page.row_numbers[r]
-        tbl = Table.grid(padding=(0, 1), expand=True)
-        tbl.add_column(style="bold", no_wrap=True, max_width=24)
+        tbl = Table.grid(padding=(0, 2), expand=True)
+        tbl.add_column(no_wrap=True, max_width=22)
         tbl.add_column(ratio=1)
         cur_col = self.page.columns[grid.cursor_column] if grid.cursor_column < len(self.page.columns) else None
         for name, typ, v in zip(self.page.columns, self.page.types, row):
@@ -472,20 +656,16 @@ class PqxApp(App):
             full = F.format_value(F.shortest(v, typ), fmt.kind, raw=True, width=0)
             if len(full) > 300:  # keep one huge JSON/blob from burying every other column
                 full = full[:300] + f"… ({len(full):,} chars; y copies it all)"
-            val = Text(full, style="dim italic" if v is None else "")
-            extra = F.derived(name, fmt.kind, v)
-            cell = Text.assemble(val)
-            if extra:
-                cell.append("\n" + extra, style="italic cyan")
+            cell = Text(full, style=self.dim if v is None else "")
             info = self.ds._by_name.get(name)
-            if info is not None and (info.unit or info.description):
-                cell.append("\n" + " ".join(s for s in (f"[{info.unit}]" if info.unit else "",
-                                                        info.description) if s), style="dim")
-            key = Text(name, style="bold reverse" if name == cur_col else "bold")
-            tbl.add_row(key, cell)
-        head = Text.assemble(("Row ", "dim"), (f"{grid.abs_row:,}", "bold"),
-                             (f"   (file row {rn:,})" if rn is not None else "", "dim"), "\n")
-        self.query_one("#detail-body", Static).update(Group(head, tbl))
+            if info is not None and info.unit and v is not None:
+                cell.append(f"  {info.unit}", self.dim)
+            extra = F.derived(name, fmt.kind, v)
+            if extra:
+                cell.append("\n· " + extra, self.dim)
+            tbl.add_row(Text(name, style="bold reverse" if name == cur_col else "bold"), cell)
+        d.border_title = self._dim_markup(f"row {grid.abs_row:,}" + (f" · file row {rn:,}" if rn is not None else ""))
+        self.query_one("#detail-body", Static).update(tbl)
 
     # --------------------------------------------------------------- filtering
     def action_focus_filter(self) -> None:
@@ -494,9 +674,10 @@ class PqxApp(App):
     @on(Input.Changed, "#filter")
     def filter_changed(self, event: Input.Changed) -> None:
         lab = self.query_one("#filter-mode", Label)
-        lab.update(" SQL " if is_sql_query(event.value) else " WHERE ")
-        lab.set_class(is_sql_query(event.value), "sql")
-        event.input.remove_class("error")
+        sql = is_sql_query(event.value)
+        lab.update("sql ›" if sql else "›")
+        lab.set_class(sql, "sql")
+        self.query_one("#filterbox").remove_class("error")
 
     @on(Input.Submitted, "#filter")
     def filter_submitted(self, event: Input.Submitted) -> None:
@@ -530,10 +711,11 @@ class PqxApp(App):
 
     def _set_view(self, view: View, schema, keep_file_row: int | None = None) -> None:
         inp = self.query_one("#filter", Input)
-        inp.remove_class("error")
+        self.query_one("#filterbox").remove_class("error")
         if self.focused is inp and self.query_one(TabbedContent).active == "tab-data":
             self.query_one(GridTable).focus()
         self._last_error = ""
+        self._count_secs = None
         was_sql = bool(self.view.sql)
         self.view = view
         grid = self.query_one(GridTable)
@@ -560,6 +742,7 @@ class PqxApp(App):
     def count_rows(self) -> None:
         view = self.view
         self.call_from_thread(self._set_busy, "count", "counting rows")
+        t0 = time.time()
         try:
             with self.ds.tagged("count"):
                 n = self.ds.count(view)
@@ -571,10 +754,11 @@ class PqxApp(App):
         finally:
             self.call_from_thread(self._set_busy, "count", None)
         if view is self.view:
-            self.call_from_thread(self._set_total, n)
+            self.call_from_thread(self._set_total, n, time.time() - t0)
 
-    def _set_total(self, n: int) -> None:
+    def _set_total(self, n: int, secs: float | None = None) -> None:
         self.total = n
+        self._count_secs = secs
         self.query_one(GridTable).total = n
         self._render_status()
 
@@ -627,10 +811,14 @@ class PqxApp(App):
         msg = str(e).strip()
         first = msg.split("\n")[0]
         first = re.sub(r"^(Binder|Parser|Catalog|Conversion|Invalid Input|Out of Range) Error:\s*", "", first)
-        self._last_error = first[:200]
+        first = re.sub(r'Referenced column ("[^"]+") not found in FROM clause!?', r"unknown column \1", first)
+        first = first.rstrip("!")
+        m = re.search(r'Candidate bindings: "(?:[^".]+\.)?([^"]+)"', msg)
+        self._error_hint = f'did you mean "{m.group(1)}"?' if m else "edit with /"
+        self._last_error = first[:160]
         if mark_input:
-            self.query_one("#filter", Input).add_class("error")
-        self.notify(msg[:600], title="Query error", severity="error", timeout=8)
+            self.query_one("#filterbox").add_class("error")
+        self.notify(msg[:600], title="✗ Query failed", severity="error", timeout=8)
         self._render_status()
 
     # ----------------------------------------------------------------- sorting
@@ -660,8 +848,6 @@ class PqxApp(App):
         self.load_window(0, 0, col)
         if self.total is None:
             self.count_rows()
-        what = "off" if not order else ("descending" if order[0][1] else "ascending")
-        self.notify(f"Sort {name}: {what}", timeout=2)
 
     # ------------------------------------------------------------ grid actions
     def action_pick_columns(self) -> None:
@@ -684,7 +870,7 @@ class PqxApp(App):
         col = min(grid.cursor_column, len(self.cols_shown) - 1)
         self._rebuild_columns()
         self.load_window(grid.offset, grid.abs_row, col)
-        self.notify(f"Hid {name} — press c to bring it back", timeout=2)
+        self.notify(f"Hid {name} · c brings it back", timeout=2)
 
     def action_pin_columns(self) -> None:
         grid = self.query_one(GridTable)
@@ -703,7 +889,7 @@ class PqxApp(App):
         typ = dict(self.result_schema).get(name, pa.null())
         s = F.format_value(F.shortest(v, typ), "float", raw=True, width=0) if v is not None else ""
         self.copy_to_clipboard(s)
-        self.notify(f"Copied {name} = {s[:60]}", timeout=2)
+        self.notify(f"✓ Copied {name} = {s[:60]}", timeout=2)
 
     def action_goto(self) -> None:
         def done(spec):
@@ -745,8 +931,8 @@ class PqxApp(App):
 
     def action_toggle_sample(self) -> None:
         self.sampling = not self.sampling
-        self.notify("Sampling " + ("on: stats and plots use ~" + F.human_count(SAMPLE_ROWS) + " rows"
-                                   if self.sampling else "off: stats and plots scan every row"), timeout=3)
+        self.notify(("! Sampling on · stats and plots use ~" + F.human_count(SAMPLE_ROWS) + " rows")
+                    if self.sampling else "✓ Sampling off · stats and plots scan every row", timeout=3)
         self._render_status()
         self._refresh_analysis()
 
@@ -765,9 +951,9 @@ class PqxApp(App):
         stem = os.path.splitext(os.path.basename(self.ds.path))[0]
         default = os.path.join(os.getcwd(), f"{stem}.subset.parquet")
         desc = "all rows" if self.view.is_trivial else (
-            "SQL result" if self.view.sql else f"WHERE {self.view.where}" if self.view.where else "")
+            "SQL result" if self.view.sql else f"where {self.view.where}" if self.view.where else "")
         if self.view.order_by:
-            desc += f", sorted by {self.view.order_by[0][0]}"
+            desc += f" · sorted by {self.view.order_by[0][0]}"
         n = f"{self.total:,} rows" if self.total is not None else "row count pending"
         self.push_screen(ExportScreen(default, f"{desc} · {n} · {len(self.cols_shown)} visible columns"),
                          self._do_export)
@@ -790,40 +976,46 @@ class PqxApp(App):
         finally:
             self.call_from_thread(self._set_busy, "export", None)
         size = F.human_bytes(os.path.getsize(opts["path"])) if os.path.exists(opts["path"]) else "?"
-        self.call_from_thread(self.notify, f"Wrote {n:,} rows ({size}) to {opts['path']} in {time.time() - t0:.1f}s",
-                              title="Export complete", timeout=8)
+        self.call_from_thread(self.notify, f"✓ Wrote {F.human_count(n)} rows · {size} · {time.time() - t0:.1f} s"
+                                           f"\n→ {opts['path']}", timeout=8)
 
     # ------------------------------------------------------------ schema tab
     def _build_schema_tab(self) -> None:
         t = self.query_one("#schema-table", DataTable)
-        t.add_columns("#", "column", "type", "unit", "nulls", "min", "max", "size", "ratio", "encodings",
-                      "description")
-        summ = {d["path"]: d for d in self.ds.column_chunk_summary()}
+        d = self.dim
+        for label, right in [("#", True), ("column", False), ("type", False), ("unit", False), ("nulls", True),
+                             ("min", True), ("max", True), ("size", True), ("ratio", True)]:
+            t.add_column(Text(label, style="bold", justify="right" if right else "left"), key=label)
+        summ = {s["path"]: s for s in self.ds.column_chunk_summary()}
+        self._schema_info = {}
         for i, c in enumerate(self.ds.columns):
-            d = summ.get(c.name)
+            s = summ.get(c.name)
             fm = F.CellFormatter(c.name, c.arrow_type, c.unit)
-            if d is None:  # nested: aggregate the leaves
+            if s is None:  # nested: aggregate the leaves
                 leaves = [v for k, v in summ.items() if k.split(".")[0] == c.name]
                 size = sum(v["compressed"] for v in leaves)
                 usize = sum(v["uncompressed"] for v in leaves)
-                mn = mx = None
-                nulls = None
-                enc = ""
+                mn = mx = nulls = None
+                enc, comp = "", (leaves[0]["compression"] if leaves else "")
             else:
-                size, usize = d["compressed"], d["uncompressed"]
-                mn, mx = d["min"], d["max"]
-                nulls = d["nulls"] if d["has_stats"] else None
-                enc = ", ".join(sorted(e.replace("RLE_DICTIONARY", "DICT") for e in d["encodings"]))
+                size, usize = s["compressed"], s["uncompressed"]
+                mn, mx = s["min"], s["max"]
+                nulls = s["nulls"] if s["has_stats"] else None
+                enc = ", ".join(sorted(e.replace("RLE_DICTIONARY", "dict").lower() for e in s["encodings"]))
+                comp = s["compression"]
             ratio = f"{usize / size:.1f}×" if size else ""
-            null_txt = Text("–", style="dim") if nulls is None else Text(
-                f"{nulls:,}" + (f" ({100 * nulls / self.ds.num_rows:.2g}%)" if nulls and self.ds.num_rows else ""),
-                style="dim" if not nulls else "")
-            t.add_row(Text(str(i), style="dim"), Text(c.name, style="bold"),
-                      Text(F.short_type(c.arrow_type), style="italic"), c.unit, null_txt,
-                      fm(mn) if mn is not None else Text("–", style="dim"),
-                      fm(mx) if mx is not None else Text("–", style="dim"),
-                      Text(F.human_bytes(size), justify="right"), Text(ratio, justify="right"), Text(enc, style="dim"),
-                      Text(c.description[:60] + ("…" if len(c.description) > 60 else ""), style="dim"),
+            self._schema_info[c.name] = (i, size, ratio, str(comp).lower(), enc)
+            if nulls is None:
+                null_txt = Text("–", style=d, justify="right")
+            elif nulls:
+                null_txt = Text(f"{nulls:,}  {100 * nulls / self.ds.num_rows:.2g}%", justify="right")
+            else:
+                null_txt = Text("0", style=d, justify="right")
+            t.add_row(Text(str(i), style=d, justify="right"), Text(c.name, style="bold"),
+                      Text(F.short_type(c.arrow_type), style=d), Text(c.unit), null_txt,
+                      fm(mn) if mn is not None else Text("–", style=d, justify="right"),
+                      fm(mx) if mx is not None else Text("–", style=d, justify="right"),
+                      Text(F.human_bytes(size), justify="right"), Text(ratio, style=d, justify="right"),
                       key=c.name)
 
     @on(DataTable.RowHighlighted, "#schema-table")
@@ -832,13 +1024,16 @@ class PqxApp(App):
         if name is None or name not in self.ds._by_name:
             return
         c = self.ds.column(name)
-        t = Text.assemble((c.name, "bold"), "  ", (str(c.arrow_type), "italic"),
-                          (f"  [{c.unit}]" if c.unit else "", "cyan"),
-                          ("  nullable" if c.nullable else "  not null", "dim"), "\n",
-                          (c.description or "(no description in the file's field metadata)",
-                           "" if c.description else "dim italic"),
-                          ("\nEnter: column statistics", "dim"))
-        self.query_one("#schema-desc", Static).update(t)
+        i, size, ratio, comp, enc = self._schema_info[name]
+        d = self.dim
+        t = Text.assemble((c.name, "bold cyan"), f"   {c.arrow_type}", (f"   [{c.unit}]" if c.unit else ""),
+                          (f"   {'nullable' if c.nullable else 'not null'}  ·  {F.human_bytes(size)}"
+                           + (f"  ·  {ratio} {comp}" if ratio else "") + (f"  ·  {enc}" if enc else ""), d), "\n",
+                          (c.description or "no description in the file's field metadata", "" if c.description else d),
+                          ("\n→ enter opens statistics  ·  i from the data grid", d))
+        desc = self.query_one("#schema-desc", Static)
+        desc.border_title = self._dim_markup(f"column {i}")
+        desc.update(t)
 
     @on(DataTable.RowSelected, "#schema-table")
     def schema_selected(self, event: DataTable.RowSelected) -> None:
@@ -846,58 +1041,79 @@ class PqxApp(App):
 
     # ---------------------------------------------------------- metadata tab
     def _build_meta_tab(self) -> None:
-        ds, md = self.ds, self.ds.meta
-        ov = Table.grid(padding=(0, 2))
-        ov.add_column(style="dim", justify="right")
-        ov.add_column()
+        ds, md, d = self.ds, self.ds.meta, self.dim
         rgs = ds.row_groups()
         avg_rg = (sum(r["rows"] for r in rgs) / len(rgs)) if rgs else 0
         comp = sum(r["compressed"] for r in rgs)
         unc = sum(r["uncompressed"] for r in rgs)
-        for k, v in [
-            ("path", ds.path), ("file size", f"{F.human_bytes(ds.file_size)} ({ds.file_size:,} bytes)"),
-            ("rows", f"{ds.num_rows:,}"), ("columns", f"{len(ds.columns)} top-level · {md.num_columns} leaf"),
-            ("row groups", f"{md.num_row_groups:,} · ~{avg_rg:,.0f} rows each"),
-            ("data size", f"{F.human_bytes(comp)} compressed · {F.human_bytes(unc)} uncompressed"
-                          + (f" · {unc / comp:.2f}× ratio" if comp else "")),
-            ("format version", str(md.format_version)), ("created by", str(md.created_by or "?")),
-            ("footer size", F.human_bytes(md.serialized_size)),
-        ]:
+        ov = Table.grid(padding=(0, 2))
+        ov.add_column(style=d, no_wrap=True)
+        ov.add_column()
+        rows = [
+            ("path", Text.assemble((os.path.basename(ds.path), "cyan"), (f"   {os.path.dirname(ds.path)}/", d))),
+            ("file size", Text.assemble(F.human_bytes(ds.file_size), (f"   {ds.file_size:,} bytes", d))),
+            ("rows", Text(f"{ds.num_rows:,}")),
+            ("columns", Text.assemble(f"{len(ds.columns)}", (f"   {md.num_columns} leaf", d))),
+            ("row groups", Text.assemble(f"{md.num_row_groups:,}", (f"   ~{avg_rg:,.0f} rows each", d))),
+            ("data", Text.assemble(F.human_bytes(comp), (f"   compressed  ·  {F.human_bytes(unc)} raw"
+                                                         + (f"  ·  {unc / comp:.2f}×" if comp else ""), d))),
+            ("format", Text(str(md.format_version))),
+            ("created by", Text(str(md.created_by or "?"))),
+            ("footer", Text(F.human_bytes(md.serialized_size))),
+        ]
+        for k, v in rows:
             ov.add_row(k, v)
-        self.query_one("#meta-overview", Static).update(Group(Text("File", style="bold"), ov))
+        self.query_one("#meta-overview", Static).update(ov)
         t = self.query_one("#rowgroups", DataTable)
-        t.add_columns("#", "first row", "rows", "compressed", "uncompressed", "ratio")
+        for label, right in [("#", True), ("first row", True), ("rows", True), ("compressed", True), ("", False),
+                             ("ratio", True)]:
+            t.add_column(Text(label, style="bold", justify="right" if right else "left"))
+        cmax = max((r["compressed"] for r in rgs), default=1) or 1
         for r in rgs[:5000]:
-            t.add_row(Text(str(r["index"]), style="dim"), Text(f"{r['start']:,}", justify="right"),
-                      Text(f"{r['rows']:,}", justify="right"),
-                      Text(F.human_bytes(r["compressed"]), justify="right"),
-                      Text(F.human_bytes(r["uncompressed"]), justify="right"),
-                      Text(f"{r['uncompressed'] / r['compressed']:.2f}×" if r["compressed"] else "", justify="right"))
-        t.styles.max_height = min(len(rgs), 15) + 2
+            n = round(10 * r["compressed"] / cmax)
+            bar = Text.assemble("▰" * n, ("▱" * (10 - n), d))
+            t.add_row(Text(str(r["index"]), style=d, justify="right"), Text(f"{r['start']:,}", justify="right"),
+                      Text(f"{r['rows']:,}", justify="right"), Text(F.human_bytes(r["compressed"]), justify="right"),
+                      bar, Text(f"{r['uncompressed'] / r['compressed']:.2f}×" if r["compressed"] else "", style=d,
+                                justify="right"))
+        self.query_one("#meta-rg-panel").border_title = self._dim_markup(f"row groups  {len(rgs):,}")
+        n_stats = sum(1 for s in ds.column_chunk_summary() if s["has_stats"])
+        st = Text.assemble(("✓", "green"), " Footer read",
+                           (f"   {F.human_bytes(md.serialized_size)}  ·  {md.num_row_groups:,} row groups  ·  "
+                            f"stats on {n_stats}/{md.num_columns} columns", d))
+        self.query_one("#meta-status", Static).update(st)
         kv = ds.key_value_metadata()
-        parts = []
+        parts = [Text(""), Text("key-value metadata", style="bold")]
         from rich.json import JSON
         for k, v in kv.items():
-            parts.append(Text(k, style="bold cyan"))
             if k == "ARROW:schema":
-                parts.append(Text(f"  base64-encoded Arrow schema, {F.human_bytes(len(v))} (decoded in the Schema tab)\n",
-                                  style="dim italic"))
+                parts.append(Text.assemble((k, "cyan"), (f"   {F.human_bytes(len(v))} · decoded in Schema", d)))
                 continue
             try:
-                parts.append(JSON(v, indent=2))
-                parts.append(Text(""))
+                parts.append(Text(k, style="cyan"))
+                parts.append(JSON(v, indent=2, highlight=False))
             except Exception:
-                parts.append(Text("  " + (v if len(v) < 4000 else v[:4000] + " …") + "\n"))
-        if not parts:
-            parts = [Text("(none)", style="dim italic")]
+                parts[-1] = Text.assemble((k, "cyan"), "   ", v if len(v) < 4000 else v[:4000] + " …")
+        if len(parts) == 2:
+            parts.append(Text("none", style=d))
         self.query_one("#meta-kv", Static).update(Group(*parts))
 
     # -------------------------------------------------------------- stats tab
+    def _stat_prompt(self, name: str, typ: pa.DataType, highlighted: bool) -> Text:
+        # The highlight is drawn here, as a real reverse attribute: Textual emulates
+        # reverse by swapping colours, which is a no-op on the terminal's defaults.
+        t = Text.assemble((name.ljust(18), "bold"), "  ", (F.short_type(typ).ljust(12), self.dim))
+        if highlighted:
+            t.stylize("reverse")
+        return t
+
     def _build_stats_list(self) -> None:
         ol = self.query_one("#stats-cols", OptionList)
         ol.clear_options()
+        self._stat_hl: int | None = None
         for name, typ in self.result_schema:
-            ol.add_option(Option(Text.assemble((name, "bold"), "  ", (F.short_type(typ), "dim italic")), id=name))
+            ol.add_option(Option(self._stat_prompt(name, typ, False), id=name))
+        self.query_one("#stats-cols-panel").border_title = self._dim_markup(f"columns  {len(self.result_schema)}")
         if self._stats_col not in dict(self.result_schema):
             self._stats_col = None
 
@@ -914,6 +1130,13 @@ class PqxApp(App):
 
     @on(OptionList.OptionHighlighted, "#stats-cols")
     def stats_col_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        ol = self.query_one("#stats-cols", OptionList)
+        prev = getattr(self, "_stat_hl", None)
+        if prev is not None and prev < len(self.result_schema) and prev != event.option_index:
+            ol.replace_option_prompt_at_index(prev, self._stat_prompt(*self.result_schema[prev], False))
+        ol.replace_option_prompt_at_index(event.option_index,
+                                          self._stat_prompt(*self.result_schema[event.option_index], True))
+        self._stat_hl = event.option_index
         name = event.option.id
         if name and name != self._stats_col:
             self._stats_col = name
@@ -929,6 +1152,7 @@ class PqxApp(App):
     @on(TabbedContent.TabActivated)
     def tab_activated(self, event: TabbedContent.TabActivated) -> None:
         pane = event.pane.id
+        self._render_tab_titles(pane)
         if pane == "tab-stats":
             if self._stats_col is None and self.result_schema:
                 self._stats_col = self.result_schema[0][0]
@@ -937,12 +1161,15 @@ class PqxApp(App):
                 self.compute_stats(self._stats_col)
             self.query_one("#stats-cols", OptionList).focus()
         elif pane == "tab-plot":
-            self.query_one("#plot-area").focus()
+            self.query_one(PlotControls).focus()
             self.call_after_refresh(self.replot)  # after layout, so the plot fills the pane
         elif pane == "tab-schema":
             self.query_one("#schema-table", DataTable).focus()
         elif pane == "tab-data":
             self.query_one(GridTable).focus()
+        elif pane == "tab-meta":
+            self.query_one("#meta-file").focus()
+        self._render_keys()
 
     def _refresh_analysis(self) -> None:
         active = self.query_one(TabbedContent).active
@@ -954,6 +1181,9 @@ class PqxApp(App):
             self.query_one("#stats-summary", Static).update("")
             self._stats_stale = True
 
+    def _scope(self, view: View) -> str:
+        return "all rows" if view.is_trivial else ("SQL result" if view.sql else f"where {view.where}")
+
     @work(thread=True, exclusive=True, group="stats")
     def compute_stats(self, name: str) -> None:
         view = self.view
@@ -963,6 +1193,7 @@ class PqxApp(App):
             return
         sample = self._sample()
         self.call_from_thread(self._set_busy, "stats", f"profiling {name}")
+        self.call_from_thread(self._stats_running, name)
         t0 = time.time()
         try:
             with self.ds.tagged("stats"):
@@ -984,37 +1215,35 @@ class PqxApp(App):
             return
         self.call_from_thread(self._render_stats, name, typ, st, hist, time.time() - t0)
 
+    def _stats_head(self, name: str, status: Text) -> Group:
+        info = self.ds._by_name.get(name)
+        typ = dict(self.result_schema).get(name)
+        line = Text.assemble((name, "bold cyan"), (f"   {F.short_type(typ)}" if typ is not None else "", self.dim),
+                             (f"   [{info.unit}]" if info and info.unit else ""),
+                             (f"   {info.description}" if info and info.description else "", self.dim))
+        return Group(line, status)
+
+    def _stats_running(self, name: str) -> None:
+        st = Text.assemble((SPINNER[3], self.accent), f" Profiling {name}", (f"   {self._scope(self.view)}", self.dim))
+        self.query_one("#stats-head", Static).update(self._stats_head(name, st))
+
     def _render_stats(self, name: str, typ: pa.DataType, st: ColumnStats, hist, elapsed: float) -> None:
         self._stats_stale = False
         self._stats_shown = name
-        info = self.ds._by_name.get(name)
+        d = self.dim
         fm = self.formatters.get(name) or F.CellFormatter(name, typ)
-        head = Text.assemble((name, "bold"), "  ", (str(typ), "italic dim"),
-                             (f"  [{info.unit}]" if info and info.unit else "", "cyan"))
-        if info and info.description:
-            head.append("\n" + info.description, style="dim")
-        scope = "all rows" if self.view.is_trivial else ("SQL result" if self.view.sql else f"WHERE {self.view.where}")
-        head.append(f"\n{scope}" + (" · sampled" if st.sampled else "") + f" · {elapsed:.2f}s", style="dim italic")
-        self.query_one("#stats-head", Static).update(head)
+        if st.sampled:
+            status = Text.assemble(("!", "yellow"), f" Profiled {name}, sampled",
+                                   (f"   {F.human_count(st.count)} rows  ·  {elapsed:.2f} s  ·  {self._scope(self.view)}"
+                                    "  ·  m scans everything", d))
+        else:
+            status = Text.assemble(("✓", "green"), f" Profiled {name}",
+                                   (f"   {st.count:,} rows  ·  {elapsed:.2f} s  ·  {self._scope(self.view)}", d))
+        self.query_one("#stats-head", Static).update(self._stats_head(name, status))
 
         def pct(n):
             return f"{100 * n / st.count:.3g}%" if st.count else ""
 
-        g = Table.grid(padding=(0, 2))
-        g.add_column(style="dim", justify="right")
-        g.add_column(justify="right")
-        g.add_column(style="dim")
-        g.add_row("rows", f"{st.count:,}", "sampled" if st.sampled else "")
-        g.add_row("nulls", f"{st.nulls:,}", pct(st.nulls))
-        if st.nans is not None:
-            g.add_row("NaN", f"{st.nans:,}", pct(st.nans))
-        if st.distinct is not None:
-            exact = bool(st.top) and len(st.top) < 10
-            g.add_row("distinct", f"{st.distinct:,}" if exact else f"≈{st.distinct:,}",
-                      "" if exact else "HyperLogLog estimate")
-        if st.min is not None:
-            g.add_row("min", fm(st.min), F.derived(name, fm.kind, st.min))
-            g.add_row("max", fm(st.max), F.derived(name, fm.kind, st.max))
         is_int = pa.types.is_integer(typ)
 
         def num(v):
@@ -1024,46 +1253,57 @@ class PqxApp(App):
                 return fm(float(v))
             return Text(str(v))
 
+        left = [("rows", Text(f"{st.count:,}", justify="right"), "sampled" if st.sampled else ""),
+                ("nulls", Text(f"{st.nulls:,}", justify="right"), pct(st.nulls) if st.nulls else "")]
+        if st.nans is not None:
+            left.append(("NaN", Text(f"{st.nans:,}", justify="right"), pct(st.nans) if st.nans else ""))
+        if st.distinct is not None:
+            exact = bool(st.top) and len(st.top) < 10
+            left.append(("distinct", Text(f"{st.distinct:,}" if exact else f"≈{st.distinct:,}", justify="right"), ""))
+        if st.min is not None:
+            left.append(("min", fm(st.min), F.derived(name, fm.kind, st.min)))
+            left.append(("max", fm(st.max), F.derived(name, fm.kind, st.max)))
         if st.mean is not None:
-            g.add_row("mean", Text(F._fmt_float(float(st.mean), 15 if is_int else 9), justify="right")
-                      if is_int else fm(float(st.mean)), "")
+            left.append(("mean", Text(F._fmt_float(float(st.mean), 15), justify="right") if is_int
+                         else fm(float(st.mean)), ""))
         if st.std is not None:
-            g.add_row("std", F.format_value(float(st.std), "err"), "")
-        if st.quantiles:
-            for q, v in st.quantiles.items():
-                g.add_row(f"p{q * 100:g}", num(v), "median" if q == 0.5 else "")
-        blocks = [g]
+            left.append(("std", Text(F.format_value(float(st.std), "err"), justify="right"), ""))
+        right = [(f"p{q * 100:g}", num(v), "median" if q == 0.5 else "") for q, v in st.quantiles.items()]
+        g = Table.grid(padding=(0, 2))
+        for style, just in [(d, "right"), ("", "right"), (d, "left"), (d, "right"), ("", "right"), (d, "left")]:
+            g.add_column(style=style, justify=just, no_wrap=True)
+        for i in range(max(len(left), len(right))):
+            a = left[i] if i < len(left) else ("", "", "")
+            b = right[i] if i < len(right) else ("", "", "")
+            g.add_row(a[0], a[1], a[2], b[0], b[1], b[2])
+        blocks = [Text(""), g]
         if st.top and (hist is None):
-            blocks.append(Text("\nMost frequent values", style="bold"))
-            tt = Table.grid(padding=(0, 1))
+            blocks.append(Text("\nmost frequent", style="bold"))
+            tt = Table.grid(padding=(0, 2))
             tt.add_column(justify="right", max_width=40, no_wrap=True)
             tt.add_column()
-            tt.add_column(justify="right", style="dim")
+            tt.add_column(justify="right", no_wrap=True)
+            tt.add_column(justify="right", style=d, no_wrap=True)
             m = max(n for _, n in st.top) or 1
             barw = 30
-            col = self.get_css_variables().get("primary", "#5fafff")
             for v, n in st.top:
                 w = n / m * barw
                 bar = "█" * int(w) + (" ▏▎▍▌▋▊▉"[int((w - int(w)) * 8)] if w < barw else "")
-                tt.add_row(fm(v), Text(bar.rstrip(), style=col), f"{n:,}  {pct(n)}")
+                tt.add_row(fm(v), Text(bar.rstrip()), f"{n:,}", pct(n))
             blocks.append(tt)
         self.query_one("#stats-summary", Static).update(Group(*blocks))
         plot = Text("")
         if hist is not None:
             edges, counts = hist
-            width = max(30, self.query_one("#stats-body").size.width - 4)
+            width = max(30, self.query_one("#stats-body").size.width - 6)
             temporal = pa.types.is_timestamp(typ) or pa.types.is_date(typ)
-            color = self.get_css_variables().get("primary", "#5fafff")
-            plot = plots.render_histogram(edges, counts, width=width, height=12, color=color,
+            plot = plots.render_histogram(edges, counts, width=width, height=10, color=None,
                                           log_y=self._hist_log_y, log_x=self._hist_log_x and not temporal,
                                           xlabel=name + ("  (UTC)" if temporal else ""),
-                                          xfmt=_epoch_label if temporal else None)
-            if temporal and edges:
-                lo = dt.datetime.fromtimestamp(edges[0], dt.timezone.utc).isoformat(sep=" ")[:19]
-                hi = dt.datetime.fromtimestamp(edges[-1], dt.timezone.utc).isoformat(sep=" ")[:19]
-                plot.append(f"\n  range {lo} → {hi}", style="dim")
-            plot = Group(Text("\nDistribution", style="bold"), plot,
-                         Text(f"{len(counts)} bins · l: log counts · L: log values · [ ]: bins", style="dim italic"))
+                                          xfmt=_epoch_label if temporal else None, dim=self.dim_style)
+            plot = Group(Text("\ndistribution", style="bold"), plot,
+                         Text(f"{len(counts)} bins" + ("  ·  log counts" if self._hist_log_y else "")
+                              + ("  ·  log values" if self._hist_log_x and not temporal else ""), style=d))
         self.query_one("#stats-plot", Static).update(plot)
 
     def action_hist_log_y(self) -> None:
@@ -1081,31 +1321,28 @@ class PqxApp(App):
     # --------------------------------------------------------------- plot tab
     def _init_plot_controls(self, keep: bool = False) -> None:
         numeric = [n for n, t in self.result_schema if pa.types.is_integer(t) or pa.types.is_floating(t)]
-        sx, sy = self.query_one("#plot-x", Select), self.query_one("#plot-y", Select)
-        old = (sx.value, sy.value)
-        opts = [(n, n) for n in numeric]
-        with self.prevent(Select.Changed):
-            sx.set_options(opts)
-            sy.set_options(opts)
-            lon, lat = guess_sky_columns(numeric)
-            if keep and old[0] in numeric and old[1] in numeric:
-                sx.value, sy.value = old
-            elif lon and lat:
-                sx.value, sy.value = lon, lat
-                self.query_one("#plot-mode", Select).value = "sky"
-            elif len(numeric) >= 2:
-                sx.value, sy.value = numeric[0], numeric[1]
-                self.query_one("#plot-mode", Select).value = "xy"
+        pc = self.query_one(PlotControls)
+        old = (pc.value("x"), pc.value("y"))
+        pc.set_columns(numeric)
+        lon, lat = guess_sky_columns(numeric)
+        if keep and old[0] in numeric and old[1] in numeric:
+            return
+        if lon and lat:
+            pc.values.update(mode="sky", x=lon, y=lat)
+        elif len(numeric) >= 2:
+            pc.values.update(mode="xy", x=numeric[0], y=numeric[1])
+        else:
+            pc.values.update(mode="xy", x="", y="")
+        pc.refresh()
 
-    @on(Select.Changed)
-    def plot_control_changed(self, event: Select.Changed) -> None:
-        if event.select.id and event.select.id.startswith("plot-"):
-            self._debounced("plot", 0.2, self.replot)
+    @on(PlotControls.Changed)
+    def plot_control_changed(self) -> None:
+        self._debounced("plot", 0.2, self.replot)
 
     def action_rotate_sky(self) -> None:
-        if self.query_one(TabbedContent).active == "tab-plot":
-            self._sky_center = 180.0 if self._sky_center == 0.0 else 0.0
-            self.replot()
+        if self._tab_is("tab-plot"):
+            pc = self.query_one(PlotControls)
+            pc.set_value("centre", "180°" if pc.value("centre") == "0°" else "0°")
 
     def on_resize(self, event) -> None:
         if self._tab_is("tab-plot"):
@@ -1120,40 +1357,43 @@ class PqxApp(App):
     def replot(self) -> None:
         if not self._tab_is("tab-plot"):
             return  # plots are computed lazily, when their tab is shown
-        mode = self.query_one("#plot-mode", Select).value
-        x = self.query_one("#plot-x", Select).value
-        y = self.query_one("#plot-y", Select).value
-        cmap = self.query_one("#plot-cmap", Select).value
-        body = self.query_one("#plot-body", Static)
-        if x is Select.BLANK or y is Select.BLANK or x is None or y is None:
-            body.update(Text("Choose two numeric columns to plot.", style="dim italic"))
+        pc = self.query_one(PlotControls)
+        x, y = pc.value("x"), pc.value("y")
+        if not x or not y:
+            self.query_one("#plot-body", Static).update(Text("no numeric columns to plot", style=self.dim))
             return
         area = self.query_one("#plot-area")
-        w, h = max(20, area.size.width - 2), max(8, area.size.height - 1)
-        self.plot_worker(str(mode), str(x), str(y), str(cmap), w, h)
+        w, h = max(20, area.size.width - 1), max(8, area.size.height)
+        self.plot_worker(pc.value("mode"), x, y, pc.value("colour"), 180.0 if pc.value("centre") == "180°" else 0.0,
+                         w, h)
 
     @work(thread=True, exclusive=True, group="plot")
-    def plot_worker(self, mode: str, x: str, y: str, cmap: str, w: int, h: int) -> None:
+    def plot_worker(self, mode: str, x: str, y: str, cmap: str, center: float, w: int, h: int) -> None:
         view = self.view
         sample = self._sample()
-        dark = self.current_theme.dark
+        d = self.dim
         self.call_from_thread(self._set_busy, "plot", f"binning {x} × {y}")
+        self.call_from_thread(self.query_one("#plot-status", Static).update,
+                              Text.assemble((SPINNER[3], self.accent), f" Binning {x} × {y}",
+                                            (f"   {self._scope(view)}", d)))
         t0 = time.time()
         try:
             with self.ds.tagged("plot"):
                 if mode == "sky":
                     grid = self.ds.sky_counts(view, x, y, res_deg=0.5, sample=sample)
                     n = int(grid.sum())
-                    mw, _ = plots.sky_shape(w, h - 4)
+                    mw, _ = plots.sky_shape(w, h - 3)
                     frac = (grid > 0).sum() / grid.size
-                    cap = f"{n:,} points in range · {100 * frac:.3g}% of 0.5° cells occupied"
-                    out = plots.render_skymap(grid, width=mw, height=h - 4, cmap=cmap, dark_bg=dark,
-                                              center=self._sky_center, caption=cap)
+                    out = plots.render_skymap(grid, width=mw, height=h - 3, cmap=cmap, center=center,
+                                              accent=self.accent, dim=self.dim_style)
+                    detail = f"0.5° cells  ·  {100 * frac:.3g}% of sky"
                 else:
                     pw, ph = max(10, w - 12), max(4, h - 5)
                     grid, xl, yl = self.ds.xy_counts(view, x, y, 2 * pw, 2 * ph, sample=sample)
                     n = int(grid.sum())
-                    out = plots.render_density(grid, xl, yl, cmap=cmap, dark_bg=dark, xlabel=x, ylabel=y)
+                    out = plots.render_density(grid, xl, yl, cmap=cmap, xlabel=x, ylabel=y, accent=self.accent,
+                                               dim=self.dim_style)
+                    detail = f"{2 * pw}×{2 * ph} bins"
         except duckdb.InterruptException:
             return
         except Exception as e:  # noqa: BLE001
@@ -1163,11 +1403,10 @@ class PqxApp(App):
             self.call_from_thread(self._set_busy, "plot", None)
         if view is not self.view:
             return
-        scope = "all rows" if view.is_trivial else ("SQL result" if view.sql else f"WHERE {view.where}")
-        head = Text.assemble(("Sky map " if mode == "sky" else "Density ", "bold"),
-                             (f"{x} × {y}", "bold cyan"), ("  ·  " + scope, "dim"),
-                             ("  ·  sampled" if sample else "", "dim"),
-                             (f"  ·  {n:,} rows plotted · {time.time() - t0:.2f}s", "dim"),
-                             ("   r: rotate centre" if mode == "sky" else "", "dim italic"))
-        self.call_from_thread(self.query_one("#plot-head", Static).update, head)
+        rest = f"   {F.human_count(n)} rows  ·  {detail}  ·  {time.time() - t0:.2f} s  ·  {self._scope(view)}"
+        if sample:
+            status = Text.assemble(("!", "yellow"), f" Binned {x} × {y}, sampled", (rest + "  ·  m scans everything", d))
+        else:
+            status = Text.assemble(("✓", "green"), f" Binned {x} × {y}", (rest, d))
+        self.call_from_thread(self.query_one("#plot-status", Static).update, status)
         self.call_from_thread(self.query_one("#plot-body", Static).update, out)
