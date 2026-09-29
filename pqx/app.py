@@ -1155,8 +1155,12 @@ class PqxApp(App):
     def _build_schema_tab(self) -> None:
         t = self.query_one("#schema-table", DataTable)
         d = self.dim
-        for label, right in [("#", True), ("column", False), ("type", False), ("unit", False), ("nulls", True),
-                             ("min", True), ("max", True), ("size", True), ("ratio", True)]:
+        # A missing unit is a dim "–", never a blank: blank unit cells next to the
+        # right-aligned null counts made those read as units. The null share has its
+        # own column so the counts stay narrow and line up under their header.
+        cols = [("#", True), ("column", False), ("type", False), ("unit", False), ("nulls", True),
+                ("null %", True), ("min", True), ("max", True), ("size", True), ("ratio", True)]
+        for label, right in cols:
             t.add_column(Text(label, style="bold", justify="right" if right else "left"), key=label)
         summ = {s["path"]: s for s in self.ds.column_chunk_summary()}
         self._schema_info = {}
@@ -1178,17 +1182,19 @@ class PqxApp(App):
             ratio = f"{usize / size:.1f}×" if size else ""
             self._schema_info[c.name] = (i, size, ratio, str(comp).lower(), enc)
             if nulls is None:
-                null_txt = Text("–", style=d, justify="right")
+                null_n, null_p = Text("–", style=d, justify="right"), Text("")
             elif nulls:
-                null_txt = Text(f"{nulls:,}  {F.percent(nulls, self.ds.num_rows)}", justify="right")
+                null_n = Text(f"{nulls:,}", justify="right")
+                null_p = Text(F.percent(nulls, self.ds.num_rows), justify="right")
             else:
-                null_txt = Text("0", style=d, justify="right")
-            t.add_row(Text(str(i), style=d, justify="right"), Text(c.name, style="bold"),
-                      Text(F.short_type(c.arrow_type), style=d), Text(c.unit), null_txt,
+                null_n, null_p = Text("0", style=d, justify="right"), Text("")
+            cells = [Text(str(i), style=d, justify="right"), Text(c.name, style="bold"),
+                     Text(F.short_type(c.arrow_type), style=d), Text(c.unit) if c.unit else Text("–", style=d)]
+            cells += [null_n, null_p,
                       fm(mn) if mn is not None else Text("–", style=d, justify="right"),
                       fm(mx) if mx is not None else Text("–", style=d, justify="right"),
-                      Text(F.human_bytes(size), justify="right"), Text(ratio, style=d, justify="right"),
-                      key=c.name)
+                      Text(F.human_bytes(size), justify="right"), Text(ratio, style=d, justify="right")]
+            t.add_row(*cells, key=c.name)
 
     @on(DataTable.RowHighlighted, "#schema-table")
     def schema_row(self, event: DataTable.RowHighlighted) -> None:

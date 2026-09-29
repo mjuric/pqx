@@ -366,6 +366,17 @@ async def test_hidden_column_hints(wide_path):
         assert str(narrow.query_one("#more-right").render()).strip() == ""
 
 
+async def test_schema_unit_column(demo_path):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        t = app.query_one("#schema-table", DataTable)
+        assert str(t.get_cell("ra", "unit")) == "deg"          # the demo file has units: column shown
+        assert str(t.get_cell("ssObjectId", "unit")) == "–"
+        n = str(t.get_cell("ssObjectId", "nulls"))
+        assert n.replace(",", "").isdigit() and str(t.get_cell("ssObjectId", "null %")).endswith("%")
+
+
 async def test_click_tab_names_in_border(demo_path):
     app = PqxApp(demo_path)
     async with app.run_test(size=SIZE) as pilot:
@@ -388,9 +399,13 @@ async def test_schema_all_null_column(odd_path):
     async with app.run_test(size=SIZE) as pilot:
         await settle(pilot, app)
         t = app.query_one("#schema-table", DataTable)
-        row = [str(c) for c in t.get_row("allnull")]
-        assert row[4] == "1,000  100%"          # nulls: count and share, no "1e+02%"
-        assert row[5] == row[6] == "–"           # no min/max for an all-null column
+
+        def cell(col):
+            return str(t.get_cell("allnull", col))
+
+        assert (cell("nulls"), cell("null %")) == ("1,000", "100%")   # no "1e+02%"
+        assert cell("min") == cell("max") == "–"                      # no min/max for an all-null column
+        assert cell("unit") == "–"   # no unit: a dash, not a blank that makes the null count look like one
         for k in "2345":                        # every tab copes with it
             await pilot.press(k)
             await settle(pilot, app)
