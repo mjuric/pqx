@@ -378,20 +378,42 @@ async def test_schema_unit_column(demo_path):
 
 
 async def test_click_tab_names_in_border(demo_path):
+    from textual.content import Content
+
     app = PqxApp(demo_path)
     async with app.run_test(size=SIZE) as pilot:
         await settle(pilot, app)
         tc = app.query_one(TabbedContent)
-        # "┌─ Data ─ Schema ─ Stats ─ Plot ─ Meta": the title starts 3 cells in
-        await pilot.click("#data-panel", offset=(3 + 8, 0))
+        title = Content.from_markup(str(app.query_one("#data-panel").border_title)).plain
+        assert title.startswith("1 Data ─ 2 Schema ─ 3 Stats ─ 4 Plot ─ 5 Meta") and title.endswith("^← ^→")
+
+        def at(tab, part="name"):
+            """Panel-relative x of a tab's number or name (the title starts 3 cells in)."""
+            a, b = next((a, b) for t, a, b in app._tab_spans if t == tab and (b - a > 2) == (part == "name"))
+            return 3 + a
+
+        await pilot.click("#data-panel", offset=(at("tab-schema"), 0))
         await settle(pilot, app)
         assert tc.active == "tab-schema"
-        await pilot.click("#schema-panel", offset=(3 + 27, 0))
+        await pilot.click("#schema-panel", offset=(at("tab-plot", "number"), 0))  # the number works too
         await settle(pilot, app)
         assert tc.active == "tab-plot"
-        await pilot.click("#plot-panel", offset=(3 + 5, 0))  # the '─' between Data and Schema
+        sep = at("tab-schema", "number") - 2  # the '─' between Data and Schema
+        await pilot.click("#plot-panel", offset=(sep, 0))
         await pilot.pause(0.2)
         assert tc.active == "tab-plot"
+
+        # hovering a name underlines it; moving off clears it
+        def underlined():
+            c = Content.from_markup(str(app.query_one("#plot-panel").border_title))
+            return [c.plain[sp.start:sp.end] for sp in c.spans if "underline" in str(sp.style)]
+
+        await pilot.hover("#plot-panel", offset=(at("tab-meta"), 0))
+        await pilot.pause(0.1)
+        assert underlined() == ["Meta"]
+        await pilot.hover("#plot-panel", offset=(10, 5))
+        await pilot.pause(0.1)
+        assert underlined() == []
 
 
 async def test_schema_all_null_column(odd_path):

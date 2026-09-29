@@ -53,8 +53,9 @@ SQL_WORDS = ["and", "or", "not", "is", "null", "between", "in", "like", "ilike",
              "regexp_matches(", "abs(", "isnan(", "desc", "asc", "having"]
 
 KEYS = {
-    "tab-data": [("/", "filter"), ("x", "clear filter"), ("s", "sort"), ("=", "match cell"), ("d", "detail"),
-                 ("c", "columns"), ("g", "go to"), ("e", "export"), ("?", "help"), ("q", "quit")],
+    "tab-data": [("/", "filter"), ("x", "clear filter"), ("1-5", "tabs"), ("?", "help"), ("q", "quit"),
+                 ("s", "sort"), ("=", "match cell"), ("d", "detail"), ("c", "columns"), ("g", "go to"),
+                 ("e", "export")],
     "tab-schema": [("↑↓", "column"), ("enter", "stats"), ("/", "filter"), ("1-5", "tabs"), ("?", "help"),
                    ("q", "quit")],
     "tab-stats": [("↑↓", "column"), ("l", "log counts"), ("L", "log values"), ("[ ]", "bins"),
@@ -530,17 +531,52 @@ class PqxApp(App):
         colour = "dim" if self.dim_mode == "faint" else "ansi_bright_black"
         return f"[{colour}]{s}[/]"
 
-    def _render_tab_titles(self, active: str) -> None:
-        colour = "dim" if self.dim_mode == "faint" else "ansi_bright_black"
-        parts = []
-        for tab, name in TABS:
-            if tab == active:
-                parts.append(f"[bold ansi_{self.accent}]{name}[/]")
-            else:
-                parts.append(f"[{colour}]{name}[/]")  # clicks: see on_click (border titles get none)
-        title = f" [{colour}]─[/] ".join(parts)
+    TAB_HINT = "^← ^→"
+
+    def _tab_strip(self, active: str, hover: str | None = None) -> tuple[str, list[tuple[str, int, int]]]:
+        """The tab strip for the panel borders: ``1 Data ─ 2 Schema ─ …   ^← ^→``.
+
+        Returns its markup and the ``(tab, start, end)`` cells each tab's number
+        and name occupy, which clicks and hovers are matched against (Textual
+        doesn't route mouse events from border titles itself)."""
+        dim = "dim" if self.dim_mode == "faint" else "ansi_bright_black"
+        markup: list[str] = []
+        spans: list[tuple[str, int, int]] = []
+        x = 0
+
+        def add(text: str, style: str, tab: str | None = None) -> None:
+            nonlocal x
+            markup.append(f"[{style}]{text}[/]" if style else text)
+            if tab:
+                spans.append((tab, x, x + len(text)))
+            x += len(text)
+
+        for i, (tab, name) in enumerate(TABS):
+            if i:
+                add(" ─ ", dim)
+            add(f"{i + 1} ", dim, tab)  # the number is the key: 1-5 go straight to a tab
+            style = f"bold ansi_{self.accent}" if tab == active else dim
+            add(name, style + (" underline" if tab == hover else ""), tab)
+        add("   ", "")
+        add(self.TAB_HINT, dim)  # ctrl+← / ctrl+→ step through them
+        return "".join(markup), spans
+
+    def _render_tab_titles(self, active: str | None = None) -> None:
+        if active is not None:
+            self._tab_active = active
+        title, self._tab_spans = self._tab_strip(self._tab_active, getattr(self, "_tab_hover", None))
         for panel in self.query(".tabbed"):
             panel.border_title = title
+
+    def _tab_at(self, event) -> str | None:
+        """The tab whose number or name is under a mouse event on a panel's top border.
+
+        A left-aligned border title starts three cells in: corner, rule, space."""
+        w = event.widget
+        if w is None or not w.has_class("tabbed") or event.y != 0:
+            return None
+        x = event.x - 3
+        return next((tab for tab, a, b in getattr(self, "_tab_spans", []) if a <= x < b), None)
 
     def _render_titlebar(self) -> None:
         ds, d = self.ds, self.dim
@@ -573,24 +609,26 @@ class PqxApp(App):
         self._render_keys()
 
     def on_click(self, event) -> None:
-        """A click on a panel's top border switches to the tab name under it.
+        """A click on a tab's number or name in a panel's top border switches to it."""
+        tab = self._tab_at(event)
+        if tab is not None:
+            event.stop()
+            self.action_tab(tab)
 
-        Textual doesn't route clicks (or ``@click`` actions) from border titles,
-        so the name is found by position: a left-aligned title starts three cells
-        in, after the corner, one rule and a space ("┌─ Data ─ Schema …")."""
-        from textual.content import Content
+    def on_mouse_move(self, event) -> None:
+        """Underline the tab name under the pointer, so it reads as clickable."""
+        tab = self._tab_at(event)
+        if tab != getattr(self, "_tab_hover", None):
+            self._tab_hover = tab
+            self._render_tab_titles()
 
-        w = event.widget
-        if w is None or not w.has_class("tabbed") or event.y != 0:
-            return
-        plain = Content.from_markup(str(w.border_title)).plain
-        x = event.x - 3
-        for tab, name in TABS:
-            i = plain.find(name)
-            if i >= 0 and i <= x < i + len(name):
-                event.stop()
-                self.action_tab(tab)
-                return
+    def on_leave(self, event) -> None:
+        # the pointer left a panel (or the window) straight from its top border:
+        # no further move arrives there, so drop the hover underline here
+        if getattr(self, "_tab_hover", None) and getattr(event, "node", None) is not None \
+                and event.node.has_class("tabbed"):
+            self._tab_hover = None
+            self._render_tab_titles()
 
     def on_screen_resume(self, event) -> None:
         self.call_after_refresh(self._render_keys)

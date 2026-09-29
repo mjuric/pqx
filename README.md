@@ -50,7 +50,7 @@ without losing the current view.
 | `c` · `-` · `p` | choose columns · hide column · pin columns |
 | Home / End | first / last column; `‹` `›` beside the header mark hidden columns (click to page) |
 | `f` · `y` · `i` | raw/smart formatting · copy cell · stats for column |
-| `1`–`5` · `Ctrl+←` `Ctrl+→` | go to a tab · previous / next tab (or click a tab name in a panel border) |
+| `1`–`5` · `Ctrl+←` `Ctrl+→` | go to a tab · previous / next tab. The strip in the panel border reads `1 Data ─ 2 Schema ─ … ^← ^→`; names underline under the mouse and switch on click |
 | `e` | export the current view (filter + sort + visible columns) to Parquet/CSV/JSON |
 | `m` | toggle sampling for stats and plots |
 | `l` `L` `[` `]` | Stats: log counts, log values, fewer/more bins |
