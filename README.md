@@ -119,8 +119,18 @@ work from an equirectangular count grid, which DuckDB bins in a single
 
 The version comes from git tags via [setuptools-scm](https://setuptools-scm.readthedocs.io/), as in
 acid: a tagged commit `vX.Y.Z` is version `X.Y.Z`, and anything after it is a dev version such as
-`0.2.dev3+g1a2b3c4`. `pqx --version` prints it. To release, tag and push: `git tag v0.2.0 && git
-push origin v0.2.0`.
+`0.2.dev3+g1a2b3c4`. `pqx --version` prints it.
+
+To release, publish a GitHub Release; creating it also creates the tag:
+
+```
+gh release create v0.2.0 --generate-notes
+```
+
+That runs `.github/workflows/publish.yml`, which builds the package with `uv build` and uploads it to
+PyPI with trusted publishing (OIDC, no stored token). The same tag runs the full test matrix in CI.
+One-time setup on PyPI: add a trusted publisher for project `pqx`: owner `mjuric`, repository `pqx`,
+workflow `publish.yml`, environment `pypi`.
 
 ## Development
 

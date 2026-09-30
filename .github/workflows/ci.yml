@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [master]
+    tags: ["v*"]   # a release tag runs the full matrix alongside publish.yml
   pull_request:
   workflow_dispatch:
 
@@ -35,3 +36,22 @@ jobs:
         run: ruff check pqx tests
       - name: Test
         run: pytest -v
+
+  package:
+    name: build and install the package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # setuptools-scm needs the tags and history
+      - uses: astral-sh/setup-uv@v6
+      - name: Build sdist and wheel
+        env:
+          UV_PYTHON: "3.12"
+        run: uv build
+      - name: Install the wheel in a clean environment and run it
+        run: |
+          uv venv /tmp/pqx-wheel --python 3.12
+          uv pip install --python /tmp/pqx-wheel dist/*.whl
+          /tmp/pqx-wheel/bin/pqx --version
+          /tmp/pqx-wheel/bin/python -c "import pqx, importlib.resources as r; assert pqx.__version__ != '0.0.0.dev0'; assert (r.files('pqx') / 'app.tcss').is_file()"
