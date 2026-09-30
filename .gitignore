@@ -9,3 +9,15 @@ pqx/_version.py
 # build output (uv build / pip wheel)
 build/
 dist/
+# Textual debug input log (TEXTUAL_DEBUG=1 writes it to the current directory)
+keys.log
+# coverage
+.coverage
+.coverage.*
+htmlcov/
+# OS and editor files
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
