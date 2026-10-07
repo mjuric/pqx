@@ -11,7 +11,7 @@ license = { text = "BSD-3-Clause" }
 authors = [{ name = "Mario Juric" }]
 requires-python = ">=3.10"
 dependencies = [
-  "textual>=1.0",
+  "textual>=8.2,<9",  # GridTable overrides a private DataTable renderer (see docs/design/wide-tables.md)
   "duckdb>=1.1",
   "pyarrow>=14",
   "numpy>=1.23",
