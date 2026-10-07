@@ -1516,10 +1516,10 @@ class PqxApp(App):
             name = self.current_column
             if name and not self._move_grid_to_column(name) and name in dict(self.result_schema):
                 self._hidden_hint = name
-            self._render_status()
             self.query_one(GridTable).focus()
         elif pane == "tab-meta":
             self.query_one("#meta-file").focus()
+        self._render_status()
         self._render_keys()
 
     def _refresh_analysis(self) -> None:
