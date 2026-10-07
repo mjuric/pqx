@@ -3,6 +3,7 @@ import os
 
 import pyarrow.parquet as pq
 import pytest
+from rich.styled import Styled
 from textual.worker import WorkerState
 from textual.widgets import DataTable, Input, OptionList, Static, TabbedContent
 from textual.widgets.data_table import ColumnKey
@@ -648,6 +649,7 @@ async def test_detail_pane_focus_and_link(demo_path):
         assert app.focused is lst and lst.selected == app.cols_shown[2]
         assert app.query_one("#detail").has_focus_within
         assert "back to grid" in plain(app.query_one("#keys"))
+        assert isinstance(selected_prompt(lst), Styled)  # focused: the whole entry reversed
         await pilot.press("down", "down")  # the grid follows sideways, same row
         await pilot.pause(0.05)
         assert lst.selected == app.cols_shown[4]
@@ -660,6 +662,8 @@ async def test_detail_pane_focus_and_link(demo_path):
         await pilot.press("enter")  # back to the grid, on the selected column
         await pilot.pause(0.05)
         assert app.focused is g and g.cursor_column == 1 and g.cursor_row == 7
+        assert not isinstance(selected_prompt(lst), Styled)  # unfocused: just the name
+        assert "into detail" in plain(app.query_one("#keys"))
 
         for key in ("escape", "tab"):
             await pilot.press("tab", "down", key)
@@ -679,8 +683,8 @@ async def test_detail_pane_focus_and_link(demo_path):
         # the wheel only scrolls the pane
         lst.scroll_home(animate=False)
         await pilot.pause(0.05)
-        for _ in range(5):
-            lst.post_message(MouseScrollDown(lst, 2, 2, 0, 3, 0, False, False, False))
+        for _ in range(5):  # routed by the screen, as a real wheel is
+            await pilot._post_mouse_events([MouseScrollDown], lst, offset=(2, 2))
         await pilot.pause(0.1)
         assert lst.scroll_y > 0
         assert lst.selected == app.cols_shown[5] and g.cursor_column == 5 and app.focused is g
@@ -701,3 +705,46 @@ async def test_detail_pane_focus_and_link(demo_path):
         await pilot.press("d")  # closing the pane hands focus back to the grid
         await pilot.pause(0.05)
         assert not app.query_one("#detail").display and app.focused is g
+        assert "into detail" not in plain(app.query_one("#keys"))  # Tab goes to the filter now
+
+
+def selected_prompt(lst):
+    return lst.get_option_at_index(lst.highlighted).prompt
+
+
+async def test_detail_pane_rows_and_views(demo_path):
+    from pqx.widgets import DetailList
+
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        lst = app.query_one(DetailList)
+        d = app.query_one("#detail")
+        g.move_cursor(column=3)
+        await pilot.press("d")
+        await pilot.pause(0.1)
+
+        await pilot.press("ctrl+end")  # a new window of rows: the pane follows, same column
+        await settle(pilot, app)
+        assert g.abs_row == 19_999 and "row 19,999" in str(d.border_title)
+        assert lst.selected == app.cols_shown[3]
+        await pilot.press("tab", "down", "enter")
+        await pilot.pause(0.05)
+        assert g.abs_row == 19_999 and g.cursor_column == 4
+
+        app.apply_filter("select band, ra, dec from t")  # other columns
+        await settle(pilot, app)
+        assert [o.id for o in lst.options] == ["band", "ra", "dec"]
+        await pilot.press("tab", "down")
+        await pilot.pause(0.05)
+        assert app.cols_shown[g.cursor_column] == lst.selected
+        await pilot.press("enter")
+
+        app.apply_filter("ra < -1000")  # no rows: no stale entries to wander into
+        await settle(pilot, app)
+        assert lst.option_count == 0 and "no rows" in str(d.border_title)
+        col = app.current_column
+        await pilot.press("tab", "down")
+        await pilot.pause(0.05)
+        assert app.current_column == col
