@@ -3,11 +3,14 @@
 Everything is lazy. The file is never loaded in full; the grid pulls small
 windows of rows, statistics and plots push aggregation down into DuckDB.
 
-Two access paths:
+Access paths:
 
-* **Unfiltered, unsorted** windows seek straight to a row range with DuckDB's
-  ``file_row_number`` pushdown, which prunes row groups (a 200-row window deep
-  into a multi-GB file costs ~20 ms).
+* **Unfiltered, unsorted** windows are read straight from the row groups that
+  hold them with pyarrow (see ``_fetch_direct``) when that is cheaper than
+  DuckDB: DuckDB re-reads the footer and sets up a scan of every row group on
+  each query, so its cost grows with the number of row groups in the file.
+  Otherwise they seek with DuckDB's ``file_row_number`` filter, which skips
+  rows inside a large row group faster than pyarrow can decode them.
 * **Filtered / sorted / SQL** windows run the query with ``LIMIT/OFFSET``.
 
 The user-visible table is registered as the view ``t`` so filters are plain
@@ -15,6 +18,7 @@ SQL ``WHERE`` expressions and free-form queries can say ``SELECT ... FROM t``.
 """
 from __future__ import annotations
 
+import bisect
 import math
 import os
 import re
@@ -170,7 +174,10 @@ class ParquetDataset:
         Inside ``with ds.tagged(name):`` the cursor is registered under
         ``name`` and any older query under the same tag is interrupted, so a
         superseded count/stats/plot never keeps burning CPU in the background."""
-        c = self.con.cursor()
+        return self._register(self.con.cursor())
+
+    def _register(self, c):
+        """Register ``c`` (anything with ``interrupt()``) under the current tag."""
         tag = getattr(self._tls, "tag", None)
         if tag:
             with self._lock:
@@ -337,6 +344,10 @@ class ParquetDataset:
         """Fetch ``limit`` rows of the view starting at ``offset``."""
         offset = max(0, int(offset))
         limit = max(0, int(limit))
+        if view.is_trivial:
+            page = self._fetch_direct(offset, limit, columns)
+            if page is not None:
+                return page
         cur = self.cursor()
         is_sql = bool(view.sql.strip())
         if view.is_trivial and self._has_rownum:
@@ -358,9 +369,194 @@ class ParquetDataset:
             rn = list(range(offset, offset + tbl.num_rows))
         else:
             rn = [None] * tbl.num_rows
-        cols = [tbl.column(i).to_pylist() for i in range(tbl.num_columns)]
-        rows = list(zip(*cols)) if cols else [() for _ in range(tbl.num_rows)]
-        return Page(offset, tbl.column_names, rows, rn, [f.type for f in tbl.schema])
+        return _page(offset, tbl, rn)
+
+    # ------------------------------------------------- direct row-group reads
+    def _fetch_direct(self, offset: int, limit: int, columns: list[str] | None) -> Page | None:
+        """A trivial view's window read straight from the row groups holding it.
+
+        Reads only those row groups and the requested columns with pyarrow,
+        single-threaded, stopping as soon as the window is complete, then casts
+        each column to the Arrow type DuckDB returns for it, so the page is
+        identical to the DuckDB path's. Returns ``None`` to use DuckDB instead:
+        when DuckDB should be faster (see ``_direct_is_cheaper``), or for
+        anything pyarrow might read differently (unusual types or metadata,
+        or any error)."""
+        names = list(columns or self.column_names)
+        types = self._duck_types()
+        starts = self._rg_starts()
+        if types is None or starts is None or len(set(names)) != len(names):
+            return None
+        if not all(types.get(n) is not None for n in names):
+            return None
+        end = min(offset + limit, self.num_rows)
+        if end <= offset:
+            empty = pa.table({n: pa.array([], types[n]) for n in names})
+            return _page(offset, empty, [])
+        first = bisect.bisect_right(starts, offset) - 1
+        last = bisect.bisect_left(starts, end)  # one past the last row group needed
+        rgs = [r for r in range(first, last) if starts[r + 1] > starts[r]]
+        cheaper, pre_buffer = self._direct_estimate(rgs, end, names)
+        if not cheaper:
+            return None
+        token = self._register(_Cancel())
+        try:
+            tbl = self._read_window(rgs, offset - starts[first], end - offset, names, pre_buffer, token)
+        except duckdb.InterruptException:
+            raise
+        except Exception:  # noqa: BLE001 - anything odd: let DuckDB handle (or report) it
+            self._exclude_unreadable(rgs, names, token)
+            return None
+        if tbl is None:
+            return None
+        if token.cancelled:
+            raise duckdb.InterruptException("INTERRUPT Error: superseded")
+        return _page(offset, tbl, list(range(offset, offset + tbl.num_rows)))
+
+    def _read_window(self, rgs: list[int], skip: int, n: int, names: list[str], pre_buffer: bool,
+                     token: _Cancel) -> pa.Table | None:
+        """Rows ``[skip, skip + n)`` of row groups ``rgs`` (counted from the first),
+        cast to DuckDB's types; ``None`` if anything doesn't line up."""
+        # A fresh reader per call: nothing shared between threads, and reopening
+        # with the parsed footer costs < 1 ms. INT96 timestamps as µs, like DuckDB
+        # (as ns they silently overflow outside 1677–2262).
+        pf = pq.ParquetFile(self.path, metadata=self.meta, pre_buffer=pre_buffer,
+                            coerce_int96_timestamp_unit="us")
+        batches = []
+        got = 0
+        it = pf.iter_batches(batch_size=max(1024, min(n, 65_536)), row_groups=rgs, columns=names,
+                             use_threads=False)
+        try:
+            for b in it:
+                if token.cancelled:
+                    raise duckdb.InterruptException("INTERRUPT Error: superseded")
+                if skip >= b.num_rows:
+                    skip -= b.num_rows
+                    continue
+                b = b.slice(skip, n - got)
+                skip = 0
+                batches.append(b)
+                got += b.num_rows
+                if got >= n:
+                    break
+        finally:
+            close = getattr(it, "close", None)
+            if close is not None:
+                close()
+        if got != n or not batches:
+            return None
+        tbl = pa.Table.from_batches(batches)
+        if not set(names) <= set(tbl.column_names) or len(set(tbl.column_names)) != tbl.num_columns:
+            return None
+        types = self._duck_types() or {}
+        arrays = []
+        for name in names:
+            col = tbl.column(name)
+            if not _castable(col.type, types[name]):
+                return None
+            # always cast: type equality ignores e.g. list field names ("element" vs DuckDB's "l")
+            arrays.append(col.cast(types[name], safe=True))
+        return pa.Table.from_arrays(arrays, names=names)
+
+    def _exclude_unreadable(self, rgs: list[int], names: list[str], token: _Cancel) -> None:
+        """After a failed direct read, find the columns pyarrow can't read (one
+        row) and leave them to DuckDB from now on, so the others keep the fast path."""
+        types = self._duck_types()
+        if types is None:
+            return
+        for name in names:
+            try:
+                if self._read_window(rgs[:1], 0, 1, [name], False, token) is None:
+                    types[name] = None
+            except duckdb.InterruptException:
+                return
+            except Exception:  # noqa: BLE001
+                types[name] = None
+
+    def _duck_types(self) -> dict[str, pa.DataType | None] | None:
+        """Arrow type of each column as DuckDB returns it, or ``None`` where the
+        direct path can't reproduce it (decided from the file's Arrow schema)."""
+        cached = getattr(self, "_duck_types_cache", False)
+        if cached is not False:
+            return cached
+        try:
+            # an untagged cursor: binding must not interrupt the caller's own tag
+            tbl = self.con.cursor().execute(f"SELECT * FROM {TABLE} LIMIT 0").arrow()
+            if isinstance(tbl, pa.RecordBatchReader):
+                tbl = tbl.read_all()
+            duck = {f.name: f.type for f in tbl.schema}
+            out: dict[str, pa.DataType | None] | None = {}
+            names = self.arrow_schema.names
+            if len(set(names)) != len(names) or tbl.schema.names != names:
+                out = None
+            else:
+                for f in self.arrow_schema:
+                    out[f.name] = duck[f.name] if _castable(f.type, duck[f.name]) else None
+        except duckdb.InterruptException:
+            raise
+        except Exception:  # noqa: BLE001
+            out = None
+        self._duck_types_cache = out
+        return out
+
+    def _rg_starts(self) -> list[int] | None:
+        """First file row of each row group, plus the row count at the end."""
+        cached = getattr(self, "_rg_starts_cache", False)
+        if cached is not False:
+            return cached
+        starts = [0]
+        for i in range(self.meta.num_row_groups):
+            starts.append(starts[-1] + self.meta.row_group(i).num_rows)
+        ok = self.meta.num_row_groups > 0 and starts[-1] == self.num_rows
+        self._rg_starts_cache = starts if ok else None
+        return self._rg_starts_cache
+
+    def _leaves(self) -> dict[str, list[int]]:
+        """Parquet leaf column indices of each top-level column (for size estimates)."""
+        cached = getattr(self, "_leaves_cache", None)
+        if cached is not None:
+            return cached
+        top = set(self.arrow_schema.names)
+        out: dict[str, list[int]] = {}
+        for i in range(self.meta.num_columns):
+            parts = self.meta.schema.column(i).path.split(".")
+            for k in range(1, len(parts) + 1):
+                name = ".".join(parts[:k])
+                if name in top:
+                    out.setdefault(name, []).append(i)
+                    break
+        self._leaves_cache = out
+        return out
+
+    def _direct_estimate(self, rgs: list[int], end: int, names: list[str]) -> tuple[bool, bool]:
+        """(is pyarrow expected to beat DuckDB, should pyarrow pre-buffer).
+
+        pyarrow decodes every row from the start of the first row group up to
+        the window's end; DuckDB skips rows inside a row group several times
+        faster, but each query re-reads the footer and sets up every row group
+        in the file. Both pay to decode the window's own pages. Constants are
+        from 300-column synthetic files and real 184/53-column ones (see the
+        PR): pyarrow ~2-4 ns per uncompressed byte decoded; DuckDB skipping
+        0.2-0.9x that; DuckDB ~1 ms per row group per query."""
+        starts = self._rg_starts()
+        leaves = self._leaves()
+        md = self.meta
+        decoded = 0.0
+        compressed = 0
+        for r in rgs:
+            g = md.row_group(r)
+            if g.num_rows <= 0:
+                continue
+            frac = (min(end, starts[r + 1]) - starts[r]) / g.num_rows
+            for name in names:
+                for i in leaves.get(name, ()):
+                    c = g.column(i)
+                    decoded += c.total_uncompressed_size * frac
+                    compressed += c.total_compressed_size
+        pa_ms = _PA_NS_PER_BYTE * decoded * 1e-6
+        duck_ms = (_DUCK_MS_BASE + md.num_row_groups * (_DUCK_MS_PER_RG + _DUCK_MS_PER_RG_COL * len(names))
+                   + _DUCK_SKIP_RATIO * pa_ms)
+        return pa_ms <= duck_ms, compressed <= _PRE_BUFFER_MAX
 
     def find_row(self, view: View, file_row: int) -> int | None:
         """Position of file row ``file_row`` within a filtered/sorted view."""
@@ -547,6 +743,75 @@ def _interrupt(c) -> None:
         c.interrupt()
     except Exception:
         pass
+
+
+class _Cancel:
+    """Stands in for a DuckDB cursor in the tag registry while pyarrow reads."""
+
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    def interrupt(self) -> None:
+        self.cancelled = True
+
+
+def _page(offset: int, tbl: pa.Table, rn: list) -> Page:
+    cols = [tbl.column(i).to_pylist() for i in range(tbl.num_columns)]
+    rows = list(zip(*cols)) if cols else [() for _ in range(tbl.num_rows)]
+    return Page(offset, tbl.column_names, rows, rn, [f.type for f in tbl.schema])
+
+
+# Cost model for ``ParquetDataset._direct_estimate`` (milliseconds / bytes).
+_PA_NS_PER_BYTE = 3.0        # pyarrow decode time per uncompressed byte
+_DUCK_SKIP_RATIO = 0.3       # DuckDB's cost to skip a byte, relative to pyarrow decoding it
+_DUCK_MS_BASE = 10.0         # DuckDB per-query overhead
+_DUCK_MS_PER_RG = 0.6        # ... per row group in the file (footer + scan setup)
+_DUCK_MS_PER_RG_COL = 0.002  # ... per row group and selected column
+_PRE_BUFFER_MAX = 32 << 20   # pre-buffer (coalesce reads) only when the chunks are this small
+
+_STRINGS = (pa.types.is_string, pa.types.is_large_string, pa.types.is_string_view)
+_BINARIES = (pa.types.is_binary, pa.types.is_large_binary, pa.types.is_fixed_size_binary,
+             pa.types.is_binary_view)
+_LISTS = (pa.types.is_list, pa.types.is_large_list, pa.types.is_fixed_size_list)
+
+
+def _castable(s: pa.DataType, d: pa.DataType) -> bool:
+    """True when casting pyarrow's type ``s`` to DuckDB's ``d`` is known to give
+    DuckDB's values (lossy cases are then caught by a safe cast)."""
+    t = pa.types
+    if isinstance(s, pa.BaseExtensionType):  # DuckDB reads JSON as text; others (uuid...) differ
+        return s.extension_name == "arrow.json" and _castable(s.storage_type, d)
+    if t.is_dictionary(s):
+        return _castable(s.value_type, d)
+    if isinstance(d, pa.BaseExtensionType) or t.is_dictionary(d):
+        return False
+    if t.is_null(s):
+        return True
+    if t.is_struct(s) or t.is_struct(d):
+        return (t.is_struct(s) and t.is_struct(d) and s.num_fields == d.num_fields
+                and all(s.field(i).name == d.field(i).name and _castable(s.field(i).type, d.field(i).type)
+                        for i in range(s.num_fields)))
+    if t.is_map(s) or t.is_map(d):
+        return (t.is_map(s) and t.is_map(d) and _castable(s.key_type, d.key_type)
+                and _castable(s.item_type, d.item_type))
+    if any(f(s) for f in _LISTS):
+        return any(f(d) for f in _LISTS) and _castable(s.value_type, d.value_type)
+    if s == d:
+        return True
+    if t.is_floating(s):
+        return t.is_floating(d) and s.bit_width <= d.bit_width
+    if any(f(s) for f in _STRINGS):
+        return any(f(d) for f in _STRINGS)
+    if any(f(s) for f in _BINARIES):
+        return any(f(d) for f in _BINARIES)
+    if t.is_timestamp(s):
+        return t.is_timestamp(d) and (s.tz is None) == (d.tz is None)
+    if t.is_duration(s):  # DuckDB reads the stored int64 count
+        return d == pa.int64()
+    for kind in (t.is_date, t.is_time, t.is_decimal):
+        if kind(s):
+            return kind(d)
+    return False
 
 
 _RA_NAMES = ("ra", "raj2000", "ra_j2000", "radeg", "ra_deg", "alpha", "coord_ra", "lon", "elon", "glon",
