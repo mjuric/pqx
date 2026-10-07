@@ -165,7 +165,7 @@ class FormatScreen(ModalScreen[str | None]):
         value = parse_override(event.value)
         err = value is not None and F.override_error(value, self.kind, self.sample)
         if err:
-            self.query_one("#format-error", Label).update(f"[red]✗[/red] {escape(err)}")
+            self.query_one("#format-error", Label).update(f"[red]✗[/red] {escape(F.sanitize(err))}")
             return
         self.dismiss(event.value.strip())
 
