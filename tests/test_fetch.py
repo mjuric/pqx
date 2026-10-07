@@ -93,24 +93,41 @@ def _norm(v):
     return type(v), v, (v.tzinfo if isinstance(v, (dt.datetime, dt.time)) else None)
 
 
+def _ready(ds):
+    assert ds._duck_types(wait=True) is not None
+    return ds
+
+
+def _open(path):
+    return _ready(ParquetDataset(path))
+
+
 def _duck(ds, view, offset, limit, columns=None):
     orig = ds._fetch_direct
-    ds._fetch_direct = lambda *a: None
+    ds._fetch_direct = lambda *a: (None, None)
     try:
         return ds.fetch(view, offset, limit, columns)
     finally:
         ds._fetch_direct = orig
 
 
+def _force(ds):
+    """Make the cost model always pick the direct path (keeping its pre-buffer choice)."""
+    est = type(ds)._direct_estimate
+    ds._direct_estimate = lambda need, names: (True, est(ds, need, names)[1])
+
+
 def _direct(ds, offset, limit, columns=None):
-    """The direct path, forced on regardless of the cost model."""
-    est = ds._direct_estimate
-    ds._direct_estimate = lambda rgs, end, names: (True, est(rgs, end, names)[1])
+    """The direct path, forced on regardless of the cost model; None if it declined."""
+    _ready(ds)
+    had = "_direct_estimate" in vars(ds)
+    if not had:
+        _force(ds)
     try:
-        page = ds._fetch_direct(offset, limit, columns)
+        return ds._fetch_direct(offset, limit, columns)[0]
     finally:
-        del ds._direct_estimate
-    return page
+        if not had:
+            del ds._direct_estimate
 
 
 def _same(a, b):
@@ -124,42 +141,51 @@ def _same(a, b):
         assert _norm(ra) == _norm(rb)
 
 
-DIRECT_ZOO = ["i8", "u64", "f16", "f32", "f64", "bool", "str", "lstr", "dict", "bin", "fbin", "date", "ts_ms",
-              "ts_us", "ts_ns", "ts_utc", "ts_tz_ns", "ts_off", "t32", "t64", "dec", "dec38", "list", "llist", "fsl",
-              "struct", "lstruct", "map", "dur", "null", "json", "a.b", 'q"uote']
+# all but dec256 (DuckDB 1.5 reads it wrong, see below)
+DIRECT_ZOO = [n for n in _zoo().column_names if n != "dec256"]
 
 
 @pytest.mark.parametrize("offset,limit", [(0, 60), (0, 1), (5, 10), (6, 1), (7, 7), (13, 30), (59, 5), (60, 5),
                                           (1000, 5), (3, 0)])
 def test_zoo_direct_equals_duckdb(zoo_path, offset, limit):
-    ds = ParquetDataset(zoo_path)
+    ds = _open(zoo_path)
     page = _direct(ds, offset, limit, DIRECT_ZOO)
     assert page is not None
     _same(page, _duck(ds, View(), offset, limit, DIRECT_ZOO))
 
 
 def test_zoo_whole_fetch_equals_duckdb(zoo_path):
-    """All columns, including ones the direct path leaves to DuckDB."""
-    ds = ParquetDataset(zoo_path)
-    ds._direct_estimate = lambda rgs, end, names: (True, True)
+    """All columns, through fetch() (the direct path and DuckDB serving whatever it declines)."""
+    ds = _open(zoo_path)
+    _force(ds)
+    cols = [n for n in ds.column_names if n != "dec256"]
     for offset, limit in [(0, 60), (10, 20), (55, 10)]:
-        _same(ds.fetch(View(), offset, limit), _duck(ds, View(), offset, limit))
-    # these differ between pyarrow and DuckDB (or pyarrow can't read them), so they go to DuckDB
-    for col in ("ts_tz_odd", "dec256", "uuid", "nested_dict"):
-        assert _direct(ds, 0, 10, ["i8", col]) is None, col
-    assert _direct(ds, 0, 10, ["i8", "str"]) is not None  # the rest keeps the direct path
+        _same(ds.fetch(View(), offset, limit, cols), _duck(ds, View(), offset, limit, cols))
+    assert all(t is not None for n, t in ds._duck_types().items())
+
+
+def test_decimal256_values_are_right(zoo_path):
+    """DuckDB 1.5 reads decimals wider than 38 digits as garbage doubles (e.g. 0.01 as 0.6553...);
+    the direct path gives the correct double, with DuckDB's type."""
+    ds = _open(zoo_path)
+    page = _direct(ds, 0, 60, ["dec256"])
+    assert str(page.types[0]) == "double"
+    assert [r[0] for r in page.rows] == [float(decimal.Decimal(x) / 100) for x in range(60)]
+    if [r[0] for r in _duck(ds, View(), 0, 60, ["dec256"]).rows] == [r[0] for r in page.rows]:
+        pytest.fail("DuckDB reads decimal256 right now: drop this special case and compare with DuckDB")
 
 
 def test_types_are_duckdbs(zoo_path):
-    ds = ParquetDataset(zoo_path)
-    page = _direct(ds, 0, 3, ["dict", "lstr", "list", "ts_ms", "ts_off", "f16", "fsl", "null"])
+    ds = _open(zoo_path)
+    page = _direct(ds, 0, 3, ["dict", "lstr", "list", "ts_ms", "ts_off", "f16", "fsl", "null", "uuid"])
     assert [str(t) for t in page.types] == ["string", "string", "list<l: int64>", "timestamp[us]",
-                                            "timestamp[us, tz=UTC]", "float", "list<l: int32>", "int32"]
+                                            "timestamp[us, tz=UTC]", "float", "list<l: int32>", "int32", "string"]
     assert page.rows[0][4].utcoffset().total_seconds() == 0
+    assert page.rows[1][8] == "00000000-0000-0000-0000-000000000001"
 
 
 def test_demo_windows(demo_path):
-    ds = ParquetDataset(demo_path)
+    ds = _open(demo_path)
     for offset in (0, 2_499, 2_500, 2_450, 12_345, 19_990, 19_999, 20_000, 25_000):
         for limit in (1, 50, 3_000):
             page = _direct(ds, offset, limit)
@@ -170,7 +196,7 @@ def test_demo_windows(demo_path):
 
 
 def test_odd_file(odd_path):
-    ds = ParquetDataset(odd_path)
+    ds = _open(odd_path)
     assert not ds._has_rownum
     for offset, limit in ((0, 1_000), (290, 20), (950, 100), (999, 1)):
         page = _direct(ds, offset, limit)
@@ -180,7 +206,7 @@ def test_odd_file(odd_path):
 
 
 def test_many_row_groups(many_path):
-    ds = ParquetDataset(many_path)
+    ds = _open(many_path)
     assert ds.meta.num_row_groups == 7 and ds.num_rows == 1_000
     for offset in (0, 99, 100, 136, 137, 138, 386, 387, 388, 486, 487, 999, 1_000):
         for limit in (1, 2, 50, 400, 2_000):
@@ -188,8 +214,7 @@ def test_many_row_groups(many_path):
     _same(_direct(ds, 120, 30, ["s", "id"]), _duck(ds, View(), 120, 30, ["s", "id"]))
 
 
-def test_reads_only_needed_row_groups(many_path, monkeypatch):
-    ds = ParquetDataset(many_path)
+def _spy_reads(monkeypatch):
     calls = []
     orig = pq.ParquetFile.iter_batches
 
@@ -198,10 +223,16 @@ def test_reads_only_needed_row_groups(many_path, monkeypatch):
         return orig(self, *a, **k)
 
     monkeypatch.setattr(pq.ParquetFile, "iter_batches", spy)
-    monkeypatch.setattr(ds, "_direct_estimate", lambda rgs, end, names: (True, True))
+    return calls
+
+
+def test_reads_only_needed_row_groups(many_path, monkeypatch):
+    ds = _open(many_path)
+    calls = _spy_reads(monkeypatch)
+    _force(ds)
     page = ds.fetch(View(), 130, 10, ["x"])  # row groups: 0..99, 100..136, (empty), 137..386
     assert page.row_numbers == list(range(130, 140))
-    assert calls == [([1, 3], ["x"], False)]  # not the empty one
+    assert calls == [([1], ["x"], False), ([3], ["x"], False)]  # not the empty one
     calls.clear()
     ds.fetch(View(), 0, 100, ["id", "s"])
     assert calls == [([0], ["id", "s"], False)]
@@ -210,10 +241,28 @@ def test_reads_only_needed_row_groups(many_path, monkeypatch):
     assert calls == []
 
 
+def test_bounded_read_buffer(many_path, monkeypatch):
+    """Without pre-buffering, read through a bounded buffer (buffer_size=0 reads whole column chunks)."""
+    ds = _open(many_path)
+    seen = []
+    orig = pq.ParquetFile.__init__
+
+    def init(self, *a, **k):
+        seen.append((k.get("pre_buffer"), k.get("buffer_size")))
+        orig(self, *a, **k)
+
+    monkeypatch.setattr(pq.ParquetFile, "__init__", init)
+    monkeypatch.setattr(ds, "_direct_estimate", lambda need, names: (True, False))
+    ds.fetch(View(), 0, 10)
+    monkeypatch.setattr(ds, "_direct_estimate", lambda need, names: (True, True))
+    ds.fetch(View(), 0, 10)
+    assert seen == [(False, 1 << 20), (True, 0)]
+
+
 def test_empty_file(tmp_path):
     p = tmp_path / "empty.parquet"
     pq.write_table(pa.table({"a": pa.array([], pa.int64()), "s": pa.array([], pa.string())}), p)
-    ds = ParquetDataset(str(p))
+    ds = _open(str(p))
     page = ds.fetch(View(), 0, 100)
     assert page.rows == [] and page.columns == ["a", "s"]
     _same(page, _duck(ds, View(), 0, 100))
@@ -223,9 +272,9 @@ def test_cost_model_prefers_duckdb_deep_in_big_row_groups(tmp_path):
     p = tmp_path / "big.parquet"
     n = 1_000_000
     pq.write_table(pa.table({"x": np.arange(n, dtype=np.float64), "y": np.arange(n) * 2}), p, row_group_size=n)
-    ds = ParquetDataset(str(p))
-    assert ds._direct_estimate([0], 150, ["x", "y"])[0]  # the start of a row group: pyarrow
-    assert not ds._direct_estimate([0], n - 10, ["x", "y"])[0]  # its end: DuckDB skips faster
+    ds = _open(str(p))
+    assert ds._direct_estimate({0: 150}, ["x", "y"])[0]  # the start of a row group: pyarrow
+    assert not ds._direct_estimate({0: n - 10}, ["x", "y"])[0]  # its end: DuckDB skips faster
     page = ds.fetch(View(), n - 10, 20)
     assert page.row_numbers == list(range(n - 10, n)) and page.rows[-1] == (n - 1.0, 2 * (n - 1))
 
@@ -233,37 +282,109 @@ def test_cost_model_prefers_duckdb_deep_in_big_row_groups(tmp_path):
 def test_many_row_groups_prefer_direct(tmp_path):
     p = tmp_path / "small_rgs.parquet"
     pq.write_table(pa.table({"x": np.arange(50_000, dtype=np.float64)}), p, row_group_size=100)
-    ds = ParquetDataset(str(p))
-    assert ds._direct_estimate([250], 25_150, ["x"])[0]
+    ds = _open(str(p))
+    assert ds._direct_estimate({250: 100}, ["x"])[0]
 
 
 def test_unusual_metadata_falls_back(demo_path, monkeypatch):
-    ds = ParquetDataset(demo_path)
+    ds = _open(demo_path)
     monkeypatch.setattr(ds, "_rg_starts_cache", None, raising=False)  # row counts don't add up, say
-    assert ds._fetch_direct(0, 10, None) is None
+    assert ds._fetch_direct(0, 10, None) == (None, None)
     _same(ds.fetch(View(), 0, 10), _duck(ds, View(), 0, 10))
-    ds2 = ParquetDataset(demo_path)
-    monkeypatch.setattr(ds2, "_duck_types_cache", None, raising=False)
-    assert ds2._fetch_direct(0, 10, None) is None
-    assert ds2._fetch_direct(0, 10, ["mag", "mag"]) is None  # duplicate names
+    ds2 = _open(demo_path)
+    assert ds2._fetch_direct(0, 10, ["mag", "mag"]) == (None, None)  # duplicate names
+    monkeypatch.setattr(ds2, "_types_cache", None)  # DuckDB's schema didn't line up
+    assert ds2._fetch_direct(0, 10, None) == (None, None)
 
 
-def test_read_errors_fall_back(demo_path, monkeypatch):
+def test_fetches_use_duckdb_until_types_are_bound(demo_path, monkeypatch):
     ds = ParquetDataset(demo_path)
-    monkeypatch.setattr(ds, "_direct_estimate", lambda rgs, end, names: (True, True))
+    ds._types_done.wait(10)
+    ds._types_done.clear()  # as if the background bind were still running
+    monkeypatch.setattr(ds, "_start_types", lambda: None)
+    assert ds._fetch_direct(0, 10, None) == (None, None)
+    assert ds.fetch(View(), 0, 10).row_numbers == list(range(10))
+
+
+def test_interrupted_bind_is_retried(demo_path):
+    ds = ParquetDataset(demo_path)
+    ds.interrupt()  # may or may not catch the bind in flight; either way types arrive
+    assert ds._duck_types(wait=True) is not None
+    assert ds._types_thread is not None
+
+
+def _served_by_duckdb(ds, monkeypatch):
+    log = []
+    orig = type(ds)._handover
+
+    def handover(self, token, c):
+        log.append(token is not None)
+        return orig(self, token, c)
+
+    monkeypatch.setattr(type(ds), "_handover", handover)
+    return log
+
+
+def test_io_errors_fall_back_without_excluding(demo_path, monkeypatch):
+    ds = _open(demo_path)
+    _force(ds)
+    log = _served_by_duckdb(ds, monkeypatch)
 
     def boom(*a, **k):
-        raise OSError("disk on fire")
+        raise OSError("network filesystem hiccup")
 
     monkeypatch.setattr(pq.ParquetFile, "iter_batches", boom)
-    page = ds.fetch(View(), 100, 10, ["mag"])
-    assert page.row_numbers == list(range(100, 110))  # served by DuckDB
+    page = ds.fetch(View(), 100, 10, ["mag", "band"])
+    assert page.row_numbers == list(range(100, 110))
+    assert log == [True]  # tried direct, then DuckDB served it
+    assert ds._duck_types()["mag"] is not None and ds._duck_types()["band"] is not None
+    monkeypatch.undo()
+    _force(ds)
+    assert _direct(ds, 100, 10, ["mag", "band"]) is not None
 
 
-def test_superseded_fetch_is_interrupted(many_path, monkeypatch):
-    """A newer fetch under the same tag cancels an older direct read, like a DuckDB query."""
-    ds = ParquetDataset(many_path)
-    monkeypatch.setattr(ds, "_direct_estimate", lambda rgs, end, names: (True, True))
+def test_read_errors_exclude_only_the_bad_column(demo_path, monkeypatch):
+    ds = _open(demo_path)
+    _force(ds)
+    log = _served_by_duckdb(ds, monkeypatch)
+    orig = pq.ParquetFile.iter_batches
+
+    def picky(self, *a, **k):
+        if "band" in k.get("columns", ()):
+            raise ValueError("pyarrow can't decode this")
+        return orig(self, *a, **k)
+
+    monkeypatch.setattr(pq.ParquetFile, "iter_batches", picky)
+    page = ds.fetch(View(), 100, 10, ["mag", "band"])
+    assert page.row_numbers == list(range(100, 110)) and log == [True]
+    types = ds._duck_types()
+    assert types["band"] is None and types["mag"] is not None
+    assert _direct(ds, 100, 10, ["mag"]) is not None
+
+
+def test_cast_failure_after_row_zero_excludes_column(tmp_path):
+    """A struct holding zoned ns timestamps: DuckDB truncates nested values to µs, the safe cast
+    refuses when a value has sub-µs digits; here only rows >= 50 do."""
+    p = tmp_path / "late.parquet"
+    n = 100
+    ns = np.arange(n, dtype=np.int64) * 1000 + 1_600_000_000 * 10**9
+    ns[50:] += 7
+    ts = pa.array(ns, pa.timestamp("ns", "Europe/Berlin"))
+    pq.write_table(pa.table({"id": np.arange(n), "s": pa.StructArray.from_arrays([ts], ["t"])}), p,
+                   row_group_size=10)
+    ds = _open(str(p))
+    _force(ds)
+    if ds._duck_types()["s"] is None:
+        pytest.skip("DuckDB's type for the struct isn't castable here")
+    _same(ds.fetch(View(), 0, 10), _duck(ds, View(), 0, 10))
+    assert ds._duck_types()["s"] is not None
+    _same(ds.fetch(View(), 45, 10), _duck(ds, View(), 45, 10))
+    assert ds._duck_types()["s"] is None and ds._duck_types()["id"] is not None
+    assert _direct(ds, 60, 10, ["id"]) is not None
+
+
+def _blocking_reads(monkeypatch):
+    """iter_batches that waits on ``release`` after yielding its first batch."""
     entered, release = threading.Event(), threading.Event()
     orig = pq.ParquetFile.iter_batches
 
@@ -274,17 +395,29 @@ def test_superseded_fetch_is_interrupted(many_path, monkeypatch):
             yield b
 
     monkeypatch.setattr(pq.ParquetFile, "iter_batches", slow)
-    result = {}
+    return entered, release, orig
 
-    def old():
+
+def _in_thread(ds, offset, limit, result):
+    def run():
         try:
             with ds.tagged("page"):
-                result["page"] = ds.fetch(View(), 0, 500)
+                result["page"] = ds.fetch(View(), offset, limit)
         except duckdb.InterruptException as e:
             result["error"] = e
 
-    t = threading.Thread(target=old)
+    t = threading.Thread(target=run)
     t.start()
+    return t
+
+
+def test_superseded_fetch_is_interrupted(many_path, monkeypatch):
+    """A newer fetch under the same tag cancels an older direct read, like a DuckDB query."""
+    ds = _open(many_path)
+    _force(ds)
+    entered, release, orig = _blocking_reads(monkeypatch)
+    result = {}
+    t = _in_thread(ds, 0, 500, result)
     assert entered.wait(5)
     monkeypatch.setattr(pq.ParquetFile, "iter_batches", orig)
     with ds.tagged("page"):
@@ -294,12 +427,9 @@ def test_superseded_fetch_is_interrupted(many_path, monkeypatch):
     assert newer.row_numbers == list(range(10, 15))
     assert "error" in result and "page" not in result
     # ds.interrupt() also stops one
-    entered.clear()
-    release.clear()
-    monkeypatch.setattr(pq.ParquetFile, "iter_batches", slow)
+    entered, release, orig = _blocking_reads(monkeypatch)
     result.clear()
-    t = threading.Thread(target=old)
-    t.start()
+    t = _in_thread(ds, 0, 500, result)
     assert entered.wait(5)
     ds.interrupt()
     release.set()
@@ -307,8 +437,46 @@ def test_superseded_fetch_is_interrupted(many_path, monkeypatch):
     assert "error" in result
 
 
+def test_superseded_fetch_falling_back_doesnt_override_newer(demo_path, monkeypatch):
+    """An old direct read that fails (here: a cast) after a newer fetch started must not
+    fall back to DuckDB: that would interrupt the newer fetch and deliver a stale page."""
+    import pqx.data as D
+
+    ds = _open(demo_path)
+    _force(ds)
+    in_cast, go_on = threading.Event(), threading.Event()
+    orig_convert = D._convert
+
+    def convert(col, d):
+        if threading.current_thread().name == "old":
+            in_cast.set()
+            go_on.wait(5)
+            raise pa.ArrowInvalid("lossy")
+        return orig_convert(col, d)
+
+    monkeypatch.setattr(D, "_convert", convert)
+    result = {}
+
+    def old():
+        try:
+            with ds.tagged("page"):
+                result["old"] = ds.fetch(View(), 10_000, 50, ["mag"])
+        except duckdb.InterruptException:
+            result["old"] = "interrupted"
+
+    t = threading.Thread(target=old, name="old")
+    t.start()
+    assert in_cast.wait(5)
+    with ds.tagged("page"):
+        newer = ds.fetch(View(), 100, 50, ["mag"])
+    go_on.set()
+    t.join(5)
+    assert newer.row_numbers[0] == 100
+    assert result["old"] == "interrupted"
+
+
 def test_concurrent_fetches(demo_path):
-    ds = ParquetDataset(demo_path)
+    ds = _open(demo_path)
     want = {off: _duck(ds, View(), off, 120).rows for off in (0, 2_400, 9_999, 17_000)}
     errors = []
 
@@ -327,3 +495,51 @@ def test_concurrent_fetches(demo_path):
     for t in ts:
         t.join()
     assert errors == []
+
+
+def _rows_via_duckdb(ds, rows, columns):
+    out = []
+    for r in rows:
+        out.append(_duck(ds, View(), r, 1, columns).rows[0])
+    return out
+
+
+@pytest.mark.parametrize("direct", [True, False])
+def test_fetch_columns(many_path, demo_path, odd_path, direct):
+    for path, cols in ((many_path, ["s", "x"]), (demo_path, ["band", "mag", "diaSourceId"]),
+                       (odd_path, ["tags", "file_row_number", "pos"])):
+        ds = _open(path)
+        if direct:
+            _force(ds)
+        else:
+            ds._read_rows = lambda rows, names: (None, None)
+        n = ds.num_rows
+        for rows in ([5, 3, 3, n - 1, 0], list(range(90, 140)), [n // 2], [], list(range(n - 7, n))[::-1]):
+            page = ds.fetch_columns(rows, cols)
+            assert page.row_numbers == rows and page.columns == cols
+            assert [_norm(r) for r in page.rows] == [_norm(r) for r in _rows_via_duckdb(ds, rows, cols)]
+            assert [str(t) for t in page.types] == [str(t) for t in _duck(ds, View(), 0, 1, cols).types]
+    with pytest.raises(IndexError):
+        ds.fetch_columns([n], cols)
+
+
+def test_fetch_columns_for_a_sorted_page(demo_path, monkeypatch):
+    ds = _open(demo_path)
+    v = View(where="mag < 21", order_by=[("mag", True)])
+    page = ds.fetch(v, 30, 40, ["mag"])
+    calls = _spy_reads(monkeypatch)
+    _force(ds)
+    more = ds.fetch_columns(page.row_numbers, ["diaSourceId", "mag"])
+    assert [r[1] for r in more.rows] == [r[0] for r in page.rows]
+    assert {tuple(c[0]) for c in calls} <= {(i,) for i in range(ds.meta.num_row_groups)}
+    assert all(c[1] == ["diaSourceId", "mag"] for c in calls)
+
+
+def test_leaves_with_flat_dotted_name(tmp_path):
+    p = tmp_path / "dots.parquet"
+    pq.write_table(pa.table({"a": pa.array([{"b": 1, "c": 2.0}]), "a.b": pa.array([3]),
+                             "m": pa.array([[("k", 1)]], pa.map_(pa.string(), pa.int64()))}), p)
+    ds = _open(str(p))
+    assert ds._leaves() == {"a": [0, 1], "a.b": [2], "m": [3, 4]}
+    page = _direct(ds, 0, 1, ["a.b", "a"])
+    _same(page, _duck(ds, View(), 0, 1, ["a.b", "a"]))
