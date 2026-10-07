@@ -71,6 +71,11 @@ They change only the grid and stats; the detail panel and **y** keep full precis
 | **Ctrl+P** | command palette |
 | **?** | this help · **q** quit |
 
+Data, Schema and Stats stay on the same column: move to a column in one and
+the others are on it when you switch tabs (the grid keeps its row). If the
+column is hidden in the grid, the grid stays put and the status line says
+so; **c** brings it back. Plot keeps its own columns.
+
 ## Stats and Plot tabs
 
 Stats: **l** toggles log-scale counts, **L** log-scale values, **[ ]** fewer / more bins.
