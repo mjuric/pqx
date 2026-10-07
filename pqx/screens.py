@@ -45,9 +45,10 @@ The filter applies everywhere: grid, stats, plots and export.
 | Ctrl+Home / Ctrl+End | first / last row |
 | **g** | go to row — `1234`, `1.5M`, `50%`, `-1` |
 | **s** | sort by the cursor column: ascending → descending → off |
-| **=** | narrow the filter to rows equal to the cursor cell |
+| **=** | narrow the filter to rows equal to the cursor cell; the cursor stays on the same record |
 | **d** or Enter | toggle the row detail panel (full precision, sexagesimal, UTC dates) |
 | Tab or a click | into the detail panel: **↑/↓**, PgUp/PgDn, Home/End or a click pick a column and the grid follows on the same row (the wheel only scrolls); **Enter**, **Esc** or **Tab** return to the grid on that column |
+| in the detail panel | **=**, **y**, **i**, **F**, **<** / **>** act on the selected field as on that grid cell; after **=** you stay in the panel on the same field and record, so **=** on one field and then another narrows in two keystrokes |
 | **c** | choose visible columns; **-** hides the cursor column |
 | **p** | pin columns up to the cursor (stay visible when scrolling right) |
 | Home / End | first / last column. **‹ ›** beside the header mean more columns that way (click to page); the panel's bottom edge reads e.g. *‹ 11 · columns 12–21 of 64 · 43 ›* |

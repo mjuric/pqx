@@ -152,6 +152,13 @@ class DetailList(CursorList):
         Binding("enter,tab", "app.detail_to_grid", "Back to grid", show=False),
         Binding("escape", "app.detail_to_grid(True)", "Back to grid", show=False),
         Binding("d", "app.toggle_detail", "Detail", show=False),
+        # the grid's keys for a cell, on the selected field of the record shown
+        Binding("equals_sign", "app.detail_key('filter_value')", "= filter", show=False),
+        Binding("y", "app.detail_key('copy_cell')", "Copy", show=False),
+        Binding("i", "app.detail_key('inspect_column')", "Col stats", show=False),
+        Binding("F", "app.detail_key('set_format')", "Format", show=False),
+        Binding("less_than_sign", "app.detail_key('step_digits', -1)", "Fewer digits", show=False),
+        Binding("greater_than_sign", "app.detail_key('step_digits', 1)", "More digits", show=False),
     ]
 
     def __init__(self, **kw) -> None:
