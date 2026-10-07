@@ -679,11 +679,7 @@ class PqxApp(App):
         d = self.dim
         t = Text(no_wrap=True, overflow="ellipsis")
         tot = self.total
-        if self._hidden_hint and not self._busy and not self._last_error:
-            t.append("!", "yellow")
-            t.append(f" {self._hidden_hint} is hidden", "bold")
-            t.append("  ·  c to show", d)
-        elif self._last_error:
+        if self._last_error:
             t.append("✗", "red")
             t.append(" Query failed", "bold")
             t.append("   reason: ", d)
@@ -725,6 +721,10 @@ class PqxApp(App):
                     bits.append(f"row {grid.abs_row:,}")
                 if bits:
                     t.append("  ·  " + "  ·  ".join(bits), d)
+                if self._hidden_hint and grid.row_count:
+                    t.append("   !", "yellow")
+                    t.append(f" {self._hidden_hint} is hidden", "bold")
+                    t.append(" · c to show", d)
         out.update(t)
 
     # --------------------------------------------------------------- the grid
@@ -975,6 +975,7 @@ class PqxApp(App):
             self.query_one(GridTable).focus()
         self._last_error = ""
         self._count_secs = None
+        self._hidden_hint = None
         was_sql = bool(self.view.sql)
         self.view = view
         grid = self.query_one(GridTable)
@@ -991,7 +992,9 @@ class PqxApp(App):
         target = 0
         if keep_file_row is not None:
             target = keep_file_row if view.is_trivial else 0
-        self.load_window(max(0, target - grid.window // 2), target)
+        # stay on the current column if the new view shows it
+        col = self.cols_shown.index(self.current_column) if self.current_column in self.cols_shown else 0
+        self.load_window(max(0, target - grid.window // 2), target, col)
         if not view.is_trivial:
             self.count_rows()
         self._refresh_analysis()
@@ -1032,7 +1035,8 @@ class PqxApp(App):
         inp.value = ""
         self.view = View(sql=self.view.sql, where=self.view.where)  # sort is dropped with the filter
         self.apply_filter("", fr)
-        self.query_one(GridTable).focus()
+        # focusing the grid from another tab would switch to Data (TabbedContent follows focus)
+        self.query_one(GridTable).focus() if self._tab_is("tab-data") else self.set_focus(None)
 
     def action_clear_filter_anywhere(self) -> None:
         """ctrl+x: clear the filter even while typing in the filter box."""
@@ -1124,13 +1128,14 @@ class PqxApp(App):
 
         def done(result):
             if result:
+                grid = self.query_one(GridTable)
+                offset, row = grid.offset, grid.abs_row  # before the rebuild resets the cursor
                 self.cols_shown = result
                 self._rebuild_columns()
-                grid = self.query_one(GridTable)
-                # just brought back the column the hint was about: land on it
-                col = result.index(self._hidden_hint) if self._hidden_hint in result else 0
+                # land on the current column (also the one a hidden-column hint was about)
+                col = result.index(self.current_column) if self.current_column in result else 0
                 self._hidden_hint = None
-                self.load_window(grid.offset, grid.abs_row, col)
+                self.load_window(offset, row, col)
         self.push_screen(ColumnPicker(cols, self.cols_shown), done)
 
     def action_hide_column(self) -> None:
@@ -1140,8 +1145,9 @@ class PqxApp(App):
         name = self.cols_shown[grid.cursor_column]
         self.cols_shown = [c for c in self.cols_shown if c != name]
         col = min(grid.cursor_column, len(self.cols_shown) - 1)
+        offset, row = grid.offset, grid.abs_row  # before the rebuild resets the cursor
         self._rebuild_columns()
-        self.load_window(grid.offset, grid.abs_row, col)
+        self.load_window(offset, row, col)
         self.notify(f"Hid {escape(name)} · c brings it back", timeout=2)
 
     def action_pin_columns(self) -> None:
@@ -1452,8 +1458,7 @@ class PqxApp(App):
         self.query_one("#stats-cols-panel").border_title = self._dim_markup(f"columns  {len(self.result_schema)}")
         if self._stats_col not in dict(self.result_schema):
             self._stats_col = None
-        else:  # keep the highlight on the profiled column (its event is a no-op: _stats_col is unchanged)
-            ol.highlighted = ol.get_option_index(self._stats_col)
+        # (the highlight comes back with _sync_stats, when Stats is shown or the view changes on it)
 
     def _show_stats_for(self, name: str) -> None:
         self.set_current_column(name, "stats")
@@ -1474,6 +1479,9 @@ class PqxApp(App):
             # _stats_col is set first, so the highlight event below isn't taken for a move
             ol.highlighted = names.index(self._stats_col)
             if self._stats_stale or self._stats_shown != self._stats_col:
+                timer = self.__dict__.get("_pqx_timers", {}).pop("stats", None)
+                if timer is not None:  # a highlight's debounced profile is superseded by this one
+                    timer.stop()
                 self.compute_stats(self._stats_col)
 
     @on(OptionList.OptionHighlighted, "#stats-cols")
@@ -1483,7 +1491,6 @@ class PqxApp(App):
             self._stats_col = name
             if self._tab_is("tab-stats"):
                 self.set_current_column(name, "stats")
-            if self._tab_is("tab-stats"):
                 self._debounced("stats", 0.15, lambda: self._tab_is("tab-stats") and self.compute_stats(name))
 
     def _debounced(self, key: str, delay: float, fn) -> None:
@@ -1524,8 +1531,9 @@ class PqxApp(App):
 
     def _refresh_analysis(self) -> None:
         active = self.query_one(TabbedContent).active
-        if active == "tab-stats" and self._stats_col:
-            self.compute_stats(self._stats_col)
+        if active == "tab-stats":
+            self._stats_stale = True
+            self._sync_stats()
         elif active == "tab-plot":
             self.replot()
         else:  # recompute lazily when those tabs are next opened
