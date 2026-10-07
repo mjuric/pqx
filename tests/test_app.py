@@ -625,3 +625,78 @@ async def test_move_grid_to_column(demo_path):
         assert app.current_column == "ra"
         app.cols_shown = [c for c in app.cols_shown if c != "dec"]
         assert not app._move_grid_to_column("dec")
+
+
+async def test_detail_pane_focus_and_link(demo_path):
+    from textual.events import MouseScrollDown
+
+    from pqx.widgets import DetailList
+
+    app = PqxApp(demo_path)
+    async with app.run_test(size=(150, 24)) as pilot:  # short: the pane scrolls
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        lst = app.query_one(DetailList)
+        g.move_cursor(row=7, column=2)
+        await pilot.press("d")
+        await pilot.pause(0.1)
+        assert lst.option_count == len(app.cols_shown)
+        assert lst.selected == app.cols_shown[2]
+
+        await pilot.press("tab")  # into the pane, selection on the grid's column
+        await pilot.pause(0.05)
+        assert app.focused is lst and lst.selected == app.cols_shown[2]
+        assert app.query_one("#detail").has_focus_within
+        await pilot.press("down", "down")  # the grid follows sideways, same row
+        await pilot.pause(0.05)
+        assert lst.selected == app.cols_shown[4]
+        assert g.cursor_column == 4 and g.cursor_row == 7
+        assert app.current_column == app.cols_shown[4]
+        await pilot.press("end")
+        await pilot.pause(0.05)
+        assert g.cursor_column == len(app.cols_shown) - 1 and g.cursor_row == 7
+        await pilot.press("home", "down")
+        await pilot.press("enter")  # back to the grid, on the selected column
+        await pilot.pause(0.05)
+        assert app.focused is g and g.cursor_column == 1 and g.cursor_row == 7
+
+        for key in ("escape", "tab"):
+            await pilot.press("tab", "down", key)
+            await pilot.pause(0.05)
+            assert app.focused is g and g.cursor_column == 2 and g.cursor_row == 7
+            g.move_cursor(column=1)
+            await pilot.pause(0.05)
+
+        # moving the grid moves the pane's selection, without the pane taking over
+        g.move_cursor(column=5)
+        await pilot.pause(0.05)
+        assert lst.selected == app.cols_shown[5] and app.focused is g
+        await pilot.press("down")  # a new row: same selection, new values
+        await pilot.pause(0.05)
+        assert lst.selected == app.cols_shown[5] and g.cursor_row == 8 and g.cursor_column == 5
+
+        # the wheel only scrolls the pane
+        lst.scroll_home(animate=False)
+        await pilot.pause(0.05)
+        for _ in range(5):
+            lst.post_message(MouseScrollDown(lst, 2, 2, 0, 3, 0, False, False, False))
+        await pilot.pause(0.1)
+        assert lst.scroll_y > 0
+        assert lst.selected == app.cols_shown[5] and g.cursor_column == 5 and app.focused is g
+        y0 = lst.scroll_y
+        await pilot.press("down")  # a new row keeps the pane where it was scrolled to
+        await pilot.pause(0.05)
+        assert lst.scroll_y == y0 and g.cursor_row == 9
+
+        # a click on an entry focuses the pane and moves the grid there
+        lst.scroll_home(animate=False)
+        await pilot.pause(0.05)
+        y = lst._index_to_line[3]
+        await pilot.click(lst, offset=(2, y))
+        await pilot.pause(0.05)
+        assert app.focused is lst and lst.selected == app.cols_shown[3]
+        assert g.cursor_column == 3 and g.cursor_row == 9
+
+        await pilot.press("d")  # closing the pane hands focus back to the grid
+        await pilot.pause(0.05)
+        assert not app.query_one("#detail").display and app.focused is g
