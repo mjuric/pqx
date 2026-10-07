@@ -49,14 +49,28 @@ def test_textual_render_hooks_unchanged():
         assert hasattr(t, cache)
 
 
-# Hashes of the DataTable code GridTable copies (_render_line_in_row, ordered_columns) or relies
-# on (how render_line / _render_line crop each line), as of Textual 8.2.8.
+# Hashes of the DataTable code GridTable copies or relies on, as of Textual 8.2.8.
 UPSTREAM_SOURCE = {
     "_render_line_in_row": "669cc46a7ca119d2",
     "_render_line": "a32c6991165cea90",
     "render_line": "dfc24fd4f26a530e",
     "render_lines": "4e0ae4f0a9bd61c0",
     "ordered_columns": "aa1124cb7bcaa0ce",
+    # Lazy cells (GridTable.set_rows / _compute_row_renderables / fit_visible, pqx/cells.py) stand in
+    # for add_row and its idle measuring, hand rows over as CellRow/RowCells, settle dimensions
+    # themselves and scroll the cursor with DataTable's own helpers.
+    "add_row": "9404928b4fdd9dab",
+    "_compute_row_renderables": "6906170428250b3c",
+    "_get_row_renderables": "4766e26ce80d09dd",
+    "get_row": "7f4134ffa6f7b3b9",
+    "_on_idle": "d94152378c36b0c2",
+    "_update_dimensions": "c62ef3216f7c354b",
+    "_render_cell": "56c87899a3bfc4da",
+    "clear": "6af902cb1b84743d",
+    "move_cursor": "f312ced43e2c45fd",
+    "watch_cursor_coordinate": "a4f113b27d09127b",
+    "watch_fixed_columns": "af846fa34a6922c8",
+    "_scroll_cursor_into_view": "9e4419fb40c5be82",
 }
 
 
@@ -66,8 +80,9 @@ def test_textual_render_source_unchanged(name):
     src = inspect.getsource(obj.fget if isinstance(obj, property) else obj)
     assert hashlib.sha256(src.encode()).hexdigest()[:16] == UPSTREAM_SOURCE[name], (
         f"Textual changed DataTable.{name}. Diff it against the version GridTable was written for "
-        f"(Textual 8.2.8), port any change into GridTable._render_line_in_row / ordered_columns / "
-        f"render_lines in pqx/app.py, run tests/test_render.py, then update this hash.")
+        f"(Textual 8.2.8), port any change into GridTable (pqx/app.py: the rendering overrides, or the "
+        f"lazy-cell ones: set_rows, _compute_row_renderables, fit_visible, scroll_cursor_fitted) and "
+        f"pqx/cells.py, run tests/test_render.py and tests/test_cells.py, then update this hash.")
 
 
 def _strips(g: GridTable) -> list:
@@ -192,6 +207,23 @@ async def test_render_after_remeasure(wide300_path):
             await settle(pilot, app)
             assert not g._require_update_dimensions, what
             assert _frame(g) == _reference(g) == first, what
+
+
+async def test_render_after_width_change_behind_the_caches(wide300_path):
+    """A column or row-label width that changes without an _update_count bump (as DataTable's
+    idle re-measuring does) must not leave lines cached at the old widths."""
+    app = PqxApp(wide300_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        _frame(g)  # warm every cache
+        count = g._update_count
+        g.ordered_columns[1].content_width += 3
+        assert g._update_count == count
+        assert _frame(g) == _reference(g), "column"
+        _frame(g)
+        g._label_column.content_width += 2
+        assert _frame(g) == _reference(g), "row labels"
 
 
 async def test_render_work_scales_with_visible_columns(wide300_path):

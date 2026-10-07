@@ -436,6 +436,15 @@ class GridTable(DataTable):
                 return RowRenderables(label, RowCells(row))
         return super()._compute_row_renderables(row_index)
 
+    def update_cell(self, *a, **kw):
+        # set_rows' CellRows hold Cells made from the window's values: a plain value put in
+        # their place would be drawn unformatted and never fitted. The app never edits cells.
+        raise NotImplementedError("GridTable cells come from set_rows; reload the window instead")
+
+    def remove_column(self, *a, **kw):
+        # A CellRow's layout is shared by the whole window; removing a column would desync it.
+        raise NotImplementedError("GridTable columns are rebuilt with clear(columns=True)")
+
     def update_dimensions_now(self) -> None:
         """Settle the virtual size now rather than on idle, so the cursor can be
         scrolled into view at once (DataTable otherwise draws the top of the
