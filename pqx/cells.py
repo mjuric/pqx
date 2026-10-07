@@ -7,9 +7,9 @@ rendered or read, then caches the result. The cells of one grid column share a
 :class:`ColumnCells`: bumping its ``gen`` (raw toggle, format override) makes
 every cell of the column re-format on its next draw, without touching the cells.
 
-Rows are :class:`CellRow` mappings that make a row's cells only when DataTable
-first asks for them: a window of 150 x 300 values then allocates cells for the
-rows drawn, not all 45,000.
+Rows are :class:`CellRow` mappings that make a cell only when it is first
+read, and DataTable renders a row from a :class:`RowCells` view of it: a window
+of 150 x 300 values then allocates cells for what is drawn, not all 45,000.
 
 A column never narrows here: when a cell turns out wider than its column, the
 column grows (see :meth:`ColumnCells.fit`).
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import heapq
 from bisect import bisect_left, bisect_right
+from collections.abc import Sequence
 from math import isfinite
 from typing import Any, Callable
 
@@ -140,26 +141,59 @@ class Cell:
         return f"Cell({self.value!r})"
 
 
-class CellRow(dict):
-    """One grid row as DataTable stores it (cells by column key), its cells made on first access.
+class RowLayout:
+    """The columns of a window's rows: keys in order, their ColumnCells, and each key's position."""
 
-    DataTable reads a whole row at a time (``get_row_at``), so the first lookup
-    makes all of the row's cells at once. An unknown key raises KeyError, as a
-    plain row dict would."""
+    __slots__ = ("keys", "ccols", "index")
+
+    def __init__(self, keys: list, ccols: list[ColumnCells]):
+        self.keys = keys[: len(ccols)]
+        self.ccols = ccols
+        self.index = {k: i for i, k in enumerate(self.keys)}
+
+
+class CellRow(dict):
+    """One grid row as DataTable stores it (cells by column key), each cell made on first access.
+
+    An unknown key raises KeyError, as a plain row dict would; a row shorter
+    than its columns reads as NULLs, as DataTable's ``add_row`` pads it."""
 
     __slots__ = ("values", "layout")
 
-    def __init__(self, values: tuple, layout: tuple[list, list[ColumnCells]]):
+    def __init__(self, values: tuple, layout: RowLayout):
         super().__init__()
         self.values = values
-        self.layout = layout  # (column keys, their ColumnCells), shared by all rows of a window
+        self.layout = layout
 
     def __missing__(self, key) -> Cell:
-        if self:  # already made: not a column of this row
-            raise KeyError(key)
-        keys, ccols = self.layout
-        values = self.values
-        if len(values) < len(keys):
-            values = (*values, *[None] * (len(keys) - len(values)))
-        self.update(zip(keys, map(Cell, values, ccols)))
-        return dict.__getitem__(self, key)
+        i = self.layout.index[key]
+        cell = self[key] = Cell(self.values[i] if i < len(self.values) else None, self.layout.ccols[i])
+        return cell
+
+    def cell_at(self, i: int) -> Cell:
+        """The cell of the ``i``-th column."""
+        key = self.layout.keys[i]
+        cell = dict.get(self, key)
+        return self[key] if cell is None else cell
+
+
+class RowCells(Sequence):
+    """A row's cells by column position, made as they're read: what DataTable
+    renders a row from (``RowRenderables.cells``), without making all of them."""
+
+    __slots__ = ("row",)
+
+    def __init__(self, row: CellRow):
+        self.row = row
+
+    def __len__(self) -> int:
+        return len(self.row.layout.keys)
+
+    def __getitem__(self, i):
+        if isinstance(i, slice):
+            return [self.row.cell_at(j) for j in range(len(self))[i]]
+        if i < 0:
+            i += len(self)
+        if not 0 <= i < len(self):
+            raise IndexError(i)
+        return self.row.cell_at(i)

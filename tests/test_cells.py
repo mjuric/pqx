@@ -7,7 +7,7 @@ from rich.text import Text
 
 from pqx import fmt as F
 from pqx.app import GridTable, PqxApp
-from pqx.cells import Cell, CellRow, ColumnCells, text_width, widest_candidates
+from pqx.cells import Cell, CellRow, ColumnCells, RowCells, RowLayout, text_width, widest_candidates
 
 from test_app import SIZE, settle
 
@@ -41,14 +41,18 @@ def test_cell_formats_once_and_again_after_invalidate():
     assert cc.column.content_width == len(repr(1.0 / 3))  # columns never narrow by themselves
 
 
-def test_cell_row_makes_cells_on_first_read():
+def test_cell_row_makes_cells_as_they_are_read():
     ccs = [ColumnCells(F.CellFormatter(n, t), False) for n, t in (("a", pa.int64()), ("b", pa.string()))]
-    row = CellRow((7,), (["a", "b"], ccs))  # a short row reads as NULLs, as DataTable's add_row pads it
+    row = CellRow((7,), RowLayout(["a", "b"], ccs))  # a short row reads as NULLs, as add_row pads it
     assert len(row) == 0
-    assert str(row["b"]) == F.NULL and len(row) == 2  # one read makes the whole row
+    assert str(row["b"]) == F.NULL and len(row) == 1  # only the cell read is made
     assert row["a"].value == 7 and row["a"] is row["a"]
     with pytest.raises(KeyError):
         row["c"]
+    cells = RowCells(row)
+    assert len(cells) == 2 and cells[0] is row["a"] and cells[-1] is row["b"] and list(cells) == [row["a"], row["b"]]
+    with pytest.raises(IndexError):
+        cells[2]
 
 
 def test_widest_candidates_find_the_widest_number():

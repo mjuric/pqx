@@ -30,13 +30,14 @@ from textual.message import Message
 from textual.suggester import Suggester
 from textual.theme import Theme
 from textual.widgets import DataTable, Input, Label, OptionList, Static, TabbedContent, TabPane
+from textual.widgets._data_table import RowRenderables, default_cell_formatter
 from textual.widgets.data_table import ColumnKey, Row, RowKey
 
 from . import _terminal
 from . import config
 from . import fmt as F
 from . import plots
-from .cells import CellRow, ColumnCells, text_width, widest_candidates
+from .cells import CellRow, ColumnCells, RowCells, RowLayout, text_width, widest_candidates
 from .data import ColumnStats, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec, quote_ident
 from .screens import ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen, HelpScreen
 from .widgets import CursorList, DetailList
@@ -248,7 +249,7 @@ class GridTable(DataTable):
         the caller's business (``ColumnCells`` widen their column as cells get
         formatted). Row labels are measured here, since they're few."""
         self.cell_columns = cell_columns
-        layout = ([c.key for c in self.ordered_columns][: len(cell_columns)], cell_columns)
+        layout = RowLayout([c.key for c in self.ordered_columns], cell_columns)
         locations, data, rows_meta = self._row_locations, self._data, self.rows
         for i, (values, label) in enumerate(zip(rows, labels)):
             key = RowKey()
@@ -266,6 +267,21 @@ class GridTable(DataTable):
             self._highlight_cursor()
         self.refresh()
         self.check_idle()
+
+    def _compute_row_renderables(self, row_index: int) -> RowRenderables:
+        """DataTable's, but a window row's cells are handed over as a lazy ``RowCells``:
+        DataTable would otherwise make (and check) a renderable for every column of
+        every row it draws, though only the columns in view are rendered."""
+        if row_index >= 0:
+            row_key = self._row_locations.get_key(row_index)
+            row = self._data.get(row_key)
+            meta = self.rows.get(row_key)
+            if isinstance(row, CellRow) and meta is not None:
+                label = None
+                if self._should_render_row_labels and meta.label:
+                    label = default_cell_formatter(meta.label, wrap=meta.height != 1, height=meta.height)
+                return RowRenderables(label, RowCells(row))
+        return super()._compute_row_renderables(row_index)
 
     def update_dimensions_now(self) -> None:
         """Settle the virtual size now rather than on idle, so the cursor can be
