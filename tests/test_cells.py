@@ -254,6 +254,20 @@ async def test_pinning_fits_the_columns_it_brings_into_view(tmp_path):
         assert g.fixed_columns == 2 and drawn and min(drawn) == need
 
 
+def _spy_frames(g) -> list:
+    """Record, for every frame the grid draws from now on, whether the cursor cell was in view."""
+    seen = []
+    orig = g.render_lines
+
+    def spy(crop):
+        if g.row_count:
+            seen.append(_cursor_in_view(g))
+        return orig(crop)
+
+    g.render_lines = spy
+    return seen
+
+
 def _cursor_in_view(g) -> bool:
     r = g._get_cell_region(g.cursor_coordinate)
     left = g._get_fixed_offset()[3]
@@ -269,10 +283,12 @@ async def test_cursor_stays_in_view_at_the_far_right(demo_path):
     async with app.run_test(size=SIZE) as pilot:
         await settle(pilot, app)
         g = app.query_one(GridTable)
+        frames = _spy_frames(g)
         for what in ("s", "minus", "c", "filter", "f", "f", "greater_than_sign", "less_than_sign"):
             await pilot.press("end")
             await settle(pilot, app)
             assert g.scroll_x > 0 and _cursor_in_view(g)
+            frames.clear()
             if what == "c":
                 await pilot.press("c")
                 assert isinstance(app.screen, ColumnPicker)
@@ -284,3 +300,72 @@ async def test_cursor_stays_in_view_at_the_far_right(demo_path):
                 await pilot.press(what)
             await settle(pilot, app)
             assert _cursor_in_view(g), what
+            assert all(frames), what  # nor drawn off screen in between
+
+
+async def test_cursor_stays_in_view_when_its_own_number_column_widens(wide_path):
+    """`>` on the far-right column widens it past the screen's edge: the view follows."""
+    app = PqxApp(wide_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        await pilot.press("end")
+        await settle(pilot, app)
+        w = g.ordered_columns[-1].content_width
+        await pilot.press(*["greater_than_sign"] * 4)
+        await settle(pilot, app)
+        assert g.ordered_columns[-1].content_width > w and _cursor_in_view(g)
+
+
+@pytest.fixture
+def late_blob_path(tmp_path):
+    """Float columns, then a blob column that is short in the rows a window samples for its width
+    (every 62nd of 1000) and long elsewhere, longer still in the second half of the file."""
+    n = 3000
+    blobs = [b"" if i % 62 == 0 else bytes(range(8 if i < 1500 else 60)) for i in range(n)]
+    data = {"id": np.arange(n)}
+    for i in range(30):
+        data[f"c{i:02d}"] = np.random.default_rng(i).normal(size=n)
+    data["blob"] = pa.array(blobs, type=pa.binary())
+    p = tmp_path / "late_blob.parquet"
+    pq.write_table(pa.table(data), p)
+    return str(p)
+
+
+async def test_cursor_in_view_when_its_column_widens_on_screen(late_blob_path):
+    """The cursor's column outgrows its guessed width once its cells are drawn: no frame may
+    show the cursor off screen, after scrolling to it or after a new window loads."""
+    from textual.coordinate import Coordinate
+
+    app = PqxApp(late_blob_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        frames = _spy_frames(g)
+        short = g.ordered_columns[-1].content_width
+        await pilot.press("end")  # moving onto it the usual way: DataTable scrolls to it, then it widens
+        await settle(pilot, app)
+        assert g.ordered_columns[-1].content_width > short
+        assert _cursor_in_view(g) and frames and all(frames)
+
+    app = PqxApp(late_blob_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        assert g.window == 1000
+        blob = g.ordered_columns[-1]
+        short = blob.content_width
+        frames = _spy_frames(g)
+        # the cursor off screen to the right, set without DataTable's own scrolling
+        g.set_reactive(GridTable.cursor_coordinate, Coordinate(5, len(g.columns) - 1))
+        g.scroll_cursor_fitted()  # scrolling to it draws its long cells: it grows, so it must scroll again
+        assert blob.content_width > short and _cursor_in_view(g)
+        await settle(pilot, app)
+        assert _cursor_in_view(g) and all(frames)
+
+        w = blob.content_width
+        frames.clear()
+        await pilot.press("ctrl+end")  # a window whose blobs are longer still
+        await settle(pilot, app)
+        assert g.offset > 0 and blob.content_width > w and _cursor_in_view(g)
+        assert frames and all(frames)

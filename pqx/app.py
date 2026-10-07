@@ -510,6 +510,12 @@ class GridTable(DataTable):
             cache[key] = (segs[0].style, segs[1].style) if ok else None
         return cache[key]
 
+    def add_column(self, *a, **kw):
+        if self.row_count and self.cell_columns:
+            # set_rows' CellRows share one column layout: a column added under them would read as missing.
+            raise NotImplementedError("add GridTable columns before set_rows (clear(columns=True) first)")
+        return super().add_column(*a, **kw)
+
     def update_cell(self, *a, **kw):
         # set_rows' CellRows hold Cells made from the window's values: a plain value put in
         # their place would be drawn unformatted and never fitted. The app never edits cells.
@@ -572,29 +578,48 @@ class GridTable(DataTable):
 
     def fit_visible(self) -> None:
         """Format the cells about to be drawn and widen any column they outgrow,
-        before the draw: a number is never shown cut off, even for a frame."""
+        before the draw: a number is never shown cut off, even for a frame.
+
+        If that pushes the cursor cell (on screen until now) off it, as when a move
+        scrolls to a column that then widens, scroll it back into view."""
         if not self.cell_columns or not self.row_count or self._sizing:
             return
+        start = self._growth
+        cursor_was_in_view = self.cursor_cell_in_view()
         for _ in range(self.FIT_PASSES):
             before = self._growth
             with self.sizing():
                 rows, cols = self.visible_cells()
                 self.fit_columns(rows, cols)
             if self._growth == before:
-                return
+                break
             self._update_count += 1  # every DataTable render cache is keyed on it
             self.update_dimensions_now()
             self.refresh()
+        if self._growth != start and cursor_was_in_view and not self.cursor_cell_in_view():
+            self._scroll_cursor_into_view()
+
+    def cursor_cell_in_view(self) -> bool:
+        """Whether the cursor cell is wholly on screen horizontally (a pinned one always is)."""
+        if self.cursor_type != "cell" or self.cursor_column < self.fixed_columns:
+            return True
+        region = self._get_cell_region(self.cursor_coordinate)
+        left = self._get_fixed_offset().left
+        return (self.scroll_x + left <= region.x
+                and region.right <= self.scroll_x + self.scrollable_content_region.width)
 
     def scroll_cursor_fitted(self) -> None:
         """Scroll the cursor cell into view, with the cells on screen fitted.
 
         Fitting can widen the cursor's column, or columns left of it, after the
         scroll: scroll again until nothing moves."""
+        if not self.row_count:
+            self.fit_visible()
+            return
         for _ in range(self.FIT_PASSES):
             self.fit_visible()
             before = self.scroll_offset
-            self._scroll_cursor_into_view()
+            self._scroll_cursor_into_view()  # the scroll's own fitting may widen columns again
             if self.scroll_offset == before:
                 return
 
