@@ -610,3 +610,18 @@ async def test_format_change_does_not_resurrect_old_stats(demo_path):
         await pilot.press("less_than_sign")
         await pilot.pause(0.1)
         assert len(calls) == 1  # old numbers are not redrawn under the new filter
+
+
+async def test_move_grid_to_column(demo_path):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        g.move_cursor(row=5)
+        assert app._move_grid_to_column("ingestTime")
+        await pilot.pause(0.05)
+        assert app.cols_shown[g.cursor_column] == "ingestTime" and g.cursor_row == 5
+        app.set_current_column("ra", "grid")
+        assert app.current_column == "ra"
+        app.cols_shown = [c for c in app.cols_shown if c != "dec"]
+        assert not app._move_grid_to_column("dec")

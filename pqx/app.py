@@ -442,6 +442,7 @@ class PqxApp(App):
         self._busy: dict[str, tuple[str, float]] = {}
         self._spin = 0
         self._stats_col: str | None = None
+        self.current_column: str | None = None  # shared by Data, Details, Schema and Stats
         self._hist_bins = 60
         self._hist_log_y = False
         self._hist_log_x = False
@@ -861,6 +862,23 @@ class PqxApp(App):
         if r >= len(self.page.rows) or c >= len(self.page.columns):
             return None, None
         return self.page.columns[c], self.page.rows[r][c]
+
+    # ---------------------------------------------------------- current column
+    def set_current_column(self, name: str | None, source: str) -> None:
+        """Record the column the user is on. ``source`` is the view it came from:
+        "grid", "detail", "schema" or "stats". Each view moves to it when shown."""
+        if name:
+            self.current_column = name
+
+    def _move_grid_to_column(self, name: str) -> bool:
+        """Put the grid cursor on column ``name``, same row; False if it isn't shown."""
+        if name not in self.cols_shown:
+            return False
+        grid = self.query_one(GridTable)
+        col = self.cols_shown.index(name)
+        if grid.cursor_column != col:
+            grid.move_cursor(column=col, animate=False)
+        return True
 
     # ------------------------------------------------------------ detail pane
     def action_toggle_detail(self) -> None:
