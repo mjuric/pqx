@@ -72,6 +72,21 @@ this (CPU ms per operation, 200×50 terminal, 300 float columns × 5000 rows; th
   into view, or render lazily in `DetailList`. Keep the scroll position, the
   selection and the focus look exactly as today.
 
+### D. Fetch a window in time that doesn't grow with the file (added during integration)
+Found while reviewing B: on a 300-column file with 1000-row row groups, fetching a
+150-row window costs 40 ms at 5k rows but 280 ms wall / 1.4 s CPU at 200k rows,
+whatever the window size or offset. DuckDB sets up a scan across every column
+chunk of every row group per query; the `file_row_number` filter doesn't prune
+row groups.
+- For trivial views (no filter or sort), map the window's offset to row groups
+  from the footer and read only those, e.g. with pyarrow
+  `read_row_groups(..., use_threads=False)` (~5 ms). pyarrow's default threading
+  took 287 ms wall and 20 s CPU for one row group on a 128-core node, so keep it
+  off or bounded.
+- Filtered or sorted views still use DuckDB; keep their behaviour.
+- Results must be identical to today's: values, types (timestamps, decimals,
+  nested, dictionary-encoded strings), `file_row_number` labels and NULLs.
+
 ### Not changing
 Behaviour and look: everything must work as now, including cursor, hover,
 pinning, sorting, header clicks, hidden-column markers, the format header
@@ -87,6 +102,7 @@ replaces.
 | `wide-tables-render` | subagent A | section A: `GridTable` rendering, caches, guard tests |
 | `wide-tables-load` | subagent B | section B: `_apply_page`, cell storage, widths, raw/format invalidation |
 | `wide-tables-detail` | subagent C | section C: `DetailList` / `_update_detail` |
+| `wide-tables-fetch` | subagent D | section D: `ParquetDataset.fetch` for trivial views |
 
 - **Subagents:** each runs the benchmark before and after their work, puts the
   numbers in their PR, commits and pushes per logical unit, keeps `pytest` and
