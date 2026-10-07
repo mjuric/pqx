@@ -621,7 +621,10 @@ class PqxApp(App):
         except NoMatches:  # another modal (help, export) is up
             return
         t = Text(no_wrap=True, overflow="ellipsis")
-        for i, (k, label) in enumerate(KEYS.get(ctx, [])):
+        keys = KEYS.get(ctx, [])
+        if ctx == "tab-data" and not self.screen_stack[0].query_one("#detail").display:
+            keys = [kl for kl in keys if kl != ("tab", "into detail")]  # Tab goes to the filter then
+        for i, (k, label) in enumerate(keys):
             if i:
                 t.append("   ")
             t.append(k, "bold")
@@ -891,6 +894,7 @@ class PqxApp(App):
         if not d.display and self.query_one(TabbedContent).active == "tab-data":
             self.query_one(GridTable).focus()
         self._update_detail()
+        self._render_keys()
 
     def action_detail_to_grid(self, cancel: bool = False) -> None:
         """Enter, Tab or Esc in the pane: back to the grid, on the selected column.
@@ -904,18 +908,26 @@ class PqxApp(App):
 
     @on(OptionList.OptionHighlighted, "#detail-list")
     def detail_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        # only the user's own moves in the pane drive the grid; the pane
-        # following the grid (it isn't focused then) must not echo back
+        # only the user's own moves in the pane drive the grid. The pane
+        # following the grid must not echo back, even if its event arrives
+        # after the pane got focus: by then it is stale or names the grid's
+        # own column.
         lst = self.query_one(DetailList)
         name = event.option.id
-        if self.focused is not lst or not name:
+        grid = self.query_one(GridTable)
+        on_grid = self.cols_shown[grid.cursor_column] if grid.cursor_column < len(self.cols_shown) else None
+        if self.focused is not lst or not name or event.option_index != lst.highlighted or name == on_grid:
             return
         self.set_current_column(name, "detail")
         self._move_grid_to_column(name)
 
     def _update_detail(self) -> None:
         d = self.query_one("#detail")
-        if not d.display or self.page is None or not self.page.rows:
+        if not d.display or self.page is None:
+            return
+        if not self.page.rows:
+            d.border_title = self._dim_markup("no rows")
+            self.query_one(DetailList).set_entries([], 0)
             return
         grid = self.query_one(GridTable)
         r = min(grid.cursor_row, len(self.page.rows) - 1)
