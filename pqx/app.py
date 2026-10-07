@@ -12,17 +12,22 @@ import math
 import os
 import re
 import time
+from bisect import bisect_left, bisect_right
+from itertools import accumulate
 
 import duckdb
 import pyarrow as pa
 from rich.console import Group
+from rich.segment import Segment
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.color import Color
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.coordinate import Coordinate
 from textual.css.query import NoMatches
 from textual.markup import escape
 from textual.message import Message
@@ -167,6 +172,147 @@ class GridTable(DataTable):
 
     class HScroll(Message):
         """The set of horizontally visible columns may have changed."""
+
+    # Rendering. DataTable builds every line from all columns and then crops it
+    # to the viewport, which on a 300-column file is ~20x the work that shows.
+    # We render only the columns that overlap the crop and stand in blanks of
+    # the same width for the rest, so the crop lines up exactly as before.
+    render_all_columns = False  # True: render like DataTable (for tests and comparisons)
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # Room for a large terminal's worth of cells and lines (plus their
+        # cursor/hover variants), so a full repaint doesn't evict itself.
+        self._cell_render_cache.grow(20_000)
+        self._row_render_cache.grow(4_000)
+        self._line_cache.grow(4_000)
+        self._geometry: tuple | None = None  # per-frame column positions; see _column_geometry
+        self._widths: tuple = ()  # (column render widths, row label width, row labels shown)
+        self._widths_gen = 0  # bumped whenever any of those change
+
+    @property
+    def ordered_columns(self) -> list:
+        """DataTable's, cached: it rebuilds the list (and `_render_line` asks for it on every line)."""
+        key = (self._column_locations, len(self.columns), self._update_count)
+        cached = getattr(self, "_ordered_columns", None)
+        if cached is None or cached[0][0] is not key[0] or cached[0][1:] != key[1:]:
+            cached = self._ordered_columns = (key, DataTable.ordered_columns.fget(self))
+        return cached[1]
+
+    def render_lines(self, crop):
+        self._geometry = None  # widths, scroll and size may all have changed since the last frame
+        gen = self._widths_gen
+        self._column_geometry()
+        if gen != self._widths_gen:
+            # DataTable re-measures columns on idle without bumping _update_count, and its cell
+            # and line caches don't key on width: drop them before this frame serves a stale line.
+            self._clear_caches()
+        return super().render_lines(crop)
+
+    def _column_geometry(self) -> tuple:
+        """``(columns, starts, ends, fixed_width, scrollable_width, widths_gen)`` of the ordered
+        columns, positions within DataTable's scrollable line (which also holds the fixed ones)."""
+        if self._geometry is None:
+            cols = self.ordered_columns
+            widths = tuple(c.get_render_width(self) for c in cols)
+            sig = (widths, self._row_label_column_width, self._labelled_row_exists)
+            if sig != self._widths:
+                self._widths = sig
+                self._widths_gen += 1
+            starts = list(accumulate(widths, initial=0))
+            fixed = min(self.fixed_columns, len(cols))
+            self._geometry = (cols, starts[:-1], starts[1:], starts[fixed], starts[-1] - starts[fixed],
+                              self._widths_gen)
+        return self._geometry
+
+    def _render_line_in_row(self, row_key, line_no: int, base_style: Style, cursor_location: Coordinate,
+                            hover_location: Coordinate) -> tuple[list, list]:
+        """DataTable's, but only for the columns `_render_line` will keep (see the class comment).
+
+        The cache key holds the visible column range, and the cursor and hover
+        only for rows they touch, so a cursor move re-renders just its two rows."""
+        if self.render_all_columns:
+            return super()._render_line_in_row(row_key, line_no, base_style, cursor_location, hover_location)
+        cols, starts, ends, fixed_width, table_width, gen = self._column_geometry()
+        # the span _render_line crops the scrollable line to
+        x1 = self.scroll_offset.x + fixed_width
+        x2 = self.scroll_offset.x + self.size.width
+        lo = bisect_right(ends, x1)
+        hi = max(lo, bisect_left(starts, x2))
+        if ends and ends[-1] <= 3 * self.size.width:
+            lo, hi = 0, len(cols)  # a narrow table: render it all, so lines stay cached while scrolling sideways
+
+        row_index = self._row_locations.get(row_key) if row_key in self._row_locations else -1
+        cursor_type = self.cursor_type
+        if cursor_type == "column":
+            cur_key, hov_key = cursor_location.column, hover_location.column
+        elif cursor_type in ("cell", "row"):
+            cur_key = cursor_location if cursor_location.row == row_index else None
+            hov_key = hover_location if hover_location.row == row_index else None
+        else:
+            cur_key = hov_key = None
+        cache_key = (row_key, line_no, base_style, cur_key, hov_key, cursor_type, self.show_cursor,
+                     self._show_hover_cursor, self._update_count, self._pseudo_class_state, lo, hi, gen,
+                     self.size.width)
+        if cache_key in self._row_render_cache:
+            return self._row_render_cache[cache_key]
+
+        should_highlight = self._should_highlight
+        render_cell = self._render_cell
+        header_style = self.get_component_styles("datatable--header").rich_style
+
+        fixed_row = []
+        if self._labelled_row_exists and self.show_row_labels:
+            loc = Coordinate(row_index, -1)
+            fixed_row.append(render_cell(
+                row_index, -1, header_style, width=self._row_label_column_width,
+                cursor=should_highlight(cursor_location, loc, cursor_type),
+                hover=should_highlight(hover_location, loc, cursor_type))[line_no])
+        if self.fixed_columns:
+            if row_key is self._header_row_key:
+                fixed_style = header_style
+            else:
+                fixed_style = self.get_component_styles("datatable--fixed").rich_style
+                fixed_style += Style.from_meta({"fixed": True})
+            for column_index, column in enumerate(cols[: self.fixed_columns]):
+                loc = Coordinate(row_index, column_index)
+                fixed_row.append(render_cell(
+                    row_index, column_index, fixed_style, column.get_render_width(self),
+                    cursor=should_highlight(cursor_location, loc, cursor_type),
+                    hover=should_highlight(hover_location, loc, cursor_type))[line_no])
+
+        row_style = self._get_row_style(row_index, base_style)
+        scrollable_row = []
+        if lo:
+            scrollable_row.append([Segment(" " * starts[lo])])  # columns left of the view
+        for column_index in range(lo, hi):
+            loc = Coordinate(row_index, column_index)
+            scrollable_row.append(render_cell(
+                row_index, column_index, row_style, ends[column_index] - starts[column_index],
+                cursor=should_highlight(cursor_location, loc, cursor_type),
+                hover=should_highlight(hover_location, loc, cursor_type))[line_no])
+        if hi < len(cols):
+            scrollable_row.append([Segment(" " * (ends[-1] - starts[hi]))])  # and right of it
+
+        # Extend the row's styling to fill the widget, as DataTable does.
+        remaining_space = max(0, self.size.width - (table_width + self._row_label_column_width))
+        if cursor_type == "row":
+            extend_style, _ = self._get_styles_to_render_cell(
+                row_index == -1, False, False,
+                should_highlight(hover_location, Coordinate(row_index or 0, 0), cursor_type),
+                row_index == cursor_location.row, self.show_cursor, self._show_hover_cursor, False, False)
+            extend_style = row_style + extend_style
+        elif row_style.bgcolor is not None:
+            faded = Color.from_rich_color(row_style.bgcolor).blend(self.background_colors[1], factor=0.25)
+            extend_style = Style.from_color(color=row_style.color, bgcolor=faded.rich_color)
+        else:
+            extend_style = Style.from_color(row_style.color, row_style.bgcolor)
+        extend_style += Style.from_meta({"row": row_index, "column": 0, "out_of_bounds": True})
+        scrollable_row.append([Segment(" " * remaining_space, extend_style)])
+
+        row_pair = (fixed_row, scrollable_row)
+        self._row_render_cache[cache_key] = row_pair
+        return row_pair
 
     def watch_scroll_x(self, old_value: float, new_value: float) -> None:
         super().watch_scroll_x(old_value, new_value)
