@@ -62,6 +62,30 @@ def test_derived_angles():
         assert d(name, "angle", 12.0) == "12°00′00.00″", name
         assert d(name, "angle", -170.25) == "-170°15′00.00″", name
     assert "h" not in d("lon", "angle", 30.0)
+    assert d("pickup_longitude", "angle", -73.5) == "-73°30′00.00″"
+    assert d("pickup_latitude", "angle", 40.75) == "+40°45′00.00″"
+    # matched by name alone, a "longitude" beyond ±360 is likely something else (lambda = 5000 Å)
+    assert d("lambda", "angle", 5000.0) == "" and d("lon", "angle", 1e20) == ""
+    assert d("lambda", "angle", 360.0) == "360°00′00.00″"
+    assert d("lambda", "angle", 5000.0, "deg") == "5000°00′00.00″"   # declared degrees: any range
+    # VizieR-style names
+    for name in ("RAJ2000", "RA_ICRS", "RA"):
+        assert F.kind_for(name, pa.float64()) == "angle"
+        assert d(name, "angle", 180.0) == "12h00m00.000s", name
+    for name in ("DEJ2000", "DE_ICRS", "DE"):
+        assert F.kind_for(name, pa.float64()) == "angle"
+        assert d(name, "angle", -30.5) == "-30°30′00.00″", name
+    for name in ("RATIO", "RANGE", "DEPTH", "altitude"):
+        assert F.kind_for(name, pa.float64()) != "angle", name
+    assert F.kind_for("latitude", pa.float64()) == "angle"
+    # rounding: a longitude just under 360 reads 0, and the sign is decided after rounding
+    assert d("lon", "angle", 359.999999999) == "00°00′00.00″"
+    assert d("lon", "angle", 360.0) == "360°00′00.00″"
+    assert d("lon", "angle", -1e-9) == "00°00′00.00″"
+    assert d("dec", "angle", -1e-9) == "+00°00′00.00″"
+    assert d("dec", "angle", -0.0000013) == "+00°00′00.00″"   # -0.0047″ rounds to 0 …
+    assert F.deg_to_dms(-0.000002) == "-00°00′00.01″"            # … -0.0072″ doesn't
+    assert F.deg_to_dms(10.999999999) == "+11°00′00.00″"
 
 
 def test_percent():

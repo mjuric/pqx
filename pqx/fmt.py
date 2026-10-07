@@ -31,12 +31,16 @@ NULL = "∅"
 DIM = "dim"
 
 _MJD = re.compile(r"mjd|(^|_)jd($|_)|^jd|epoch|tai$|utc$", re.I)
-_ANGLE = re.compile(r"(^|_)(ra|dec|decl|lon|lat|glon|glat|elon|elat|lambda|beta)($|_)", re.I)
+_ANGLE = re.compile(r"(^|_)(ra|dec|decl|lon|lat|glon|glat|elon|elat|lambda|beta|longitude|latitude)($|_)",
+                    re.I)
 _ANGLE_CAMEL = re.compile(r"^(ra|dec|decl)($|[A-Z0-9_])|(Ra|Dec|RA|DEC)$")  # raJ2000, decl, coordRa
+_VIZIER_RA = re.compile(r"^RA(J2000|B1950|_ICRS|$|_)")                      # RAJ2000, RA_ICRS
+_VIZIER_DE = re.compile(r"^DE(J2000|B1950|_ICRS|$|_)")                      # DEJ2000, DE_ICRS, DE
 _RA = re.compile(r"(^|_)ra($|_)", re.I)
 _RA_CAMEL = re.compile(r"^ra($|[A-Z0-9_])|(Ra|RA)$")                       # raJ2000, coordRa
-_LAT = re.compile(r"(^|_)(dec|decl|lat|glat|elat|beta)($|_)", re.I)
+_LAT = re.compile(r"(^|_)(dec|decl|lat|glat|elat|beta|latitude)($|_)", re.I)
 _LAT_CAMEL = re.compile(r"^(dec|decl)($|[A-Z0-9_])|(Dec|DEC)$")            # decJ2000, coordDec
+_DEG_UNITS = ("deg", "degree", "degrees")
 _ERR = re.compile(r"err|sigma|unc|std|rms|cov", re.I)
 _MAG = re.compile(r"mag($|[A-Z_])|^mag|Mag", re.I)
 _FLUX = re.compile(r"flux", re.I)
@@ -50,7 +54,8 @@ def kind_for(name: str, typ: pa.DataType, unit: str = "") -> str:
             return "err"
         if u in ("d", "day", "days", "mjd") or _MJD.search(name):
             return "mjd"
-        if u in ("deg", "degree", "degrees") or _ANGLE_CAMEL.search(name) or _ANGLE.search(name):
+        if (u in _DEG_UNITS or _ANGLE_CAMEL.search(name) or _ANGLE.search(name)
+                or _VIZIER_RA.search(name) or _VIZIER_DE.search(name)):
             return "angle"
         if u in ("mag", "mag(ab)", "abmag") or _MAG.search(name):
             return "mag"
@@ -348,22 +353,26 @@ def deg_to_hms(deg: float) -> str:
 
 
 def deg_to_dms(deg: float, plus: bool = True) -> str:
-    """Degrees as ±DD°MM′SS.ss″; ``plus=False`` drops the "+" (longitudes, 0–360)."""
-    sign = "-" if deg < 0 else ("+" if plus else "")
-    a = abs(float(deg))
-    d = int(a)
-    m = (a - d) * 60
-    mm = int(m)
-    ss = (m - mm) * 60
-    if ss >= 59.995:
-        ss, mm = 0.0, mm + 1
-    if mm >= 60:
-        mm, d = 0, d + 1
-    return f"{sign}{d:02d}°{mm:02d}′{ss:05.2f}″"
+    """Degrees as ±DD°MM′SS.ss″, rounded to 0.01″ (the sign decided after rounding, so a tiny
+    negative value reads +00°00′00.00″).
+
+    ``plus=False`` is for longitudes: no "+", and a value in [0, 360) that rounds up to 360°
+    reads 000°00′00.00″."""
+    deg = float(deg)
+    cs = round(abs(deg) * 360_000)  # hundredths of an arcsecond
+    if not plus and 0 <= deg < 360 and cs == 360 * 360_000:
+        cs = 0
+    sign = "-" if deg < 0 and cs else ("+" if plus else "")
+    d, rest = divmod(cs, 360_000)
+    mm, ss = divmod(rest, 6_000)
+    return f"{sign}{d:02d}°{mm:02d}′{ss // 100:02d}.{ss % 100:02d}″"
 
 
-def derived(name: str, kind: str, v: Any) -> str:
-    """Extra human reading of a value for the detail panel ('' when none)."""
+def derived(name: str, kind: str, v: Any, unit: str = "") -> str:
+    """Extra human reading of a value for the detail panel ('' when none).
+
+    ``unit``: the column's unit, if known. A longitude-style angle recognised by its name
+    alone (no unit of degrees) gets a reading only within ±360: ``lambda`` may be a wavelength."""
     if v is None or not isinstance(v, (int, float)) or isinstance(v, bool):
         return ""
     if isinstance(v, float) and not math.isfinite(v):
@@ -375,10 +384,12 @@ def derived(name: str, kind: str, v: Any) -> str:
         if 0 < v < 200_000:
             return mjd_to_iso(v)
     if kind == "angle":
-        if _LAT.search(name) or _LAT_CAMEL.search(name):      # Dec, latitudes: signed, ±90
+        if _LAT.search(name) or _LAT_CAMEL.search(name) or _VIZIER_DE.search(name):  # Dec, latitudes
             return deg_to_dms(v) if -90 <= v <= 90 else ""
-        if _RA.search(name) or _RA_CAMEL.search(name):        # RA: hours
+        if _RA.search(name) or _RA_CAMEL.search(name) or _VIZIER_RA.search(name):    # RA: hours
             return deg_to_hms(v)
+        if abs(v) > 360 and (unit or "").strip().lower() not in _DEG_UNITS:
+            return ""                                         # by name only: maybe not an angle
         return deg_to_dms(v, plus=False)                      # other longitudes: degrees
     if kind == "err" and re.search(r"(ra|dec)", low) and abs(v) < 1:
         return f"{v * 3.6e6:.3g} mas"
