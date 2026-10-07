@@ -239,6 +239,8 @@ class GridTable(DataTable):
         x2 = self.scroll_offset.x + self.size.width
         lo = bisect_right(ends, x1)
         hi = max(lo, bisect_left(starts, x2))
+        if ends and ends[-1] <= 3 * self.size.width:
+            lo, hi = 0, len(cols)  # a narrow table: render it all, so lines stay cached while scrolling sideways
 
         row_index = self._row_locations.get(row_key) if row_key in self._row_locations else -1
         cursor_type = self.cursor_type

@@ -148,6 +148,24 @@ async def test_render_matches_datatable(wide300_path):
         await _check_look(pilot, app, g, "blurred")
 
 
+async def test_render_matches_datatable_narrow(demo_path):
+    """Tables up to three screens wide render every column (the cache then survives sideways moves)."""
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        widths = [c.get_render_width(g) for c in g.ordered_columns]
+        assert g.size.width < sum(widths) <= 3 * g.size.width
+        await _check_look(pilot, app, g, "start")
+        await pilot.press("end")
+        await settle(pilot, app)
+        assert g.column_window()[2] > 0
+        await _check_look(pilot, app, g, "end")
+        await pilot.press("down", "home")
+        await settle(pilot, app)
+        await _check_look(pilot, app, g, "home")
+
+
 def _frame(g: GridTable) -> list:
     """The grid's lines as a real frame draws them: through every cache but the per-refresh one."""
     g._styles_cache.clear()
