@@ -7,7 +7,7 @@ Access paths:
 
 * **Unfiltered, unsorted** windows are read straight from the row groups that
   hold them with pyarrow (see ``_fetch_direct``) when that is cheaper than
-  DuckDB: DuckDB re-reads the footer and sets up a scan of every row group on
+  DuckDB: DuckDB sets up a scan of every row group (from its cached footer) on
   each query, so its cost grows with the number of row groups in the file.
   Otherwise they seek with DuckDB's ``file_row_number`` filter, which skips
   rows inside a large row group faster than pyarrow can decode them.
@@ -833,10 +833,10 @@ class ParquetDataset:
 
         pyarrow decodes every row from the start of a row group up to the last
         one needed; DuckDB skips rows inside a row group faster, but each query
-        re-reads the footer and sets up every row group in the file. Both pay
+        sets up every row group in the file. Both pay
         about the same to decode the first page of each column (with a bounded
         read buffer), so that cancels out. Constants are from 300-column
-        synthetic files and real 184/53-column ones (see PR #15)."""
+        synthetic files and real 184/53-column ones (PR #15, refitted in #16)."""
         leaves = self._leaves()
         md = self.meta
         decoded = 0.0
@@ -852,7 +852,8 @@ class ParquetDataset:
                     decoded += c.total_uncompressed_size * frac
                     compressed += c.total_compressed_size
         pa_ms = _PA_NS_PER_BYTE * 1e-6 * decoded
-        duck_ms = (_DUCK_MS_BASE + md.num_row_groups * (_DUCK_MS_PER_RG + _DUCK_MS_PER_RG_COL * len(names))
+        duck_ms = (_DUCK_MS_BASE + _DUCK_MS_PER_COL * len(names)
+                   + md.num_row_groups * (_DUCK_MS_PER_RG + _DUCK_MS_PER_RG_COL * len(names))
                    + _DUCK_SKIP_RATIO * pa_ms)
         return pa_ms <= duck_ms, compressed <= _PRE_BUFFER_MAX
 
@@ -887,7 +888,8 @@ class ParquetDataset:
                     size = g.column(i).total_uncompressed_size
                     decoded += max(size * frac, min(size, _FIRST_PAGE_BYTES))
         pa_ms = _PA_NS_PER_BYTE * 1e-6 * decoded
-        duck_ms = (_DUCK_MS_BASE + md.num_row_groups * (_DUCK_MS_PER_RG + _DUCK_MS_PER_RG_COL * len(columns))
+        duck_ms = (_DUCK_MS_BASE + _DUCK_MS_PER_COL * len(columns)
+                   + md.num_row_groups * (_DUCK_MS_PER_RG + _DUCK_MS_PER_RG_COL * len(columns))
                    + _DUCK_SKIP_RATIO * pa_ms)
         return min(pa_ms, duck_ms)
 
@@ -1163,12 +1165,16 @@ def _runs(rows: list[int]) -> list[tuple[int, int]]:
     return out
 
 
-# Cost model for ``ParquetDataset._direct_estimate`` (milliseconds / bytes).
+# Cost model for ``ParquetDataset._direct_estimate`` (milliseconds / bytes). DuckDB's
+# constants are with its parquet_metadata_cache on (the footer parsed once): fitted to
+# 150-row windows of 1, 20 and all columns on 300-column files with 5-2000 row groups,
+# SSSource and mpc_orbits (median model/measured 1.0; 10-90%: 0.5-1.2).
 _PA_NS_PER_BYTE = 3.0        # pyarrow decode time per uncompressed byte
-_DUCK_SKIP_RATIO = 0.4       # DuckDB's cost to skip a byte, relative to pyarrow decoding it
-_DUCK_MS_BASE = 10.0         # DuckDB per-query overhead
-_DUCK_MS_PER_RG = 0.6        # ... per row group in the file (footer + scan setup)
-_DUCK_MS_PER_RG_COL = 0.002  # ... per row group and selected column
+_DUCK_SKIP_RATIO = 0.3       # DuckDB's cost to skip a byte, relative to pyarrow decoding it
+_DUCK_MS_BASE = 4.0          # DuckDB per-query overhead
+_DUCK_MS_PER_COL = 0.1       # ... per selected column
+_DUCK_MS_PER_RG = 0.16       # ... per row group in the file (scan setup)
+_DUCK_MS_PER_RG_COL = 0.001  # ... per row group and selected column
 _PRE_BUFFER_MAX = 32 << 20   # pre-buffer (coalesce reads) only when the chunks are this small
 _READ_BUFFER = 1 << 20       # otherwise read through a buffer this size
 _FIRST_PAGE_BYTES = 256 << 10  # window_cost: what decoding a column chunk's first page costs, in bytes
