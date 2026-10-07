@@ -15,6 +15,8 @@ from textual.visual import RichVisual, Visual
 from textual.widgets import OptionList
 from textual.widgets.option_list import Option
 
+from .fmt import sanitize
+
 if TYPE_CHECKING:
     from typing_extensions import Self
 
@@ -233,7 +235,8 @@ class DetailList(CursorList):
         return Styled(grid, "reverse") if whole else grid
 
     def _grid(self, name: str, value: Text, name_reversed: bool, name_width: int) -> EntryGrid:
-        return EntryGrid(Text(name, style="bold reverse" if name_reversed else "bold"), value, name_width)
+        # (a column name is the file's: its control characters are shown, never sent to the terminal)
+        return EntryGrid(Text(sanitize(name), style="bold reverse" if name_reversed else "bold"), value, name_width)
 
     def watch_has_focus(self, has_focus: bool) -> None:
         super().watch_has_focus(has_focus)

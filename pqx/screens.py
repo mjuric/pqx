@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 
+from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -148,7 +149,7 @@ class FormatScreen(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog small"):
-            yield Label(f"[b]Format of[/b] [cyan]{escape(self.column)}[/cyan]")
+            yield Label(f"[b]Format of[/b] [cyan]{escape(F.sanitize(self.column))}[/cyan]")
             hint = ("%Y-%m-%d %H:%M" if self.kind == "time" else ".2f · .3e · ,d · .1% · 4 (digits)"
                     if F.default_digits(self.kind) is not None else ",d · x · >12")
             yield Label(f"[dim]{escape(hint)} · empty = automatic[/dim]")
@@ -192,7 +193,9 @@ class ColumnPicker(ModalScreen[list[str] | None]):
 
     def _selections(self, flt: str):
         f = flt.lower()
-        return [Selection(f"{n}  [dim]{t}[/dim]", n, n in self.chosen)
+        # a Text prompt, not markup: a column name is the file's, shown as it is (control characters
+        # as visible stand-ins), never parsed
+        return [Selection(Text.assemble(F.sanitize(n), "  ", (F.sanitize(t), "dim")), n, n in self.chosen)
                 for n, t in self.columns if f in n.lower()]
 
     @on(Input.Changed, "#picker-filter")
@@ -242,7 +245,7 @@ class ExportScreen(ModalScreen[dict | None]):
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog", id="export-box"):
             yield Label("[b]Export current view[/b]")
-            yield Label(f"[dim]{self.summary}[/dim]")
+            yield Label(f"[dim]{escape(F.sanitize(self.summary))}[/dim]")  # (names a column, the filter)
             yield Input(value=self.default_path, id="export-path")
             with RadioSet(id="export-format"):
                 yield RadioButton("Parquet (zstd)", value=True, id="fmt-parquet")
@@ -278,7 +281,7 @@ class ExportScreen(ModalScreen[dict | None]):
             return
         full = os.path.abspath(os.path.expanduser(path))
         if os.path.exists(full) and not self.query_one("#export-overwrite", Checkbox).value:
-            self.notify(f"{path} exists — tick 'Overwrite' to replace it", severity="warning")
+            self.notify(f"{escape(F.sanitize(path))} exists — tick 'Overwrite' to replace it", severity="warning")
             return
         self.dismiss(dict(path=full, fmt=self._fmt(),
                           visible_only=self.query_one("#export-visible", Checkbox).value))
@@ -335,12 +338,10 @@ class FieldDropdown(ModalScreen[str | None]):
             self.query_one("#dropdown-list").focus()
 
     def _fill(self, flt: str) -> None:
-        from rich.text import Text
-
         lst = self.query_one("#dropdown-list")
         f = flt.lower()
         shown = [o for o in self.all if f in o.lower()]
-        lst.set_items([(o, Text(o, style="bold" if o == self.current else "")) for o in shown],
+        lst.set_items([(o, Text(F.sanitize(o), style="bold" if o == self.current else "")) for o in shown],
                       width=self.box_w - 4)
         if shown:
             lst.highlighted = shown.index(self.current) if self.current in shown else 0

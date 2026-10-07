@@ -176,9 +176,46 @@ def override_error(value: int | str, kind: str | None = None, sample: Any = None
     return errors[0]  # the first sample is the column's own value, or a float
 
 
+# ------------------------------------------------------------ control characters
+# Text from a file (values, column names, metadata, the file's own name) must never reach the
+# terminal with its control characters: ESC, the C1 CSI (U+009B) and friends start escape
+# sequences that can retitle the window, write the clipboard (OSC 52) or redraw the screen.
+# They are shown as visible stand-ins instead: C0 as the Unicode control pictures (ESC is ␛),
+# DEL as ␡, C1 as a \x9b-style escape.
+def _control_repr(c: int) -> str:
+    if c < 0x20:
+        return chr(0x2400 + c)
+    if c == 0x7F:
+        return "␡"
+    return f"\\x{c:02x}"
+
+
+CONTROL_CHARS = frozenset([*range(0x20), *range(0x7F, 0xA0)])
+_CONTROLS = {c: _control_repr(c) for c in CONTROL_CHARS}
+_CONTROLS_BUT_WS = {c: r for c, r in _CONTROLS.items() if c not in (0x09, 0x0A)}
+
+
+def sanitize(s: str, keep_ws: bool = False) -> str:
+    """``s`` with its control characters (C0, DEL, C1) replaced by visible stand-ins.
+
+    ``keep_ws`` keeps tab and newline, which Rich lays out itself (for values shown
+    on several lines). Cheap for the usual string: one C-level check, no copy."""
+    if s.isprintable():
+        return s
+    return s.translate(_CONTROLS_BUT_WS if keep_ws else _CONTROLS)
+
+
+def has_controls(s: str, keep_ws: bool = False) -> bool:
+    """Whether ``sanitize(s, keep_ws)`` would change ``s``."""
+    return not s.isprintable() and s != s.translate(_CONTROLS_BUT_WS if keep_ws else _CONTROLS)
+
+
 def format_value(v: Any, kind: str, *, raw: bool = False, width: int = 40,
-                 override: int | str | None = None) -> str:
-    """Plain-text rendering of one value."""
+                 override: int | str | None = None, safe: bool = True) -> str:
+    """Plain-text rendering of one value.
+
+    Text comes out ``sanitize``-d (tab and newline kept), so it is safe to show;
+    ``safe=False`` leaves its control characters in."""
     if v is None:
         return NULL
     if isinstance(v, float):
@@ -194,6 +231,8 @@ def format_value(v: Any, kind: str, *, raw: bool = False, width: int = 40,
         except (ValueError, TypeError):
             pass  # a spec that doesn't fit this value: fall back to the automatic format
         else:
+            if safe and not s.isprintable():
+                s = sanitize(s, keep_ws=True)
             if width and len(s) > width and kind not in ("int", "float", "float32", *FIXED_DIGITS, *SIG_DIGITS):
                 s = s[: width - 1] + "…"
             return s
@@ -218,13 +257,14 @@ def format_value(v: Any, kind: str, *, raw: bool = False, width: int = 40,
         s = b[:16].hex()
         return f"0x{s}{'…' if len(b) > 16 else ''} ({len(b)} B)"
     if isinstance(v, dict):
-        s = "{" + ", ".join(f"{k}: {format_value(x, _guess_kind(x), raw=raw)}" for k, x in v.items()) + "}"
+        s = "{" + ", ".join(f"{k}: {format_value(x, _guess_kind(x), raw=raw, safe=safe)}"
+                            for k, x in v.items()) + "}"  # (keys are sanitized with the whole, below)
     elif isinstance(v, (list, tuple)):
         suffix = f" ({len(v)})" if len(v) > 3 else ""
         budget = (width - len(suffix) - 3) if (width and not raw) else 10**9
         items, used = [], 0
         for x in v:
-            it = format_value(x, _guess_kind(x), raw=raw, width=0)
+            it = format_value(x, _guess_kind(x), raw=raw, width=0, safe=safe)
             if used + len(it) + 2 > budget:
                 items.append("…")
                 break
@@ -233,6 +273,8 @@ def format_value(v: Any, kind: str, *, raw: bool = False, width: int = 40,
         return f"[{', '.join(items)}]{suffix}"
     else:
         s = str(v)
+    if safe and not s.isprintable():  # (the usual string is printable: one C-level check)
+        s = sanitize(s, keep_ws=True)
     if not raw and width and len(s) > width:
         s = s[: width - 1] + "…"
     return s
@@ -382,7 +424,7 @@ def short_type(t: pa.DataType) -> str:
         return f"dict<{short_type(t.value_type)}>"
     if pa.types.is_timestamp(t):
         return f"ts[{t.unit}{',' + t.tz if t.tz else ''}]"
-    s = str(t)
+    s = sanitize(str(t))  # a nested type names its fields
     return {"double": "f64", "float": "f32", "halffloat": "f16", "int64": "i64", "int32": "i32",
             "int16": "i16", "int8": "i8", "uint64": "u64", "uint32": "u32", "uint16": "u16",
             "uint8": "u8", "string": "str", "large_string": "str", "bool": "bool"}.get(s, s)
