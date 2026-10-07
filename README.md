@@ -14,7 +14,7 @@ Files of any size open in under a second.
 
 [Install](#install) · [Tour](#a-quick-tour) · [Big files](#built-for-big-files) · [Keys](#keys) · [Astronomy](#for-astronomers)
 
-<img src="docs/screenshots/hero.png" alt="pqx showing a 4-million-row taxi-trip file filtered to card payments over 10 miles" width="900">
+<img src="https://raw.githubusercontent.com/mjuric/pqx/master/docs/screenshots/hero.png" alt="pqx showing a 4-million-row taxi-trip file filtered to card payments over 10 miles" width="900">
 
 </div>
 
@@ -43,7 +43,7 @@ Scroll through every row and column with the keyboard or mouse. Headers show
 each column's type and unit. Press **d** to see the current row as a list, every
 column at full precision.
 
-<img src="docs/screenshots/detail.png" alt="The data grid with the row detail panel open" width="900">
+<img src="https://raw.githubusercontent.com/mjuric/pqx/master/docs/screenshots/detail.png" alt="The data grid with the row detail panel open" width="900">
 
 ### Filter and query with SQL
 
@@ -52,14 +52,14 @@ Column names complete as you type, and errors show inline without losing your
 place. The filter applies everywhere: grid, stats, plots and export. Press
 **=** on any cell to keep only rows with that value.
 
-<img src="docs/screenshots/sql.png" alt="A GROUP BY query over the file, shown as a table" width="900">
+<img src="https://raw.githubusercontent.com/mjuric/pqx/master/docs/screenshots/sql.png" alt="A GROUP BY query over the file, shown as a table" width="900">
 
 ### See the schema at a glance
 
 Every column with its type, unit, nulls, min/max, size on disk and
 compression, read from the file's footer without scanning the data.
 
-<img src="docs/screenshots/schema.png" alt="The Schema tab: types, nulls, min/max, sizes and compression for each column" width="900">
+<img src="https://raw.githubusercontent.com/mjuric/pqx/master/docs/screenshots/schema.png" alt="The Schema tab: types, nulls, min/max, sizes and compression for each column" width="900">
 
 ### Profile a column, plot two
 
@@ -69,8 +69,8 @@ columns, right in the terminal.
 
 <table>
 <tr>
-<td width="50%"><img src="docs/screenshots/stats.png" alt="Column statistics with a histogram"></td>
-<td width="50%"><img src="docs/screenshots/plot.png" alt="A density plot of pickup longitude and latitude"></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/mjuric/pqx/master/docs/screenshots/stats.png" alt="Column statistics with a histogram"></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/mjuric/pqx/master/docs/screenshots/plot.png" alt="A density plot of pickup longitude and latitude"></td>
 </tr>
 </table>
 
@@ -188,7 +188,7 @@ knows their conventions:
 - **Felis-style units and descriptions** (`"[unit] description"`) from Parquet
   field metadata.
 
-<img src="docs/screenshots/sky.png" alt="A Mollweide sky map of a million simulated solar-system detections" width="900">
+<img src="https://raw.githubusercontent.com/mjuric/pqx/master/docs/screenshots/sky.png" alt="A Mollweide sky map of a million simulated solar-system detections" width="900">
 
 `python -m pqx.demo demo.parquet --rows 1000000` writes a synthetic LSST-like
 file to try it on.
