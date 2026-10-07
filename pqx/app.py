@@ -49,7 +49,8 @@ from .cells import (FAILED_MARK, MISSING, PLACEHOLDER, UNAVAILABLE, CellRow, Col
                     widest_candidates)
 from .data import (ColumnStats, Page, ParquetDataset, Stopped, View, guess_sky_columns, is_plain_ident, is_sql_query,
                    parse_row_spec, quote_str, sql_column_ref, sql_ident, sql_text_literal)
-from .screens import ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen, HelpScreen
+from .screens import (FILTER_EXAMPLE, ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen,
+                      HelpScreen)
 from .widgets import CursorList, DetailList
 
 _terminal.install()  # X10/urxvt mouse (GNU screen) + lenient input decoding; see _terminal.py
@@ -115,7 +116,6 @@ def _epoch_label(v: float) -> str:
     return dt.datetime.fromtimestamp(v, dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
 
 
-FILTER_EXAMPLE = "price > 100 and city = 'Paris'"   # when the file has nothing better to show
 PLACEHOLDER_STR_MAX = 20
 
 

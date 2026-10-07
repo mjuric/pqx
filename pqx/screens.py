@@ -17,6 +17,9 @@ from . import AUTHOR, HOMEPAGE, __version__
 from . import fmt as F
 from .config import parse_override
 
+#: the filter box's example when the file has nothing better to show (and the help's)
+FILTER_EXAMPLE = "price > 100 and city = 'Paris'"
+
 HELP = """\
 # pqx — Parquet explorer
 
@@ -28,10 +31,10 @@ down into DuckDB.
 
 Press **/** and type either
 
-* a SQL **WHERE** expression — `mag < 21 and band = 'r'`,
-  `ssObjectId is not null`, `ra between 10 and 20`, `regexp_matches(name, '^20')`
+* a SQL **WHERE** expression — `""" + FILTER_EXAMPLE + """`,
+  `email is not null`, `price between 10 and 20`, `regexp_matches(name, '^20')`
 * or a full **query** over the table `t` —
-  `select band, count(*), avg(mag) from t group by 1 order by 1`
+  `select city, count(*), avg(price) from t group by 1 order by 1`
 
 **Enter** applies, **Esc** returns to the grid, **↑/↓** browse history and
 **→** accepts a column-name completion. **x** clears the filter, and

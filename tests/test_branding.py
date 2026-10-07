@@ -5,7 +5,7 @@ import pytest
 from textual.widgets import Input, Label, Static
 
 from pqx import __version__, cli
-from pqx.screens import HelpScreen
+from pqx.screens import HELP, HelpScreen
 from pqx.app import FILTER_EXAMPLE, PqxApp, filter_placeholder
 from pqx.cells import MISSING
 from pqx.fmt import sanitize
@@ -105,3 +105,4 @@ async def test_titlebar_and_help_show_version(demo_path):
         head = app.screen.query_one("#help-head", Label).render().plain
         assert f"pqx {__version__}" in head and "Written by Mario Juric" in head
         assert "https://github.com/mjuric/pqx" in head
+        assert FILTER_EXAMPLE in HELP and "mag < 21" not in HELP   # a general example, not an astronomy one
