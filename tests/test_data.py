@@ -45,6 +45,19 @@ def test_filter_sort_count(ds, truth):
     assert ds.find_row(v, page.row_numbers[3]) == 3
 
 
+def test_find_row(ds, truth):
+    v = View(where="band = 'r'")  # unsorted: a count of the matching rows before it
+    exp = list(truth.index[truth.band == "r"])
+    for pos in (0, 1, 999, 1000, len(exp) - 1):
+        assert ds.find_row(v, exp[pos]) == pos
+    assert ds.find_row(v, int(truth.index[truth.band != "r"][5])) is None  # not in the view
+    v = View(where="band = 'r'", order_by=[("mag", False)])  # sorted: numbered
+    exp = list(truth[truth.band == "r"].sort_values("mag", kind="stable").index)
+    for pos in (0, 1234, len(exp) - 1):
+        assert ds.find_row(v, exp[pos]) == pos
+    assert ds.find_row(View(), 777) == 777
+
+
 def test_sql_mode(ds, truth):
     v = View(sql="select band, count(*) as n from t group by band order by band")
     schema = ds.validate(v)

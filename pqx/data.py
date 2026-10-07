@@ -1032,11 +1032,22 @@ class ParquetDataset:
         return min(pa_ms, duck_ms)
 
     def find_row(self, view: View, file_row: int) -> int | None:
-        """Position of file row ``file_row`` within a filtered/sorted view."""
+        """Position of file row ``file_row`` within a filtered/sorted view (None if it isn't in it).
+
+        An unsorted view keeps the file's order, so there the position is a count
+        of the matching rows before it, which reads only the row groups up to it
+        (``file_row_number`` is pushed down); a sorted one numbers its rows."""
         if view.is_trivial:
             return file_row
         if view.sql.strip() or not self._has_rownum:
             return None
+        fr = int(file_row)
+        if not view.order_by:
+            sql = (f"SELECT count(*) FILTER (WHERE {self._rownum} < {fr}), "
+                   f"count(*) FILTER (WHERE {self._rownum} = {fr}) "
+                   f"FROM __pqx_src WHERE {self._rownum} <= {fr} AND ({view.where})")
+            before, hit = self.cursor().execute(check_select(sql)).fetchone()
+            return int(before) if hit else None
         base = self._base_sql(view, [self.column_names[0]], with_rownum=True)
         sql = (f"SELECT pos FROM (SELECT {self._rownum}, row_number() OVER () - 1 AS pos "
                f"FROM ({base})) WHERE {self._rownum} = {int(file_row)}")
