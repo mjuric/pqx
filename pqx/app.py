@@ -448,7 +448,7 @@ class PqxApp(App):
         self._last_error = ""
         self._stats_stale = True
         self._stats_shown: str | None = None
-        self._stats_rendered: tuple | None = None  # last _render_stats arguments, to reformat in place
+        self._stats_rendered: tuple | None = None  # (view, *last _render_stats arguments), to reformat in place
         self._count_secs: float | None = None
         # look: accent (focus) colour, how secondary text is dimmed, unfocused border colour
         self.accent = (accent or os.environ.get("PQX_ACCENT") or "blue").lower()
@@ -1170,8 +1170,9 @@ class PqxApp(App):
             col.content_width = max(line.cell_len for line in col.label.split())  # let it shrink to fit
         if self.page is not None:
             self._apply_page(self.page, grid.abs_row, grid.cursor_column)
-        if self._stats_rendered and self._stats_rendered[0] == fm.name and not self._stats_stale:
-            self._render_stats(*self._stats_rendered)  # reformat what's shown; no need to re-profile
+        if (self._stats_rendered and self._stats_rendered[0] is self.view and self._stats_rendered[1] == fm.name
+                and not self._stats_stale):
+            self._render_stats(*self._stats_rendered[1:])  # reformat what's shown; no need to re-profile
         name, shown = escape(fm.name), escape(F.describe_override(value, fm.kind) or "automatic")
         try:
             config.save_format(fm.name, value)
@@ -1524,7 +1525,7 @@ class PqxApp(App):
 
     @_ui
     def _render_stats(self, name: str, typ: pa.DataType, st: ColumnStats, hist, elapsed: float) -> None:
-        self._stats_rendered = (name, typ, st, hist, elapsed)
+        self._stats_rendered = (self.view, name, typ, st, hist, elapsed)
         self._stats_stale = False
         self._stats_shown = name
         d = self.dim

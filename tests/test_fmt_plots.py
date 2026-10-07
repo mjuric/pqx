@@ -146,6 +146,8 @@ def test_overrides():
     assert F.override_error(4, "int") and F.override_error(4, "flux") is None
     assert F.override_error(18, "flux") and F.override_error(".100000000f")  # would hang the grid
     assert F.override_error(".2f", "bool")
+    assert "Unknown format code" in F.override_error(".2q")  # not the timestamp hint
+    assert F.override_error("%Y-2026 (UTC+0100)") is None and F.override_error(".100%")
 
 
 def test_override_edge_cases():

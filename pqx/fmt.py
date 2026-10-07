@@ -103,7 +103,8 @@ MAX_DIGITS = 17
 #: Largest width or precision a format spec may ask for (a typo like .1000000f would hang the grid).
 MAX_SPEC_NUMBER = 64
 _SPEC_PRECISION = re.compile(r"\.(\d+)")
-_SPEC_NUMBER = re.compile(r"\d+")
+# a standard format spec: [[fill]align][sign][z][#][0][width][grouping][.precision][type]
+_STD_SPEC = re.compile(r"(?:.?[<>=^])?[-+ ]?z?#?0?(?P<width>\d*)[,_]?(?:\.(?P<prec>\d+))?[a-zA-Z%]?", re.S)
 #: Kinds a format spec doesn't apply to: they keep their automatic rendering.
 NO_SPEC_KINDS = ("bool", "binary", "nested")
 _SAMPLES = {"int": 1, "str": "abc", "time": dt.datetime(2026, 1, 2, 3, 4, 5)}
@@ -151,7 +152,8 @@ def override_error(value: int | str, kind: str | None = None, sample: Any = None
         if value > MAX_DIGITS:
             return f"at most {MAX_DIGITS} digits"
         return None
-    if any(int(n) > MAX_SPEC_NUMBER for n in _SPEC_NUMBER.findall(value)):
+    m = _STD_SPEC.fullmatch(value)  # anything else (strftime) can't ask for huge output
+    if m and any(int(n or 0) > MAX_SPEC_NUMBER for n in (m["width"], m["prec"])):
         return f"widths and precisions are limited to {MAX_SPEC_NUMBER}"
     if kind in NO_SPEC_KINDS:
         return f"{kind} columns can't take a format spec"
@@ -161,17 +163,17 @@ def override_error(value: int | str, kind: str | None = None, sample: Any = None
         samples = [_SAMPLES.get(kind, 1.5)]
     else:
         samples = [1.5, *_SAMPLES.values()]
-    err = ""
+    errors = []
     for v in samples:
         if isinstance(v, (dt.date, dt.time)) and "%" not in value:
-            err = "timestamps take strftime codes, e.g. %Y-%m-%d %H:%M"
+            errors.append("timestamps take strftime codes, e.g. %Y-%m-%d %H:%M")
             continue
         try:
             format(v, value)
             return None
         except (ValueError, TypeError) as e:
-            err = str(e)
-    return err
+            errors.append(str(e))
+    return errors[0]  # the first sample is the column's own value, or a float
 
 
 def format_value(v: Any, kind: str, *, raw: bool = False, width: int = 40,

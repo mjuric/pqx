@@ -585,3 +585,28 @@ async def test_format_dialog_markup_and_kinds(demo_path, config_home):
         await pilot.press("enter")
         await pilot.pause(0.1)
         assert len(str(g.get_cell_at(g.cursor_coordinate))) == 10
+
+
+async def test_format_change_does_not_resurrect_old_stats(demo_path):
+    from pqx.data import View
+
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        g.move_cursor(column=app.cols_shown.index("psfFlux"))
+        await pilot.press("i")  # profile psfFlux
+        await settle(pilot, app)
+        assert app._stats_rendered and app._stats_rendered[1] == "psfFlux"
+        await pilot.press("1")  # back to the grid, cursor still on psfFlux
+        await pilot.pause(0.1)
+        g.focus()
+        calls = []
+        app._render_stats = lambda *a: calls.append(a)
+        await pilot.press("less_than_sign")
+        await pilot.pause(0.1)
+        assert len(calls) == 1  # same view: reformatted in place
+        app.view = View(where="psfFlux < 0")  # a new view whose profile never arrived (e.g. cancelled)
+        await pilot.press("less_than_sign")
+        await pilot.pause(0.1)
+        assert len(calls) == 1  # old numbers are not redrawn under the new filter
