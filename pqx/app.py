@@ -13,11 +13,13 @@ import os
 import re
 import time
 from bisect import bisect_left, bisect_right
+from contextlib import contextmanager
 from itertools import accumulate
 
 import duckdb
 import pyarrow as pa
 from rich.console import Group
+from rich.padding import Padding
 from rich.segment import Segment
 from rich.style import Style
 from rich.table import Table
@@ -31,15 +33,18 @@ from textual.coordinate import Coordinate
 from textual.css.query import NoMatches
 from textual.markup import escape
 from textual.message import Message
+from textual.renderables.styled import Styled
 from textual.suggester import Suggester
 from textual.theme import Theme
 from textual.widgets import DataTable, Input, Label, OptionList, Static, TabbedContent, TabPane
-from textual.widgets.data_table import ColumnKey
+from textual.widgets._data_table import RowRenderables, default_cell_formatter
+from textual.widgets.data_table import ColumnKey, Row, RowKey
 
 from . import _terminal
 from . import config
 from . import fmt as F
 from . import plots
+from .cells import CellRow, ColumnCells, one_cell_per_char, RowCells, RowLayout, text_width, widest_candidates
 from .data import ColumnStats, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec, quote_ident
 from .screens import ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen, HelpScreen
 from .widgets import CursorList, DetailList
@@ -50,6 +55,7 @@ SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SAMPLE_ROWS = 2_000_000       # rows used for stats/plots when sampling
 AUTO_SAMPLE_ROWS = 200_000_000        # sampling defaults on above this many rows…
 AUTO_SAMPLE_BYTES = 8 * 1024 ** 3     # …or this file size
+WIDTH_SAMPLE_ROWS = 16        # rows spread through a window that size its non-numeric columns
 
 ACCENTS = ("blue", "cyan", "magenta", "green", "yellow")
 DIM_MODES = ("faint", "bright-black")
@@ -189,6 +195,9 @@ class GridTable(DataTable):
         self._geometry: tuple | None = None  # per-frame column positions; see _column_geometry
         self._widths: tuple = ()  # (column render widths, row label width, row labels shown)
         self._widths_gen = 0  # bumped whenever any of those change
+        #: per column, in column order: what its cells share (see pqx.cells); set by set_rows
+        self.cell_columns: list[ColumnCells] = []
+        self._fast_cell_styles: dict = {}  # see _cell_styles
 
     @property
     def ordered_columns(self) -> list:
@@ -283,8 +292,8 @@ class GridTable(DataTable):
 
         row_style = self._get_row_style(row_index, base_style)
         scrollable_row = []
-        if lo:
-            scrollable_row.append([Segment(" " * starts[lo])])  # columns left of the view
+        if lo:  # columns left of the view (all of them, when pinned ones push x1 past the end)
+            scrollable_row.append([Segment(" " * (starts[lo] if lo < len(cols) else ends[-1]))])
         for column_index in range(lo, hi):
             loc = Coordinate(row_index, column_index)
             scrollable_row.append(render_cell(
@@ -316,9 +325,15 @@ class GridTable(DataTable):
 
     def watch_scroll_x(self, old_value: float, new_value: float) -> None:
         super().watch_scroll_x(old_value, new_value)
+        self.fit_visible()
         self.post_message(self.HScroll())
 
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        super().watch_scroll_y(old_value, new_value)
+        self.fit_visible()
+
     def on_resize(self, event) -> None:
+        self.fit_visible()
         self.post_message(self.HScroll())
 
     def column_window(self) -> tuple[int, int, int, int]:
@@ -363,6 +378,268 @@ class GridTable(DataTable):
 
     def _page_rows(self) -> int:
         return max(1, self.scrollable_content_region.height - self.header_height - 1)
+
+    # ------------------------------------------------------- lazy cells
+    # Cells format on first draw (pqx.cells) and widen their column if they don't fit.
+    # Growth found while fitting cells for a draw (fit_visible, or a caller's sizing()
+    # block) is drawn by that same draw; growth found anywhere else (a renderer
+    # formatting a cell nobody fitted) schedules one relayout for the batch.
+    _sizing: bool = False  # inside sizing(): growth needn't schedule a relayout
+    _growth: int = 0  # how many times a column has widened (fit_visible compares before/after)
+    _relayout_pending: bool = False
+    FIT_PASSES = 4  # fit_visible: widening a column can bring others into view; this many rounds at most
+
+    def clear(self, columns: bool = False):
+        self.cell_columns = []
+        return super().clear(columns)
+
+    def column_cells(self, formatters: list[F.CellFormatter], raw: bool) -> list[ColumnCells]:
+        """Fresh per-column cell state for the current columns, wired to widen them."""
+        return [ColumnCells(fm, raw, col, self._widened) for fm, col in zip(formatters, self.ordered_columns)]
+
+    def set_rows(self, rows: list[tuple], labels: list[Text], cell_columns: list[ColumnCells]) -> None:
+        """Replace the (cleared) table's rows with ``rows`` of raw values, all at once.
+
+        Each row becomes a ``CellRow``, which makes its cells when they're first
+        asked for. Unlike ``add_row`` this measures no cells: column widths are
+        the caller's business (``ColumnCells`` widen their column as cells get
+        formatted). Row labels are measured here, since they're few."""
+        self.cell_columns = cell_columns
+        layout = RowLayout([c.key for c in self.ordered_columns], cell_columns)
+        locations, data, rows_meta = self._row_locations, self._data, self.rows
+        for i, (values, label) in enumerate(zip(rows, labels)):
+            key = RowKey()
+            locations[key] = i
+            data[key] = CellRow(values, layout)
+            rows_meta[key] = Row(key, 1, label)
+        if labels:
+            self._labelled_row_exists = True
+            self._label_column.content_width = max(self._label_column.content_width,
+                                                   max(text_width(t) for t in labels))
+        self._require_update_dimensions = True
+        self._update_count += 1
+        self.cursor_coordinate = self.cursor_coordinate
+        if self.row_count and self.columns and self.show_cursor and self.cursor_type != "none":
+            self._highlight_cursor()
+        self.refresh()
+        self.check_idle()
+
+    def _compute_row_renderables(self, row_index: int) -> RowRenderables:
+        """DataTable's, but a window row's cells are handed over as a lazy ``RowCells``:
+        DataTable would otherwise make (and check) a renderable for every column of
+        every row it draws, though only the columns in view are rendered."""
+        if row_index >= 0:
+            row_key = self._row_locations.get_key(row_index)
+            row = self._data.get(row_key)
+            meta = self.rows.get(row_key)
+            if isinstance(row, CellRow) and meta is not None:
+                label = None
+                if self._should_render_row_labels and meta.label:
+                    label = default_cell_formatter(meta.label, wrap=meta.height != 1, height=meta.height)
+                return RowRenderables(label, RowCells(row))
+        return super()._compute_row_renderables(row_index)
+
+    def _render_cell(self, row_index: int, column_index: int, base_style: Style, width: int,
+                     cursor: bool = False, hover: bool = False):
+        """DataTable's, with a fast path for the usual window cell: one line of plain Text
+        (no markup spans, every character one cell wide). Its segments — padding, the
+        justified and cropped text, padding — are built directly, with the styles Rich
+        gives them (learnt once per style combination from a one-character sample, see
+        _cell_styles); anything else goes through Rich as before."""
+        if row_index < 0 or column_index < 0 or self.cell_padding < 1 or self.render_all_columns:
+            return super()._render_cell(row_index, column_index, base_style, width, cursor, hover)
+        row_key = self._row_locations.get_key(row_index)
+        column_key = self._column_locations.get_key(column_index)
+        cache_key = (row_key, column_key, base_style, cursor, hover, self._show_hover_cursor, self._update_count,
+                     self._pseudo_class_state)
+        lines = self._cell_render_cache.get(cache_key)
+        if lines is not None:
+            return lines
+        row, meta = self._data.get(row_key), self.rows.get(row_key)
+        text = row.cell_at(column_index).text if isinstance(row, CellRow) and meta and meta.height == 1 else None
+        pad = self.cell_padding
+        inner = width - 2 * pad
+        s = text.plain if text is not None else ""
+        if not s or not one_cell_per_char(s):  # (tabs, wide or combining characters: Rich's job)
+            return super()._render_cell(row_index, column_index, base_style, width, cursor, hover)
+        if text.justify != "left":
+            s = s.rstrip()  # as Rich's right/center justification does
+        if (not s or inner < 1 or text._spans or text.justify not in ("left", "right", "center")
+                or text.overflow not in (None, "fold")):
+            return super()._render_cell(row_index, column_index, base_style, width, cursor, hover)
+        fixed = row_index < self.fixed_rows or column_index < self.fixed_columns
+        component, post = self._get_styles_to_render_cell(
+            False, False, fixed, hover, cursor, self.show_cursor, self._show_hover_cursor,
+            self.cursor_foreground_priority == "css", self.cursor_background_priority == "css")
+        styles = self._cell_styles(base_style, component, post, text.style)
+        if styles is None:
+            return super()._render_cell(row_index, column_index, base_style, width, cursor, hover)
+        n = len(s)
+        if n >= inner:
+            body = s[:inner]
+        elif text.justify == "right":
+            body = " " * (inner - n) + s
+        elif text.justify == "left":
+            body = s + " " * (inner - n)
+        else:
+            left = (inner - n) // 2
+            body = " " * left + s + " " * (inner - n - left)
+        where = Style.from_meta({"row": row_index, "column": column_index})
+        pad_style, body_style = styles[0] + where, styles[1] + where
+        edge = Segment(" " * pad, pad_style)
+        lines = [[edge, Segment(body, body_style), edge]]
+        self._cell_render_cache[cache_key] = lines
+        return lines
+
+    def _cell_styles(self, base_style: Style, component: Style, post: Style, text_style) -> tuple | None:
+        """The (padding, text) styles Rich gives a one-line Text cell, without the cell's
+        row/column meta: learnt by rendering a one-character sample the way DataTable
+        renders a cell. None if the sample doesn't come out as padding, text, padding."""
+        key = (base_style, component, post, text_style, self.cell_padding)
+        cache = self._fast_cell_styles
+        if key not in cache:
+            pad = self.cell_padding
+            sample = Text("x", style=text_style, justify="left")
+            options = self.app.console_options.update_dimensions(2 * pad + 1, 1).update(no_wrap=True)
+            lines = self.app.console.render_lines(
+                Styled(Padding(sample, (0, pad)), pre_style=base_style + component, post_style=post), options)
+            segs = lines[0] if len(lines) == 1 else []
+            ok = [seg.text for seg in segs] == [" " * pad, "x", " " * pad] and segs[0].style == segs[2].style
+            if len(cache) > 256:
+                cache.clear()
+            cache[key] = (segs[0].style, segs[1].style) if ok else None
+        return cache[key]
+
+    def add_column(self, *a, **kw):
+        if self.row_count and self.cell_columns:
+            # set_rows' CellRows share one column layout: a column added under them would read as missing.
+            raise NotImplementedError("add GridTable columns before set_rows (clear(columns=True) first)")
+        return super().add_column(*a, **kw)
+
+    def update_cell(self, *a, **kw):
+        # set_rows' CellRows hold Cells made from the window's values: a plain value put in
+        # their place would be drawn unformatted and never fitted. The app never edits cells.
+        raise NotImplementedError("GridTable cells come from set_rows; reload the window instead")
+
+    def remove_column(self, *a, **kw):
+        # A CellRow's layout is shared by the whole window; removing a column would desync it.
+        raise NotImplementedError("GridTable columns are rebuilt with clear(columns=True)")
+
+    def update_dimensions_now(self) -> None:
+        """Settle the virtual size now rather than on idle, so the cursor can be
+        scrolled into view at once (DataTable otherwise draws the top of the
+        table first, then scrolls after the refresh)."""
+        self._require_update_dimensions = False
+        new_rows = self._new_rows.copy()
+        self._new_rows.clear()
+        self._update_dimensions(new_rows)
+
+    def _widened(self) -> None:
+        """A cell outgrew its column (ColumnCells.on_grow)."""
+        self._growth += 1
+        if not self._sizing and not self._relayout_pending:
+            self._relayout_pending = True
+            self.call_later(self._relayout)
+
+    def _relayout(self) -> None:
+        self._relayout_pending = False
+        self.invalidate_cells()
+
+    @contextmanager
+    def sizing(self):
+        """Columns widened inside this block are drawn by the caller's own redraw: no extra one."""
+        outer, self._sizing = self._sizing, True
+        try:
+            yield
+        finally:
+            self._sizing = outer
+
+    def visible_cells(self) -> tuple[range, list[int]]:
+        """Rows and columns (indices) on screen at the current scroll position, partly visible ones included."""
+        cols = self.ordered_columns
+        fixed = min(self.fixed_columns, len(cols))
+        width = self.scrollable_content_region.width
+        x = self._row_label_column_width
+        out = []
+        for i in range(fixed):
+            out.append(i)
+            x += cols[i].get_render_width(self)
+        left, right = self.scroll_x + x, self.scroll_x + width
+        for i in range(fixed, len(cols)):
+            w = cols[i].get_render_width(self)
+            if x + w > left:
+                out.append(i)
+            x += w
+            if x >= right:
+                break
+        top = int(self.scroll_y)
+        h = max(0, self.scrollable_content_region.height - (self.header_height if self.show_header else 0))
+        return range(top, min(self.row_count, top + h + 1)), out
+
+    def fit_visible(self) -> None:
+        """Format the cells about to be drawn and widen any column they outgrow,
+        before the draw: a number is never shown cut off, even for a frame.
+
+        If that pushes the cursor cell (on screen until now) off it, as when a move
+        scrolls to a column that then widens, scroll it back into view."""
+        if not self.cell_columns or not self.row_count or self._sizing:
+            return
+        start = self._growth
+        cursor_was_in_view = self.cursor_cell_in_view()
+        for _ in range(self.FIT_PASSES):
+            before = self._growth
+            with self.sizing():
+                rows, cols = self.visible_cells()
+                self.fit_columns(rows, cols)
+            if self._growth == before:
+                break
+            self._update_count += 1  # every DataTable render cache is keyed on it
+            self.update_dimensions_now()
+            self.refresh()
+        if self._growth != start and cursor_was_in_view and not self.cursor_cell_in_view():
+            self._scroll_cursor_into_view()
+
+    def cursor_cell_in_view(self) -> bool:
+        """Whether the cursor cell is wholly on screen horizontally (a pinned one always is)."""
+        if self.cursor_type != "cell" or self.cursor_column < self.fixed_columns:
+            return True
+        region = self._get_cell_region(self.cursor_coordinate)
+        left = self._get_fixed_offset().left
+        return (self.scroll_x + left <= region.x
+                and region.right <= self.scroll_x + self.scrollable_content_region.width)
+
+    def scroll_cursor_fitted(self) -> None:
+        """Fit the cells on screen, then scroll the cursor cell into view (for after a
+        re-format, which can widen columns left of the cursor). The scroll's own fitting
+        keeps it in view if its column then widens (see fit_visible)."""
+        self.fit_visible()
+        if self.row_count:
+            self._scroll_cursor_into_view()
+
+    def watch_fixed_columns(self) -> None:
+        super().watch_fixed_columns()
+        self.fit_visible()  # pinning brings columns into view without scrolling
+
+    def invalidate_cells(self) -> None:
+        """Cells' text or column widths changed: drop rendered cells and lines, re-measure, redraw."""
+        self._update_count += 1  # every DataTable render cache is keyed on it
+        self.update_dimensions_now()
+        self.refresh()
+
+    def fit_columns(self, rows: list[int] | None = None, columns: list[int] | None = None) -> None:
+        """Format the cells in ``rows`` × ``columns`` (default: all), growing columns to fit them."""
+        if rows is None:
+            rows = range(self.row_count)
+        data = self._data
+        keys = [c.key for c in self.ordered_columns]
+        if columns is not None:
+            keys = [keys[i] for i in columns if i < len(keys)]
+        row_keys = [self._row_locations.get_key(r) for r in rows]
+        for rk in row_keys:
+            row = data.get(rk)
+            if isinstance(row, CellRow):
+                for k in keys:
+                    row[k].text  # noqa: B018  (formats and widens the column)
 
     def action_cursor_down(self) -> None:
         if self.cursor_row >= self.row_count - 1 and self.more_below():
@@ -936,21 +1213,51 @@ class PqxApp(App):
         grid.clear()
         grid.offset = page.offset
         fm = [self.formatters.get(n) or F.CellFormatter(n, t) for n, t in zip(page.columns, page.types)]
-        raw = self.raw
-        for i, row in enumerate(page.rows):
-            label_n = page.row_numbers[i] if page.row_numbers[i] is not None else page.offset + i
-            grid.add_row(*[f(v, raw) for f, v in zip(fm, row)], label=Text(f"{label_n:,}", style=self.dim))
+        # cells format themselves when first drawn (pqx.cells); widths come from a sample, below
+        dim, off = self.dim, page.offset
+        labels = [Text(f"{off + i if n is None else n:,}", style=dim) for i, n in enumerate(page.row_numbers)]
+        grid.set_rows(page.rows, labels, grid.column_cells(fm, self.raw))
         self.page = page
+        self._fit_columns()
+        grid.update_dimensions_now()  # so the cursor scrolls into view now, not after a first draw at the top
         if page.rows:
             r = max(0, min(len(page.rows) - 1, cursor_abs - page.offset))
-            grid.move_cursor(row=r, column=min(col, max(0, len(self.cols_shown) - 1)), animate=False)
-            grid.scroll_x = scroll_x
+            with grid.sizing():  # fit what's on screen once, where the scrolling ends
+                grid.scroll_x = scroll_x  # first: the cursor must end up in view, wherever this was
+                grid.move_cursor(row=r, column=min(col, max(0, len(self.cols_shown) - 1)), animate=False)
+            grid.scroll_cursor_fitted()
+        else:
+            grid.fit_visible()
         if self.total is None and len(page.rows) < grid.window:
             self.total = page.offset + len(page.rows)  # hit the end: we now know the size
             grid.total = self.total
         self._render_status()
         self._update_detail()
         self.call_after_refresh(self._render_hscroll)
+
+    def _fit_columns(self) -> None:
+        """Size the grid's columns for the window, formatting as few cells as possible.
+
+        A number or string column fits its likely widest values
+        (``widest_candidates``); any other column fits a sample of rows spread
+        through the window. The cells on screen are fitted before each draw
+        (``GridTable.fit_visible``), so a cell wider than this guess widens its
+        column before it is shown."""
+        grid = self.query_one(GridTable)
+        n = grid.row_count
+        if not n or self.page is None:
+            return
+        values = list(zip(*self.page.rows))
+        sampled = []
+        with grid.sizing():
+            for i, cc in enumerate(grid.cell_columns):
+                guess = widest_candidates(values[i], cc.fmt.kind, cc.raw) if i < len(values) else None
+                if guess is None:
+                    sampled.append(i)
+                else:
+                    cc.fit_values(guess)
+            if sampled:
+                grid.fit_columns(range(0, n, max(1, n // WIDTH_SAMPLE_ROWS)), sampled)
 
     @on(GridTable.HScroll)
     def _hscroll(self) -> None:
@@ -1343,8 +1650,12 @@ class PqxApp(App):
     def action_toggle_raw(self) -> None:
         self.raw = not self.raw
         grid = self.query_one(GridTable)
-        if self.page is not None:
-            self._apply_page(self.page, grid.abs_row, grid.cursor_column)
+        for cc in grid.cell_columns:  # cells re-format when next drawn
+            cc.invalidate(self.raw)
+        self._fit_columns()
+        grid.invalidate_cells()
+        grid.scroll_cursor_fitted()  # columns left of the cursor may have widened
+        self._render_status()
 
     def _cursor_formatter(self) -> F.CellFormatter | None:
         grid = self.query_one(GridTable)
@@ -1391,8 +1702,14 @@ class PqxApp(App):
         if col is not None:
             col.label = self._column_label(fm.name)
             col.content_width = max(line.cell_len for line in col.label.split())  # let it shrink to fit
-        if self.page is not None:
-            self._apply_page(self.page, grid.abs_row, grid.cursor_column)
+        for i, cc in enumerate(grid.cell_columns):
+            if cc.fmt.name == fm.name:  # re-format the column: all of it, so its width is exact
+                cc.fmt = fm
+                cc.invalidate()
+                with grid.sizing():
+                    grid.fit_columns(columns=[i])
+        grid.invalidate_cells()
+        grid.scroll_cursor_fitted()
         if (self._stats_rendered and self._stats_rendered[0] is self.view and self._stats_rendered[1] == fm.name
                 and not self._stats_stale):
             self._render_stats(*self._stats_rendered[1:])  # reformat what's shown; no need to re-profile
