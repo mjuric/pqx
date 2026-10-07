@@ -44,8 +44,10 @@ from . import _terminal
 from . import config
 from . import fmt as F
 from . import plots
-from .cells import CellRow, ColumnCells, one_cell_per_char, RowCells, RowLayout, text_width, widest_candidates
-from .data import ColumnStats, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec, quote_ident
+from .cells import (FAILED_MARK, MISSING, PLACEHOLDER, UNAVAILABLE, CellRow, ColumnCells, one_cell_per_char, RowCells, RowLayout, text_width,
+                    widest_candidates)
+from .data import (ColumnStats, Page, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec,
+                   quote_ident)
 from .screens import ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen, HelpScreen
 from .widgets import CursorList, DetailList
 
@@ -56,6 +58,13 @@ SAMPLE_ROWS = 2_000_000       # rows used for stats/plots when sampling
 AUTO_SAMPLE_ROWS = 200_000_000        # sampling defaults on above this many rows…
 AUTO_SAMPLE_BYTES = 8 * 1024 ** 3     # …or this file size
 WIDTH_SAMPLE_ROWS = 16        # rows spread through a window that size its non-numeric columns
+LAZY_TAGS = ("cols", "detail")  # query tags of the column fetches for a page (and "cell:<column>"; see load_window)
+LAZY_MIN_SAVING_MS = 20  # load a plain view's window lazily only if that's estimated to save this much
+DETAIL_FETCH_DELAY = 0.1  # s the Details pane waits (for the cursor to settle) before loading a page's columns
+#: a typical value per formatting kind, to size a column not loaded yet that has no statistics
+KIND_SAMPLES = {"float": -1.2345678901234567, "float32": -1.2345678, "flux": -1234.5678901, "err": 0.012345678,
+                "mag": 21.123456, "angle": 123.4567891, "mjd": 60000.123456789, "bool": True,
+                "time": dt.datetime(2026, 1, 2, 3, 4, 5, 678901)}
 
 ACCENTS = ("blue", "cyan", "magenta", "green", "yellow")
 DIM_MODES = ("faint", "bright-black")
@@ -101,6 +110,20 @@ def _ui(fn):
 
 def _epoch_label(v: float) -> str:
     return dt.datetime.fromtimestamp(v, dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+
+def _with_placeholders(page: Page, columns: list[str], types: dict[str, pa.DataType]) -> Page:
+    """``page`` (holding some of ``columns``) as a page of all ``columns``, with
+    ``MISSING`` for the values of those it doesn't hold (listed in ``missing``)."""
+    have = {n: i for i, n in enumerate(page.columns)}
+    n = len(page.rows)
+    held = list(zip(*page.rows)) if page.rows else [()] * len(page.columns)
+    absent = (MISSING,) * n
+    data = [held[have[c]] if c in have else absent for c in columns]
+    rows = list(zip(*data)) if data else [() for _ in range(n)]
+    return Page(page.offset, list(columns), rows, page.row_numbers,
+                [page.types[have[c]] if c in have else types.get(c, pa.null()) for c in columns],
+                missing={c for c in columns if c not in have})
 
 
 def pqx_theme(accent: str, border: str) -> Theme:
@@ -362,6 +385,25 @@ class GridTable(DataTable):
         if not vis:
             return (0, -1, hl, hr)
         return (vis[0], vis[-1], hl, hr)
+
+    def columns_near(self, column: int | None = None, screens: float = 1.0, width: int = 0) -> list[int]:
+        """Indices of the pinned columns and of the scrollable ones within ``screens``
+        screens of the view, or of where scrolling the cursor to ``column`` would
+        bring the view. ``width``: the widget's width, if it isn't laid out yet."""
+        cols = self.ordered_columns
+        n = len(cols)
+        fixed = min(self.fixed_columns, n)
+        starts = list(accumulate((c.get_render_width(self) for c in cols), initial=0))
+        view = max(1, (self.size.width or width) - self._row_label_column_width - starts[fixed])
+        x1 = self.scroll_x + starts[fixed]
+        x2 = x1 + view
+        if column is not None and fixed <= column < n:
+            if starts[column] < x1:  # the view will scroll left until the column is its first
+                x1, x2 = starts[column], starts[column] + view
+            elif starts[column + 1] > x2:  # ... or right until it's its last
+                x1, x2 = starts[column + 1] - view, starts[column + 1]
+        lo, hi = x1 - screens * view, x2 + screens * view
+        return list(range(fixed)) + [i for i in range(fixed, n) if starts[i + 1] > lo and starts[i] < hi]
 
     offset: int = 0
     total: int | None = None  # rows in the whole view, when known
@@ -626,6 +668,19 @@ class GridTable(DataTable):
         self.update_dimensions_now()
         self.refresh()
 
+    def invalidate_columns(self, keys) -> None:
+        """The cells of columns ``keys`` changed, not any width: drop just those rendered cells
+        (and the lines, which are cheap to rebuild from the others), and redraw. Unlike
+        ``invalidate_cells`` this keeps every other cell's rendering cached."""
+        keys = set(keys)
+        cache = self._cell_render_cache
+        for k in [k for k in cache.keys() if k[1] in keys]:
+            cache.discard(k)
+        self._row_render_cache.clear()
+        self._row_renderable_cache.clear()
+        self._line_cache.clear()
+        self.refresh()
+
     def fit_columns(self, rows: list[int] | None = None, columns: list[int] | None = None) -> None:
         """Format the cells in ``rows`` × ``columns`` (default: all), growing columns to fit them."""
         if rows is None:
@@ -859,6 +914,16 @@ class PqxApp(App):
         self.col_formats.update(formats or {})
         self.raw = False
         self.page = None
+        # Lazy columns (see load_window): each load_window bumps _page_gen; _shown_gen is the
+        # generation of the page on screen. Column fetches for a page merge only while both match.
+        self._page_gen = 0
+        self._shown_gen = 0
+        self._fetch_seq = 0
+        self._inflight: dict[str, tuple[int, int, frozenset]] = {}  # tag -> (seq, page gen, columns)
+        self._cols_failed: set[str] = set()  # columns that failed to load for the page on screen
+        self._cols_cancelled = False  # a fetch for the page on screen was cancelled (see cell_highlighted)
+        self._cell_waiters: dict[str, list] = {}  # cell fetch tag -> actions waiting for that column
+        self._chunk_stats: dict[tuple[int, int], tuple] = {}  # (row group, leaf) -> (min, max) or ()
         self.total: int | None = self.ds.num_rows if self.view.is_trivial else None
         big = self.ds.num_rows > AUTO_SAMPLE_ROWS or self.ds.file_size > AUTO_SAMPLE_BYTES
         self.sampling = big if sample is None else sample
@@ -1185,28 +1250,72 @@ class PqxApp(App):
                              (f"·{override}" if override else "", self.dim),
                              justify="right" if fm.right else "left")
 
-    @work(thread=True, exclusive=True, group="page")
     def load_window(self, offset: int, cursor_abs: int, column: int | None = None) -> None:
+        """Load the window of rows at ``offset`` (in a worker), cursor on row ``cursor_abs``.
+
+        Decoding cost follows the columns read, so when the view's rows have file
+        row numbers only the pinned columns and those within a screen of the view
+        are fetched; the others show placeholders until they come near the view
+        (``_ensure_columns``) or the Details pane needs them. A plain view's window
+        is read whole if that is cheap anyway (``ParquetDataset.window_cost``).
+        A new window cancels any column fetch still running for the old one."""
+        self._page_gen += 1
+        self._cancel_column_fetches()
+        shown = list(self.cols_shown)
+        cols = None
+        grid = self.query_one(GridTable)
+        if self.ds.has_row_ids(self.view) and len(grid.ordered_columns) == len(shown):
+            target = grid.cursor_column if column is None else column
+            near = grid.columns_near(min(target, len(shown) - 1), width=self.size.width)
+            if len(near) < len(shown):
+                cols = [shown[i] for i in near]
+            if cols and self.view.is_trivial:  # (a filter or sort scans whatever columns it reads: always worth it)
+                full = self.ds.window_cost(max(0, offset), grid.window, shown)
+                part = self.ds.window_cost(max(0, offset), grid.window, cols)
+                if full is None or part is None or full - part < LAZY_MIN_SAVING_MS:
+                    cols = None  # cheap enough to read whole: no placeholders, no fetches while scrolling
+        self._load_window(offset, cursor_abs, column, shown, cols, self._page_gen)
+
+    @work(thread=True, exclusive=True, group="page")
+    def _load_window(self, offset: int, cursor_abs: int, column: int | None, shown: list[str],
+                     cols: list[str] | None, gen: int) -> None:
         grid = self.query_one(GridTable)
         view = self.view
         offset = max(0, offset)
         self.call_from_thread(self._set_busy, "page", "loading rows")
         try:
             with self.ds.tagged("page"):
-                page = self.ds.fetch(view, offset, grid.window, self.cols_shown)
+                page = self.ds.fetch(view, offset, grid.window, cols or shown)
         except duckdb.InterruptException:
+            self.call_from_thread(self._page_failed, gen)
             return
         except Exception as e:  # noqa: BLE001
             self.call_from_thread(self._show_error, e)
+            self.call_from_thread(self._page_failed, gen)
             return
         finally:
             self.call_from_thread(self._set_busy, "page", None)
         if view is not self.view:
+            self.call_from_thread(self._page_failed, gen)
             return
-        self.call_from_thread(self._apply_page, page, cursor_abs, column)
+        if cols is not None:
+            page = _with_placeholders(page, shown, dict(self.result_schema))
+        self.call_from_thread(self._apply_page, page, cursor_abs, column, gen)
 
     @_ui
-    def _apply_page(self, page, cursor_abs: int, column: int | None) -> None:
+    def _page_failed(self, gen: int) -> None:
+        """A window load came to nothing (failed, cancelled, or its view changed meanwhile). If it
+        was the newest, the page on screen stays, and its columns load as before."""
+        if gen == self._page_gen:
+            self._page_gen += 1
+            self._shown_gen = self._page_gen
+            self._ensure_columns()  # load_window cancelled the page's column fetches: start again
+            self._update_detail()  # (re-arms the pane's fetch, if it's shown)
+
+    @_ui
+    def _apply_page(self, page, cursor_abs: int, column: int | None, gen: int | None = None) -> None:
+        if gen is not None and gen != self._page_gen:
+            return  # a newer window is on its way (or already shown): this one is superseded
         grid = self.query_one(GridTable)
         col = grid.cursor_column if column is None else column
         scroll_x = grid.scroll_x
@@ -1217,8 +1326,12 @@ class PqxApp(App):
         dim, off = self.dim, page.offset
         labels = [Text(f"{off + i if n is None else n:,}", style=dim) for i, n in enumerate(page.row_numbers)]
         grid.set_rows(page.rows, labels, grid.column_cells(fm, self.raw))
+        if page is not self.page:
+            self._cols_failed = set()
         self.page = page
+        self._shown_gen = self._page_gen if gen is None else gen
         self._fit_columns()
+        self._reserve_widths()
         grid.update_dimensions_now()  # so the cursor scrolls into view now, not after a first draw at the top
         if page.rows:
             r = max(0, min(len(page.rows) - 1, cursor_abs - page.offset))
@@ -1234,24 +1347,30 @@ class PqxApp(App):
         self._render_status()
         self._update_detail()
         self.call_after_refresh(self._render_hscroll)
+        self._ensure_columns()
 
-    def _fit_columns(self) -> None:
-        """Size the grid's columns for the window, formatting as few cells as possible.
+    def _fit_columns(self, columns: list[int] | None = None) -> None:
+        """Size the grid's columns (default: all) for the window, formatting as few cells as possible.
 
         A number or string column fits its likely widest values
         (``widest_candidates``); any other column fits a sample of rows spread
         through the window. The cells on screen are fitted before each draw
         (``GridTable.fit_visible``), so a cell wider than this guess widens its
-        column before it is shown."""
+        column before it is shown. Columns not loaded yet are left alone."""
         grid = self.query_one(GridTable)
         n = grid.row_count
-        if not n or self.page is None:
+        page = self.page
+        if not n or page is None:
             return
-        values = list(zip(*self.page.rows))
+        rows = page.rows
+        missing = page.missing
         sampled = []
         with grid.sizing():
-            for i, cc in enumerate(grid.cell_columns):
-                guess = widest_candidates(values[i], cc.fmt.kind, cc.raw) if i < len(values) else None
+            for i in range(len(grid.cell_columns)) if columns is None else columns:
+                if i >= len(grid.cell_columns) or (i < len(page.columns) and page.columns[i] in missing):
+                    continue
+                cc = grid.cell_columns[i]
+                guess = widest_candidates([r[i] for r in rows], cc.fmt.kind, cc.raw) if i < len(page.columns) else None
                 if guess is None:
                     sampled.append(i)
                 else:
@@ -1259,9 +1378,234 @@ class PqxApp(App):
             if sampled:
                 grid.fit_columns(range(0, n, max(1, n // WIDTH_SAMPLE_ROWS)), sampled)
 
+    # ------------------------------------------------------------ lazy columns
+    def _cancel_column_fetches(self) -> None:
+        """Forget and interrupt the column fetches for the page on screen (a new one is coming).
+        Tags don't interrupt each other, so each is interrupted here."""
+        tags = set(LAZY_TAGS) | set(self._inflight)
+        self._inflight.clear()
+        self._cell_waiters.clear()
+        for tag in tags:
+            self.ds.interrupt(tag)
+
+    def _lazy_ready(self) -> bool:
+        """Whether the page on screen has columns to load and no newer page is on its way."""
+        page = self.page
+        return page is not None and bool(page.missing) and self._shown_gen == self._page_gen
+
+    def _ensure_columns(self) -> None:
+        """Fetch the columns near the view that the page on screen doesn't have yet.
+
+        When a column within a screen of the view is missing, the missing ones
+        within two screens are fetched. One fetch at a time: while one runs,
+        columns it brings that are still near the view are left to it (and the
+        rest fetched when it's done); if none are, a fresh fetch replaces it (the
+        same tag interrupts the old one)."""
+        if not self._lazy_ready():
+            return
+        page = self.page
+        grid = self.query_one(GridTable)
+        if len(grid.ordered_columns) != len(page.columns):
+            return
+
+        coming = set()  # what the Details pane's fetch will bring anyway
+        detail = self._inflight.get("detail")
+        if detail is not None and detail[1] == self._page_gen:
+            coming = detail[2]
+
+        def missing(screens):
+            return [n for n in (page.columns[i] for i in grid.columns_near(screens=screens))
+                    if n in page.missing and n not in self._cols_failed and n not in coming]
+        need = missing(1)
+        if not need:
+            return
+        cur = self._inflight.get("cols")
+        if cur is not None and cur[1] == self._page_gen and cur[2] & set(need):
+            return  # its completion checks again
+        # a screen further than needed, so scrolling sideways fetches about once a screen, not every column
+        self._fetch_columns("cols", missing(2))
+
+    def _fetch_columns(self, tag: str, names: list[str], then=None) -> None:
+        """Fetch ``names`` for the page on screen under ``tag`` and merge them into it;
+        then call ``then()`` (if the page is still on screen)."""
+        self._fetch_seq += 1
+        self._inflight[tag] = (self._fetch_seq, self._page_gen, frozenset(names))
+        self._columns_worker(tag, self._fetch_seq, self._page_gen, self.page, list(names), then)
+
+    @work(thread=True, group="columns")
+    def _columns_worker(self, tag: str, seq: int, gen: int, page, names: list[str], then) -> None:
+        self.call_from_thread(self._set_busy, f"columns-{tag}", "loading columns")
+        got, err = None, None
+        try:
+            with self.ds.tagged(tag):
+                got = self.ds.fetch_columns(page.row_numbers, names)
+        except duckdb.InterruptException:
+            pass
+        except Exception as e:  # noqa: BLE001
+            err = e
+        finally:
+            self.call_from_thread(self._set_busy, f"columns-{tag}", None)
+        self.call_from_thread(self._columns_done, tag, seq, gen, page, names, got, err, then)
+
+    @_ui
+    def _columns_done(self, tag: str, seq: int, gen: int, page, names: list[str], got, err, then) -> None:
+        cur = self._inflight.get(tag)
+        latest = cur is not None and cur[0] == seq
+        if latest:
+            del self._inflight[tag]
+        current = gen == self._page_gen and page is self.page
+        if latest and (got is None or not current):
+            self._cell_waiters.pop(tag, None)  # the actions waiting on it are dropped with it
+        if latest and current and got is None and err is None:
+            self._cols_cancelled = True  # not retried by itself (Esc means stop), but on the next move
+        if err is not None and current:
+            self._cols_failed.update(names)
+            self._mark_unavailable(page, names)
+            self.notify(f"Couldn't load {len(names)} column{'s' if len(names) != 1 else ''}: "
+                        f"{escape(str(err).splitlines()[0][:200])}", title="✗ Columns", severity="error", timeout=6)
+        if got is None or not current:
+            return  # cancelled (Esc, a newer fetch, a new page) or superseded: nothing to merge
+        self._merge_columns(page, got)
+        if then is not None:
+            then()
+        self._ensure_columns()
+
+    def _mark_unavailable(self, page, names: list[str]) -> None:
+        """Show the columns ``names`` that failed to load for ``page`` as such (✗), not as loading.
+        They stay missing (and aren't fetched again for this page)."""
+        idx = {n: i for i, n in enumerate(page.columns)}
+        cols = [idx[n] for n in names if n in idx and n in page.missing]
+        if not cols:
+            return
+        rows = page.rows
+        for r in range(len(rows)):
+            vals = list(rows[r])
+            for i in cols:
+                if vals[i] is MISSING:
+                    vals[i] = UNAVAILABLE
+            rows[r] = tuple(vals)
+        grid = self.query_one(GridTable)
+        if grid.row_count == len(rows) and len(grid.cell_columns) == len(page.columns):
+            keys = [ColumnKey(page.columns[i]) for i in cols]
+            data, locations = grid._data, grid._row_locations
+            for r in range(len(rows)):
+                row = data.get(locations.get_key(r))
+                if isinstance(row, CellRow):
+                    row.set_values(rows[r], keys)
+            grid.invalidate_columns(keys)
+        self._update_detail()
+
+    def _merge_columns(self, page, got) -> None:
+        """Put the fetched columns ``got`` (for ``page``'s rows) into the page and the grid.
+        Only columns still missing are filled: loaded values are never replaced."""
+        idx = {n: i for i, n in enumerate(page.columns)}
+        pairs = [(idx[n], j) for j, n in enumerate(got.columns) if n in page.missing and n in idx]
+        if not pairs or len(got.rows) != len(page.rows):
+            return
+        got_cols = list(zip(*got.rows))
+        rows = page.rows
+        for r in range(len(rows)):
+            vals = list(rows[r])
+            for i, j in pairs:
+                vals[i] = got_cols[j][r]
+            rows[r] = tuple(vals)
+        for i, j in pairs:
+            page.types[i] = got.types[j]
+        names = [page.columns[i] for i, _ in pairs]
+        page.missing.difference_update(names)
+        grid = self.query_one(GridTable)
+        if grid.row_count == len(rows) and len(grid.cell_columns) == len(page.columns):
+            keys = [ColumnKey(n) for n in names]
+            data, locations = grid._data, grid._row_locations
+            for r in range(len(rows)):
+                row = data.get(locations.get_key(r))
+                if isinstance(row, CellRow):
+                    row.set_values(rows[r], keys)
+            was_in_view = grid.cursor_cell_in_view()
+            growth = grid._growth
+            self._fit_columns([i for i, _ in pairs])
+            if grid._growth != growth:
+                grid.invalidate_cells()  # widths changed: everything moves
+            else:
+                grid.invalidate_columns(keys)  # (the usual case, with reserved widths)
+            grid.fit_visible()
+            if was_in_view and not grid.cursor_cell_in_view():
+                grid._scroll_cursor_into_view()  # a column left of the cursor outgrew its reserve
+            self.call_after_refresh(self._render_hscroll)
+        self._update_detail()
+
+    def _reserve_widths(self, columns: list[int] | None = None) -> None:
+        """Make the not-yet-loaded columns (of ``columns``, default all) as wide as their
+        values will likely be, so the grid doesn't shift when they arrive: from the
+        min/max statistics of the row groups the page comes from, else from the kind."""
+        page, grid = self.page, self.query_one(GridTable)
+        if page is None or not page.missing or len(grid.cell_columns) != len(page.columns):
+            return
+        rgs = None
+        with grid.sizing():
+            for i in range(len(page.columns)) if columns is None else columns:
+                name = page.columns[i]
+                if name not in page.missing:
+                    continue
+                if rgs is None:
+                    rgs = self._page_row_groups(page)
+                cc = grid.cell_columns[i]
+                cc.fit(self._reserved_width(name, cc.fmt, cc.raw, rgs))
+
+    def _page_row_groups(self, page, limit: int = 8) -> list[int]:
+        """Row groups holding the page's rows (at most ``limit``, spread out)."""
+        starts = self.ds._rg_starts()
+        rns = [r for r in page.row_numbers if r is not None]
+        if not starts or not rns:
+            return []
+        rgs = sorted({bisect_right(starts, r) - 1 for r in (rns if len(rns) <= 4096 else rns[::len(rns) // 4096])})
+        if len(rgs) > limit:
+            rgs = [rgs[round(k * (len(rgs) - 1) / (limit - 1))] for k in range(limit)]
+        return rgs
+
+    def _chunk_min_max(self, rg: int, leaf: int) -> tuple:
+        key = (rg, leaf)
+        hit = self._chunk_stats.get(key)
+        if hit is None:
+            hit = ()
+            try:
+                st = self.ds.meta.row_group(rg).column(leaf).statistics
+                if st is not None and st.has_min_max:
+                    hit = (st.min, st.max)
+            except Exception:  # noqa: BLE001 - statistics pyarrow can't decode: none
+                pass
+            self._chunk_stats[key] = hit
+        return hit
+
+    def _reserved_width(self, name: str, fm: F.CellFormatter, raw: bool, rgs: list[int]) -> int:
+        """How wide ``name``'s values likely format: its row groups' min and max (for a
+        float kind with all its significant digits, as a real value has), else a typical
+        value of its kind. Capped at the width a long string is cut to."""
+        leaves = self.ds._leaves().get(name, [])
+        vals: list = []
+        if len(leaves) == 1:
+            for rg in rgs:
+                vals.extend(self._chunk_min_max(rg, leaves[0]))
+        if fm.kind in F.SIG_DIGITS:
+            floats = [v for v in vals if isinstance(v, float) and math.isfinite(v)]
+            vals = [math.copysign(1.2345678901234567, v) * 10.0 ** math.floor(math.log10(abs(v)))
+                    if isinstance(v, float) and math.isfinite(v) and v else v for v in vals]
+            if floats and min(floats) < 0 < max(floats):  # values near zero, with leading zeros
+                vals += [-0.012345678901234567, 0.012345678901234567]
+        if not vals and fm.kind in KIND_SAMPLES:
+            vals = [KIND_SAMPLES[fm.kind]]
+        width = 0
+        for v in vals:
+            try:
+                width = max(width, text_width(fm.plain(v, raw)))
+            except Exception:  # noqa: BLE001 - a statistic of an unexpected type: no guess from it
+                pass
+        return min(width, 40)
+
     @on(GridTable.HScroll)
     def _hscroll(self) -> None:
         self._debounced("hscroll", 0.03, self._render_hscroll)
+        self._ensure_columns()
 
     @_ui
     def _render_hscroll(self) -> None:
@@ -1315,6 +1659,9 @@ class PqxApp(App):
         self._hidden_hint = None
         self._render_status()
         self._update_detail()
+        if self._cols_cancelled:  # columns left loading by a cancelled fetch (Esc): load them now
+            self._cols_cancelled = False
+            self._ensure_columns()
 
     @on(DataTable.CellSelected, "#grid")
     def cell_selected(self) -> None:
@@ -1325,6 +1672,7 @@ class PqxApp(App):
         self._sort_by(str(event.column_key.value))
 
     def _cursor_value(self):
+        """``(column, value)`` under the grid cursor; the value is ``MISSING`` if the column isn't loaded yet."""
         grid = self.query_one(GridTable)
         if self.page is None or not self.page.rows:
             return None, None
@@ -1333,6 +1681,31 @@ class PqxApp(App):
         if r >= len(self.page.rows) or c >= len(self.page.columns):
             return None, None
         return self.page.columns[c], self.page.rows[r][c]
+
+    def _with_cursor_value(self, fn) -> None:
+        """Call ``fn(column, value)`` with the value under the cursor, loading its column first if need be."""
+        name, v = self._cursor_value()
+        if name is None:
+            return
+        if v is UNAVAILABLE:
+            self.notify(f"{escape(name)} couldn't be loaded for these rows", severity="error", timeout=4)
+            return
+        if v is not MISSING:
+            fn(name, v)
+            return
+        page, r, c = self.page, self.query_one(GridTable).cursor_row, self.query_one(GridTable).cursor_column
+
+        def then():
+            if self.page is page and page.rows[r][c] is not MISSING and page.rows[r][c] is not UNAVAILABLE:
+                fn(name, page.rows[r][c])
+        # one fetch per column: a second action on it while it loads waits for the same fetch
+        tag = f"cell:{name}"
+        waiting = self._cell_waiters.setdefault(tag, [])
+        waiting.append(then)
+        cur = self._inflight.get(tag)
+        if cur is not None and cur[1] == self._page_gen:
+            return
+        self._fetch_columns(tag, [name], lambda: [f() for f in self._cell_waiters.pop(tag, [])])
 
     # ---------------------------------------------------------- current column
     def set_current_column(self, name: str | None, source: str) -> None:
@@ -1400,6 +1773,12 @@ class PqxApp(App):
         cur_col = self.page.columns[grid.cursor_column] if grid.cursor_column < len(self.page.columns) else None
         entries = []
         for name, typ, v in zip(self.page.columns, self.page.types, row):
+            if v is MISSING:  # loading (_fetch_detail_columns, below)
+                entries.append((name, Text(PLACEHOLDER, style=self.dim)))
+                continue
+            if v is UNAVAILABLE:
+                entries.append((name, Text.assemble((FAILED_MARK, "red"), (" couldn't load", self.dim))))
+                continue
             fmt = self.formatters.get(name) or F.CellFormatter(name, typ)
             full = F.format_value(F.shortest(v, typ), fmt.kind, raw=True, width=0)
             if len(full) > 300:  # keep one huge JSON/blob from burying every other column
@@ -1416,6 +1795,21 @@ class PqxApp(App):
         lst = self.query_one(DetailList)
         lst.set_entries(entries, min(22, max((len(n) for n, _ in entries), default=0)))
         lst.select(cur_col)
+        if self.page.missing - self._cols_failed:
+            self._debounced("detail-columns", DETAIL_FETCH_DELAY, self._fetch_detail_columns)
+
+    def _fetch_detail_columns(self) -> None:
+        """The pane shows every column: fetch all the page's missing ones, once per page
+        (they're merged into the page, so the grid has them too, and every row of it)."""
+        if not self._lazy_ready() or not self.query_one("#detail").display:
+            return
+        cur = self._inflight.get("detail")
+        if cur is not None and cur[1] == self._page_gen:
+            return
+        page = self.page
+        names = [n for n in page.columns if n in page.missing and n not in self._cols_failed]
+        if names:
+            self._fetch_columns("detail", names)
 
     # --------------------------------------------------------------- filtering
     def action_focus_filter(self) -> None:
@@ -1539,9 +1933,9 @@ class PqxApp(App):
         self.action_clear_filter()
 
     def action_filter_value(self) -> None:
-        name, v = self._cursor_value()
-        if name is None:
-            return
+        self._with_cursor_value(self._filter_value)
+
+    def _filter_value(self, name: str, v) -> None:
         if self.view.sql:
             self.notify("= filtering works on the table, not on SQL results", severity="warning")
             return
@@ -1646,6 +2040,7 @@ class PqxApp(App):
         grid = self.query_one(GridTable)
         grid.fixed_columns = 0 if grid.fixed_columns else grid.cursor_column + 1
         self.call_after_refresh(self._render_hscroll)
+        self.call_after_refresh(self._ensure_columns)  # pinning brings columns into view without scrolling
 
     def action_toggle_raw(self) -> None:
         self.raw = not self.raw
@@ -1653,6 +2048,7 @@ class PqxApp(App):
         for cc in grid.cell_columns:  # cells re-format when next drawn
             cc.invalidate(self.raw)
         self._fit_columns()
+        self._reserve_widths()  # raw values are wider: so are the ones still loading
         grid.invalidate_cells()
         grid.scroll_cursor_fitted()  # columns left of the cursor may have widened
         self._render_status()
@@ -1683,12 +2079,12 @@ class PqxApp(App):
         fm = self._cursor_formatter()
         if fm is None:
             return
-        _, sample = self._cursor_value()
 
         def done(text):
             if text is not None:
                 self._set_format(fm, config.parse_override(text))
-        self.push_screen(FormatScreen(fm.name, fm.kind, fm.override, sample), done)
+        self._with_cursor_value(lambda _, sample: self.push_screen(FormatScreen(fm.name, fm.kind, fm.override,
+                                                                                  sample), done))
 
     def _set_format(self, fm: F.CellFormatter, value: int | str | None) -> None:
         """Apply a column's format override (None = automatic), redraw, and remember it."""
@@ -1708,6 +2104,7 @@ class PqxApp(App):
                 cc.invalidate()
                 with grid.sizing():
                     grid.fit_columns(columns=[i])
+                self._reserve_widths([i])  # (if it's still loading)
         grid.invalidate_cells()
         grid.scroll_cursor_fitted()
         if (self._stats_rendered and self._stats_rendered[0] is self.view and self._stats_rendered[1] == fm.name
@@ -1723,9 +2120,9 @@ class PqxApp(App):
         self.notify(f"✓ {name}: {shown}", timeout=2)
 
     def action_copy_cell(self) -> None:
-        name, v = self._cursor_value()
-        if name is None:
-            return
+        self._with_cursor_value(self._copy_value)
+
+    def _copy_value(self, name: str, v) -> None:
         typ = dict(self.result_schema).get(name, pa.null())
         s = F.format_value(F.shortest(v, typ), "float", raw=True, width=0) if v is not None else ""
         self.copy_to_clipboard(s)

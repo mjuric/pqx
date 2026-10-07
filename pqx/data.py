@@ -100,6 +100,8 @@ class Page:
     rows: list[tuple]
     row_numbers: list[int | None]  # file row number per row (None for SQL results)
     types: list[pa.DataType]
+    #: columns not fetched yet (the app's placeholders stand in for their values; see fetch_columns)
+    missing: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -450,7 +452,8 @@ class ParquetDataset:
         if any(r < 0 or r >= self.num_rows for r in rows):
             raise IndexError("file row out of range")
         if rows:
-            tbl, token = self._read_rows(rows, names)
+            contiguous = rows == list(range(rows[0], rows[0] + len(rows)))  # a plain view's window: no take
+            tbl, token = self._read_rows(range(rows[0], rows[0] + len(rows)) if contiguous else rows, names)
             if tbl is not None:
                 return _page(0, tbl, rows)
         else:
@@ -469,7 +472,7 @@ class ParquetDataset:
         else:  # no row-number column to select by: contiguous runs with LIMIT/OFFSET
             tbl = pa.concat_tables([_arrow(cur.execute(f"SELECT {cols} FROM {TABLE} LIMIT {b - a} OFFSET {a}"))
                                     for a, b in _runs(uniq)])
-        if uniq:
+        if uniq and uniq != rows:
             pos = {r: i for i, r in enumerate(uniq)}
             tbl = _take(tbl, [pos[r] for r in rows])
         return _page(0, self._fix_wide_decimals(tbl, rows), rows)
@@ -731,6 +734,41 @@ class ParquetDataset:
         duck_ms = (_DUCK_MS_BASE + md.num_row_groups * (_DUCK_MS_PER_RG + _DUCK_MS_PER_RG_COL * len(names))
                    + _DUCK_SKIP_RATIO * pa_ms)
         return pa_ms <= duck_ms, compressed <= _PRE_BUFFER_MAX
+
+    def window_cost(self, offset: int, limit: int, columns: list[str]) -> float | None:
+        """Rough milliseconds to fetch rows ``[offset, offset + limit)`` of ``columns``
+        in a plain (unfiltered, unsorted) view, by the cheaper of pyarrow and DuckDB,
+        or ``None`` if unknown. For weighing fetching columns up front against later.
+
+        As ``_direct_estimate``, plus the first page of each column chunk, which
+        either reader decodes whatever the rows: the cost of a column even near
+        the start of a row group (~1 ms each on SSSource's 1M-row row groups)."""
+        starts = self._rg_starts()
+        if starts is None:
+            return None
+        end = min(offset + limit, self.num_rows)
+        need: dict[int, int] = {}
+        r = max(0, bisect.bisect_right(starts, offset) - 1)
+        while r < len(starts) - 1 and starts[r] < end:
+            if min(end, starts[r + 1]) > max(offset, starts[r]):
+                need[r] = min(end, starts[r + 1]) - starts[r]
+            r += 1
+        leaves = self._leaves()
+        md = self.meta
+        decoded = 0.0
+        for r, upto in need.items():
+            g = md.row_group(r)
+            if g.num_rows <= 0:
+                continue
+            frac = min(1.0, upto / g.num_rows)
+            for name in columns:
+                for i in leaves.get(name, ()):
+                    size = g.column(i).total_uncompressed_size
+                    decoded += max(size * frac, min(size, _FIRST_PAGE_BYTES))
+        pa_ms = _PA_NS_PER_BYTE * 1e-6 * decoded
+        duck_ms = (_DUCK_MS_BASE + md.num_row_groups * (_DUCK_MS_PER_RG + _DUCK_MS_PER_RG_COL * len(columns))
+                   + _DUCK_SKIP_RATIO * pa_ms)
+        return min(pa_ms, duck_ms)
 
     def find_row(self, view: View, file_row: int) -> int | None:
         """Position of file row ``file_row`` within a filtered/sorted view."""
@@ -1012,6 +1050,7 @@ _DUCK_MS_PER_RG = 0.6        # ... per row group in the file (footer + scan setu
 _DUCK_MS_PER_RG_COL = 0.002  # ... per row group and selected column
 _PRE_BUFFER_MAX = 32 << 20   # pre-buffer (coalesce reads) only when the chunks are this small
 _READ_BUFFER = 1 << 20       # otherwise read through a buffer this size
+_FIRST_PAGE_BYTES = 256 << 10  # window_cost: what decoding a column chunk's first page costs, in bytes
 
 _STRINGS = (pa.types.is_string, pa.types.is_large_string, pa.types.is_string_view)
 _BINARIES = (pa.types.is_binary, pa.types.is_large_binary, pa.types.is_fixed_size_binary,
