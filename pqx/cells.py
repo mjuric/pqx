@@ -13,6 +13,10 @@ of 150 x 300 values then allocates cells for what is drawn, not all 45,000.
 
 A column never narrows here: when a cell turns out wider than its column, the
 column grows (see :meth:`ColumnCells.fit`).
+
+A value of :data:`MISSING` is a column not fetched yet (the grid loads columns
+as they scroll into view): its cell shows a dim placeholder until the window's
+values arrive and replace the row's values.
 """
 from __future__ import annotations
 
@@ -27,7 +31,28 @@ from typing import Any, Callable
 from rich.cells import cell_len, get_character_cell_size
 from rich.text import Text
 
+from . import fmt as _fmt
 from .fmt import CellFormatter
+
+
+class _Missing:
+    """The value of a cell whose column isn't loaded yet (see :data:`MISSING`)."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "MISSING"
+
+
+#: Stands in for the values of a column that hasn't been fetched yet.
+MISSING = _Missing()
+#: What a not-yet-loaded cell shows.
+PLACEHOLDER = "…"
+
+
+def placeholder(fmt: CellFormatter) -> Text:
+    """The dim placeholder of a not-yet-loaded cell, aligned like the column's values."""
+    return Text(PLACEHOLDER, style=_fmt.DIM, justify="right" if fmt.right else "left")
 
 
 class ColumnCells:
@@ -143,6 +168,10 @@ class Cell:
     def text(self) -> Text:
         col = self.col
         if self._gen != col.gen:
+            if self.value is MISSING:  # not loaded yet: nothing to fit the column to
+                self._text = placeholder(col.fmt)
+                self._gen = col.gen
+                return self._text
             t = col.fmt(self.value, col.raw)
             self._text = t
             self._gen = col.gen
@@ -198,6 +227,13 @@ class CellRow(dict):
         key = self.layout.keys[i]
         cell = dict.get(self, key)
         return self[key] if cell is None else cell
+
+    def set_values(self, values: tuple, keys) -> None:
+        """Take the row's new ``values``, which differ from the old ones only in the
+        columns ``keys`` (columns that were loaded since): their cells are made afresh."""
+        self.values = values
+        for k in keys:
+            self.pop(k, None)
 
 
 class RowCells(Sequence):
