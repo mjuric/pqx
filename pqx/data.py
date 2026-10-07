@@ -139,6 +139,9 @@ class ParquetDataset:
         self._types_done = threading.Event()
         self._types_thread: threading.Thread | None = None
         self._io_errors = 0
+        self._bad_rgs: set[int] = set()  # row groups pyarrow failed on in a way we couldn't pin down
+        self._wide_decimals = {f.name for f in self.arrow_schema
+                               if pa.types.is_decimal(f.type) and f.type.precision > 38}
         # database-wide config, so every cursor shows timestamps in UTC rather than local time
         self.con = duckdb.connect(":memory:", config={"TimeZone": "UTC"})
         if threads:
@@ -378,7 +381,34 @@ class ParquetDataset:
             rn = list(range(offset, offset + tbl.num_rows))
         else:
             rn = [None] * tbl.num_rows
+        if not is_sql:
+            tbl = self._fix_wide_decimals(tbl, rn)
         return _page(offset, tbl, rn)
+
+    def has_row_ids(self, view: View) -> bool:
+        """Whether ``fetch(view, ...)`` pages carry file row numbers (needed by
+        ``fetch_columns``): not for SQL results, nor for filtered or sorted views
+        of files with their own ``file_row_number`` column (DuckDB can't number
+        those rows). For such pages fetch every column with ``fetch`` instead."""
+        return not view.sql.strip() and (view.is_trivial or self._has_rownum)
+
+    def _fix_wide_decimals(self, tbl: pa.Table, rn: list) -> pa.Table:
+        """Replace DuckDB's values of decimals wider than 38 digits with correct ones.
+
+        DuckDB 1.5 reads such Parquet decimals as wrong doubles (-1.50 as
+        -24998051.85), so pages it serves get these columns re-read directly for
+        the same file rows, and a column shows the same, correct values however
+        it's scrolled. Filters and statistics still see DuckDB's values. Drop
+        this once ``test_decimal256_values_are_right`` says DuckDB is fixed."""
+        wide = [n for n in tbl.column_names if n in self._wide_decimals]
+        if not wide or not rn or any(r is None for r in rn):
+            return tbl
+        fixed, _ = self._read_rows(rn, wide, force=True)
+        if fixed is None:
+            return tbl
+        for n in wide:
+            tbl = tbl.set_column(tbl.column_names.index(n), n, fixed.column(n))
+        return tbl
 
     # ------------------------------------------------- direct row-group reads
     def _fetch_direct(self, offset: int, limit: int, columns: list[str] | None
@@ -410,7 +440,11 @@ class ParquetDataset:
         as they scroll into view, whatever view the page came from: reads only
         the row groups holding those rows when that's cheap, else one DuckDB
         query. ``Page.offset`` is 0 and ``Page.row_numbers`` is ``file_rows``.
-        Runs under the caller's tag like ``fetch``."""
+        Runs under the caller's tag like ``fetch``. Raises ``ValueError`` for
+        rows without a number (``None``): see ``has_row_ids``."""
+        if any(r is None for r in file_rows):
+            raise ValueError("these rows have no file row numbers (a SQL result, or a filtered/sorted view "
+                             "of a file with its own file_row_number column): use fetch() instead")
         rows = [int(r) for r in file_rows]
         names = list(columns)
         if any(r < 0 or r >= self.num_rows for r in rows):
@@ -437,8 +471,8 @@ class ParquetDataset:
                                     for a, b in _runs(uniq)])
         if uniq:
             pos = {r: i for i, r in enumerate(uniq)}
-            tbl = tbl.take(pa.array([pos[r] for r in rows], pa.int64()))
-        return _page(0, tbl, rows)
+            tbl = _take(tbl, [pos[r] for r in rows])
+        return _page(0, self._fix_wide_decimals(tbl, rows), rows)
 
     def _handover(self, token: _Cancel | None, c):
         """Register DuckDB cursor ``c`` in place of a direct read's ``token``.
@@ -455,10 +489,11 @@ class ParquetDataset:
                 self._tagged[tag] = c
         return c
 
-    def _read_rows(self, rows, names: list[str]) -> tuple[pa.Table | None, _Cancel | None]:
+    def _read_rows(self, rows, names: list[str], force: bool = False) -> tuple[pa.Table | None, _Cancel | None]:
         """File ``rows`` (any order; ``range`` for a window) of columns ``names``,
-        read with pyarrow and converted to DuckDB's types, or ``(None, token)``."""
-        types = self._duck_types()
+        read with pyarrow and converted to DuckDB's types, or ``(None, token)``.
+        ``force``: whatever it costs (waiting for the types if need be)."""
+        types = self._duck_types(wait=force)
         starts = self._rg_starts()
         if types is None or starts is None or len(set(names)) != len(names):
             return None, None
@@ -477,28 +512,31 @@ class ParquetDataset:
             for f in uniq:
                 r = bisect.bisect_right(starts, f) - 1
                 need.setdefault(r, []).append(f - starts[r])
+        if self._bad_rgs.intersection(need):
+            return None, None
         cheaper, pre_buffer = self._direct_estimate({r: loc[-1] + 1 for r, loc in need.items()}, names)
-        if not cheaper:
+        if not (cheaper or force):
             return None, None
         token = self._register(_Cancel())
         try:
             parts = [self._read_rg(r, loc, names, pre_buffer, token) for r, loc in need.items()]
+            if any(p is None for p in parts) or token.cancelled:
+                return self._bail(token)
+            tbl = pa.concat_tables(parts) if len(parts) > 1 else parts[0]
+            if not isinstance(rows, range):
+                pos = {f: i for i, f in enumerate(uniq)}
+                tbl = _take(tbl, [pos[f] for f in rows])
         except duckdb.InterruptException:
             raise
         except OSError:  # I/O trouble (maybe transient, e.g. a network FS): DuckDB this time
             self._io_errors += 1
             if self._io_errors >= 3:
-                self._exclude_unreadable(next(iter(need)), names, token)
+                self._exclude_unreadable(need, names, token)
             return self._bail(token)
         except Exception:  # noqa: BLE001 - pyarrow can't read some column: find it, leave it to DuckDB
-            self._exclude_unreadable(next(iter(need)), names, token)
+            self._exclude_unreadable(need, names, token)
             return self._bail(token)
-        if any(p is None for p in parts) or token.cancelled:
-            return self._bail(token)
-        tbl = pa.concat_tables(parts) if len(parts) > 1 else parts[0]
-        if not isinstance(rows, range):
-            pos = {f: i for i, f in enumerate(uniq)}
-            tbl = tbl.take(pa.array([pos[f] for f in rows], pa.int64()))
+        self._io_errors = 0
         out = []
         for name in names:
             try:
@@ -557,25 +595,30 @@ class ParquetDataset:
             return None
         tbl = tbl.select(names)
         if not isinstance(local, range):
-            tbl = tbl.take(pa.array([x - lo for x in local], pa.int64()))
+            tbl = _take(tbl, [x - lo for x in local])
         return tbl
 
-    def _exclude_unreadable(self, rg: int, names: list[str], token: _Cancel) -> None:
+    def _exclude_unreadable(self, need: dict, names: list[str], token: _Cancel) -> None:
         """After a failed direct read, find the columns pyarrow can't read (one
         row each) and leave them to DuckDB from now on; the others keep the
-        fast path. I/O errors don't count."""
+        fast path. I/O errors don't count. If no column fails on its own, the
+        trouble is further in: leave the row groups involved to DuckDB."""
         types = self._duck_types()
         if types is None:
             return
+        found = False
         for name in names:
             try:
-                self._read_rg(rg, range(0, 1), [name], False, token)
+                self._read_rg(next(iter(need)), range(0, 1), [name], False, token)
             except duckdb.InterruptException:
                 raise
             except OSError:
                 pass
             except Exception:  # noqa: BLE001
                 types[name] = None
+                found = True
+        if not found:
+            self._bad_rgs.update(need)
 
     def _duck_types(self, wait: bool = False) -> dict[str, pa.DataType | None] | None:
         """Arrow type of each column as DuckDB returns it, or ``None`` where the
@@ -598,20 +641,17 @@ class ParquetDataset:
             _BINDING.add(self)
 
     def _stop_types(self) -> None:
-        """Interrupt and wait for the background bind (DuckDB aborts the process if
-        a query is still running on a daemon thread when Python exits)."""
-        with self._lock:
-            cur = self._tagged.get(_TYPES_TAG)
-            t = self._types_thread
-        if cur is not None:
-            _interrupt(cur)
+        """Wait for the background bind (DuckDB aborts the process if a query is
+        still running on a daemon thread when Python exits). Binding can't be
+        interrupted (DuckDB checks only once it's bound), and it's one footer
+        parse: ~1 s for 2000 row groups x 300 columns."""
+        t = self._types_thread
         if t is not None and t is not threading.current_thread():
-            t.join(5)
+            t.join(30)
 
     def _bind_types(self) -> None:
+        # Untagged: ds.interrupt() couldn't shorten it, only throw the result away.
         cur = self.con.cursor()
-        with self._lock:
-            self._tagged[_TYPES_TAG] = cur  # so ds.interrupt() stops it (then the next fetch retries)
         try:
             tbl = cur.execute(f"SELECT * FROM {TABLE} LIMIT 0").arrow()
             if isinstance(tbl, pa.RecordBatchReader):
@@ -623,15 +663,9 @@ class ParquetDataset:
                        else None for f in self.arrow_schema}
             self._types_cache = out
             self._types_done.set()
-        except duckdb.InterruptException:
-            pass
         except Exception:  # noqa: BLE001
             self._types_cache = None
             self._types_done.set()
-        finally:
-            with self._lock:
-                if self._tagged.get(_TYPES_TAG) is cur:
-                    del self._tagged[_TYPES_TAG]
 
     def _rg_starts(self) -> list[int] | None:
         """First file row of each row group, plus the row count at the end."""
@@ -905,9 +939,53 @@ class _Cancel:
 
 
 def _page(offset: int, tbl: pa.Table, rn: list) -> Page:
-    cols = [tbl.column(i).to_pylist() for i in range(tbl.num_columns)]
+    cols = [_pylist(tbl.column(i)) for i in range(tbl.num_columns)]
     rows = list(zip(*cols)) if cols else [() for _ in range(tbl.num_rows)]
     return Page(offset, tbl.column_names, rows, rn, [f.type for f in tbl.schema])
+
+
+def _pylist(col) -> list:
+    """``col.to_pylist()``; values Python can't hold (e.g. timestamps past year
+    9999, which DuckDB uses for infinity) become ``None`` instead of raising."""
+    try:
+        return col.to_pylist()
+    except (OverflowError, ValueError, pa.ArrowException):
+        out = []
+        for chunk in getattr(col, "chunks", [col]):
+            for i in range(len(chunk)):
+                try:
+                    out.append(chunk[i].as_py())
+                except (OverflowError, ValueError, pa.ArrowException):
+                    out.append(None)
+        return out
+
+
+def _take(tbl: pa.Table, idx: list[int]) -> pa.Table:
+    """``tbl.take(idx)``, also for string/binary views (pyarrow has no take for them)."""
+    try:
+        return tbl.take(pa.array(idx, pa.int64()))
+    except pa.ArrowNotImplementedError:
+        tbl = pa.Table.from_arrays([c.cast(_unview(c.type)) for c in tbl.columns], names=tbl.column_names)
+        return tbl.take(pa.array(idx, pa.int64()))
+
+
+def _unview(t: pa.DataType) -> pa.DataType:
+    """``t`` with string/binary views (also nested) as plain strings/binaries."""
+    if pa.types.is_string_view(t):
+        return pa.large_string()
+    if pa.types.is_binary_view(t):
+        return pa.large_binary()
+    if pa.types.is_struct(t):
+        return pa.struct([t.field(i).with_type(_unview(t.field(i).type)) for i in range(t.num_fields)])
+    if pa.types.is_map(t):
+        return pa.map_(_unview(t.key_type), _unview(t.item_type))
+    if pa.types.is_large_list(t):
+        return pa.large_list(t.value_field.with_type(_unview(t.value_type)))
+    if pa.types.is_list(t):
+        return pa.list_(t.value_field.with_type(_unview(t.value_type)))
+    if pa.types.is_fixed_size_list(t):
+        return pa.list_(t.value_field.with_type(_unview(t.value_type)), t.list_size)
+    return t
 
 
 def _arrow(cur) -> pa.Table:
@@ -934,7 +1012,6 @@ _DUCK_MS_PER_RG = 0.6        # ... per row group in the file (footer + scan setu
 _DUCK_MS_PER_RG_COL = 0.002  # ... per row group and selected column
 _PRE_BUFFER_MAX = 32 << 20   # pre-buffer (coalesce reads) only when the chunks are this small
 _READ_BUFFER = 1 << 20       # otherwise read through a buffer this size
-_TYPES_TAG = "__pqx_types"   # tag of the background bind of DuckDB's result types
 
 _STRINGS = (pa.types.is_string, pa.types.is_large_string, pa.types.is_string_view)
 _BINARIES = (pa.types.is_binary, pa.types.is_large_binary, pa.types.is_fixed_size_binary,

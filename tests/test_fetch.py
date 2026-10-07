@@ -171,8 +171,20 @@ def test_decimal256_values_are_right(zoo_path):
     page = _direct(ds, 0, 60, ["dec256"])
     assert str(page.types[0]) == "double"
     assert [r[0] for r in page.rows] == [float(decimal.Decimal(x) / 100) for x in range(60)]
-    if [r[0] for r in _duck(ds, View(), 0, 60, ["dec256"]).rows] == [r[0] for r in page.rows]:
-        pytest.fail("DuckDB reads decimal256 right now: drop this special case and compare with DuckDB")
+    raw = [r[0] for r in ds.con.cursor().execute('SELECT dec256 FROM t').fetchall()]
+    if raw == [r[0] for r in page.rows]:
+        pytest.fail("DuckDB reads decimal256 right now: drop _fix_wide_decimals and its special cases")
+    # pages DuckDB serves (filtered, sorted, or whenever the cost model says so) get the same values
+    want = {i: float(decimal.Decimal(i) / 100) for i in range(60)}
+    duck = _duck(ds, View(), 0, 60, ["i8", "dec256"])
+    assert [r[1] for r in duck.rows] == [want[r[0]] for r in duck.rows]
+    for v in (View(where="i8 > 10"), View(order_by=[("i8", True)]), View(where="i8 % 3 = 0", order_by=[("f32", False)])):
+        pg = ds.fetch(v, 2, 20, ["i8", "dec256"])
+        assert pg.rows and [r[1] for r in pg.rows] == [want[r[0]] for r in pg.rows]
+    assert [r[0] for r in ds.fetch_columns([5, 3, 59], ["dec256"]).rows] == [want[5], want[3], want[59]]
+    ds._read_rows = lambda rows, names, force=False: (None, None) if not force else type(ds)._read_rows(
+        ds, rows, names, force)
+    assert [r[0] for r in ds.fetch_columns([5, 3, 59], ["dec256"]).rows] == [want[5], want[3], want[59]]
 
 
 def test_types_are_duckdbs(zoo_path):
@@ -304,13 +316,6 @@ def test_fetches_use_duckdb_until_types_are_bound(demo_path, monkeypatch):
     monkeypatch.setattr(ds, "_start_types", lambda: None)
     assert ds._fetch_direct(0, 10, None) == (None, None)
     assert ds.fetch(View(), 0, 10).row_numbers == list(range(10))
-
-
-def test_interrupted_bind_is_retried(demo_path):
-    ds = ParquetDataset(demo_path)
-    ds.interrupt()  # may or may not catch the bind in flight; either way types arrive
-    assert ds._duck_types(wait=True) is not None
-    assert ds._types_thread is not None
 
 
 def _served_by_duckdb(ds, monkeypatch):
@@ -543,3 +548,94 @@ def test_leaves_with_flat_dotted_name(tmp_path):
     assert ds._leaves() == {"a": [0, 1], "a.b": [2], "m": [3, 4]}
     page = _direct(ds, 0, 1, ["a.b", "a"])
     _same(page, _duck(ds, View(), 0, 1, ["a.b", "a"]))
+
+
+def test_fetch_columns_needs_row_ids(odd_path, demo_path):
+    odd = _open(odd_path)
+    v = View(order_by=[("x", True)])
+    page = odd.fetch(v, 0, 10, ["x"])
+    assert page.row_numbers == [None] * 10 and not odd.has_row_ids(v)
+    with pytest.raises(ValueError):
+        odd.fetch_columns(page.row_numbers, ["tags"])
+    assert odd.has_row_ids(View())
+    demo = _open(demo_path)
+    assert demo.has_row_ids(View()) and demo.has_row_ids(v.__class__(where="mag < 20"))
+    assert not demo.has_row_ids(View(sql="select * from t"))
+
+
+def test_fetch_columns_with_view_types(tmp_path, monkeypatch):
+    """pyarrow has no take kernel for string/binary views; scattered rows must still go direct."""
+    p = tmp_path / "views.parquet"
+    n = 3_000
+    pq.write_table(pa.table({"id": np.arange(n), "s": pa.array([f"s{i}" for i in range(n)], pa.string_view()),
+                             "b": pa.array([b"%d" % i for i in range(n)], pa.binary_view()),
+                             "l": pa.array([[f"x{i}"] for i in range(n)], pa.list_(pa.string_view()))}),
+                   p, row_group_size=500)
+    ds = _open(str(p))
+    _force(ds)
+    log = _served_by_duckdb(ds, monkeypatch)
+    rows = [2_999, 5, 1_200, 5, 777]
+    page = ds.fetch_columns(rows, ["s", "b", "l", "id"])
+    assert log == [] and [r[3] for r in page.rows] == rows
+    assert [r[0] for r in page.rows] == [f"s{i}" for i in rows] and page.rows[0][2] == ["x2999"]
+    assert [str(t) for t in page.types] == [str(t) for t in _duck(ds, View(), 0, 1, ["s", "b", "l", "id"]).types]
+
+
+def test_unpinned_read_error_remembers_row_groups(many_path, monkeypatch):
+    """A read error the one-row probe can't reproduce leaves those row groups to DuckDB for good."""
+    ds = _open(many_path)
+    _force(ds)
+    orig = type(ds)._read_rg
+    calls = []
+
+    def flaky(self, rg, local, names, pre_buffer, token):
+        calls.append(rg)
+        if rg == 3 and local != range(0, 1):
+            raise ValueError("bad page deep in row group 3")
+        return orig(self, rg, local, names, pre_buffer, token)
+
+    monkeypatch.setattr(type(ds), "_read_rg", flaky)
+    _same(ds.fetch(View(), 300, 20), _duck(ds, View(), 300, 20))
+    assert ds._bad_rgs == {3} and all(t is not None for t in ds._duck_types().values())
+    calls.clear()
+    ds.fetch(View(), 300, 20)
+    assert calls == []  # straight to DuckDB, no failed read and probe every time
+    ds.fetch(View(), 0, 20)
+    assert calls == [0]  # other row groups keep the direct path
+
+
+def test_io_error_count_resets(demo_path, monkeypatch):
+    ds = _open(demo_path)
+    _force(ds)
+    orig = pq.ParquetFile.iter_batches
+    fail = {"on": True}
+
+    def sometimes(self, *a, **k):
+        if fail["on"]:
+            raise OSError("hiccup")
+        return orig(self, *a, **k)
+
+    monkeypatch.setattr(pq.ParquetFile, "iter_batches", sometimes)
+    ds.fetch(View(), 0, 10)
+    ds.fetch(View(), 0, 10)
+    assert ds._io_errors == 2
+    fail["on"] = False
+    ds.fetch(View(), 0, 10)
+    assert ds._io_errors == 0
+
+
+def test_extreme_timestamps_dont_raise(tmp_path):
+    p = tmp_path / "extreme.parquet"
+    v = np.array([0, 9_223_372_036_854_775_000, -9_223_372_036_854_775_000, 1], dtype="i8")
+    pq.write_table(pa.table({"t": pa.array(v, pa.timestamp("ns", "UTC")), "i": np.arange(4)}), p)
+    ds = _open(str(p))
+    for page in (_direct(ds, 0, 4), _duck(ds, View(), 0, 4)):
+        assert len(page.rows) == 4 and page.rows[0][0].year == 1970 and page.rows[3][1] == 3
+
+
+def test_bind_is_not_registered_for_interrupts(demo_path):
+    ds = ParquetDataset(demo_path)
+    with ds._lock:
+        assert not ds._tagged  # ds.interrupt() can't shorten a bind, only throw it away
+    ds.interrupt()
+    assert ds._duck_types(wait=True) is not None
