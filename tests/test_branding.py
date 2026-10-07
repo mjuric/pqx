@@ -106,3 +106,52 @@ async def test_titlebar_and_help_show_version(demo_path):
         assert f"pqx {__version__}" in head and "Written by Mario Juric" in head
         assert "https://github.com/mjuric/pqx" in head
         assert FILTER_EXAMPLE in HELP and "mag < 21" not in HELP   # a general example, not an astronomy one
+
+
+async def test_placeholder_never_waits_on_duckdb_for_names(tmp_path, monkeypatch):
+    """Columns that differ only by case are renamed by DuckDB, known only once its setup is
+    done: the hint skips them rather than wait for it (ParquetDataset.sql_name) on the UI thread."""
+    p = tmp_path / "dups.parquet"
+    pq.write_table(pa.table({"Fare": [1.5], "fare": [2.5], "tip": [0.5], "city": ["Oslo"]}), p)
+    app = PqxApp(str(p))
+
+    def no_wait(name):
+        raise AssertionError("sql_name called from the UI thread")
+    monkeypatch.setattr(app.ds, "sql_name", no_wait)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        assert "e.g. tip > 0.5 and city = 'Oslo'" in app.query_one("#filter", Input).placeholder
+
+
+LONG_VERSION ="0.2.1.dev123+g1a2b3c4d.d20261007"
+
+
+def _bar_line(app) -> str:
+    bar = app.query_one("#titlebar", Static)
+    return "".join(seg.text for seg in bar.render_line(0)).rstrip()
+
+
+async def test_titlebar_degrades_gracefully(tmp_path, monkeypatch):
+    import pqx.app
+    monkeypatch.setattr(pqx.app, "__version__", LONG_VERSION)
+    name = "yellow_tripdata_2024-01.parquet"
+    p = tmp_path / name
+    pq.write_table(pa.table({"x": [1.0, 2.0]}), p)
+    app = PqxApp(str(p))
+    async with app.run_test(size=(150, 30)) as pilot:
+        await settle(pilot, app)
+        assert _bar_line(app).startswith(f"pqx {LONG_VERSION}  ·  {name}  ·  2 rows")
+        # 80 columns: version and name fit (the rest is cut); 60: the version gives way to the
+        # name; 40: even the name is cut. Always one line, ending in an ellipsis.
+        for width, prefix in ((80, f"pqx {LONG_VERSION}  ·  {name}"),
+                              (60, f"pqx  ·  {name}  ·  "),
+                              (40, "pqx  ·  yellow_tripdata")):
+            await pilot.resize_terminal(width, 30)
+            await settle(pilot, app)
+            line = _bar_line(app)
+            assert line.startswith(prefix), (width, line)
+            assert len(line) <= width - 4 and line.endswith("…"), (width, line)
+            assert app.query_one("#titlebar").size.height == 1
+        await pilot.resize_terminal(150, 30)  # and back
+        await settle(pilot, app)
+        assert LONG_VERSION in _bar_line(app)

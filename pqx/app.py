@@ -134,7 +134,8 @@ def _short_number(v) -> str | None:
 def filter_placeholder(columns: list[str], types: list[pa.DataType], row: tuple | None) -> str:
     """The filter box's hint, with an example drawn from the file's own first row: the first
     numeric column with a plain name (``> its value``) and the first string column (``= its
-    value``), falling back to ``FILTER_EXAMPLE`` for whichever part has no candidate.
+    value``). Either part is left out if no column fits it; ``FILTER_EXAMPLE`` stands in only
+    when neither does.
 
     ``columns`` are names as SQL calls them in ``t``."""
     num = text = None
@@ -228,6 +229,15 @@ class ColumnSuggester(Suggester):
             if w.lower().startswith(low) and len(w) > len(tok):
                 return value[: m.start()] + text
         return None
+
+
+class TitleBar(Static):
+    """The one-line bar at the top; what it shows depends on its width (``PqxApp._render_titlebar``)."""
+
+    def on_resize(self, event) -> None:
+        render = getattr(self.app, "_render_titlebar", None)
+        if render is not None:
+            render(event.size.width)
 
 
 class GridTable(DataTable):
@@ -1038,7 +1048,7 @@ class PqxApp(App):
 
     # ------------------------------------------------------------------ layout
     def compose(self) -> ComposeResult:
-        yield Static(id="titlebar")
+        yield TitleBar(id="titlebar")
         with Horizontal(id="filterbox", classes="panel"):
             yield Label("›", id="filter-mode")
             yield Input(value=self._initial_filter,
@@ -1166,14 +1176,24 @@ class PqxApp(App):
         x = event.x - 3
         return next((tab for tab, a, b in getattr(self, "_tab_spans", []) if a <= x < b), None)
 
-    def _render_titlebar(self) -> None:
+    def _render_titlebar(self, width: int | None = None) -> None:
+        """``pqx <version> · file · rows · …`` on one line, cut with an ellipsis when it doesn't
+        fit. The file name comes first: if it doesn't fit after the version, the version goes
+        (``?`` and ``--version`` show it too). Redrawn on resize."""
         ds, d = self.ds, self.dim
+        bar = self.query_one("#titlebar", Static)
+        if width is None:
+            width = bar.content_size.width or max(0, self.size.width - 4)  # (screen padding 1, bar margin 1)
+        name = F.sanitize(os.path.basename(ds.path))
+        sep = "  ·  "
+        version = f" {__version__}" if len(f"pqx {__version__}{sep}{name}") <= width else ""
         t = Text.assemble(
-            ("pqx", "bold"), (f" {__version__}", d), ("  ·  ", d), (F.sanitize(os.path.basename(ds.path)), "bold cyan"),
-            (f"  ·  {ds.num_rows:,} rows  ·  {len(ds.columns)} columns  ·  {F.human_bytes(ds.file_size)}"
-             f"  ·  {ds.meta.num_row_groups:,} row groups", d),
+            ("pqx", "bold"), (version, d), (sep, d), (name, "bold cyan"),
+            (f"{sep}{ds.num_rows:,} rows{sep}{len(ds.columns)} columns{sep}{F.human_bytes(ds.file_size)}"
+             f"{sep}{ds.meta.num_row_groups:,} row groups", d),
+            no_wrap=True, overflow="ellipsis",
         )
-        self.query_one("#titlebar", Static).update(t)
+        bar.update(t)
 
     def _render_keys(self) -> None:
         try:
@@ -1461,9 +1481,14 @@ class PqxApp(App):
             self._keep_record(page)
 
     def _set_filter_placeholder(self, page) -> None:
-        file_cols = set(self.ds.column_names)
-        cols = [(self.ds.sql_name(c), t, v) for c, t, v in zip(page.columns, page.types, page.rows[0])
-                if c in file_cols]
+        # Only names DuckDB calls by the same name: one that differs from another column only by
+        # case is renamed (ParquetDataset.sql_name), which isn't known (without waiting on DuckDB's
+        # setup, on this thread) until the views exist. Such a name makes a poor example anyway.
+        lower: dict[str, int] = {}
+        for c in self.ds.column_names:
+            lower[c.lower()] = lower.get(c.lower(), 0) + 1
+        cols = [(c, t, v) for c, t, v in zip(page.columns, page.types, page.rows[0])
+                if lower.get(c.lower()) == 1 and c in self.ds._by_name]
         names, types, row = (list(x) for x in zip(*cols)) if cols else ([], [], [])
         self.query_one("#filter", Input).placeholder = filter_placeholder(names, types, tuple(row))
 
@@ -2025,7 +2050,7 @@ class PqxApp(App):
             info = self.ds._by_name.get(name)
             if info is not None and info.unit and v is not None:
                 cell.append(f"  {F.sanitize(info.unit)}", self.dim)
-            extra = F.derived(name, fmt.kind, v)
+            extra = F.derived(name, fmt.kind, v, info.unit if info is not None else "")
             if extra:
                 cell.append("\n· " + extra, self.dim)
             entries.append((name, cell))
@@ -2939,8 +2964,10 @@ class PqxApp(App):
             exact = bool(st.top) and len(st.top) < 10
             left.append(("distinct", Text(f"{st.distinct:,}" if exact else f"≈{st.distinct:,}", justify="right"), ""))
         if st.min is not None:
-            left.append(("min", fm(st.min), F.derived(name, fm.kind, st.min)))
-            left.append(("max", fm(st.max), F.derived(name, fm.kind, st.max)))
+            info = self.ds._by_name.get(name)
+            unit = info.unit if info is not None else ""
+            left.append(("min", fm(st.min), F.derived(name, fm.kind, st.min, unit)))
+            left.append(("max", fm(st.max), F.derived(name, fm.kind, st.max, unit)))
         if st.mean is not None:
             left.append(("mean", Text(F._fmt_float(float(st.mean), 15), justify="right") if is_int
                          else fm(float(st.mean)), ""))
