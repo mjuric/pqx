@@ -11,31 +11,45 @@ import datetime as dt
 import math
 import os
 import re
+import threading
 import time
+from bisect import bisect_left, bisect_right
+from contextlib import contextmanager
+from itertools import accumulate
 
 import duckdb
 import pyarrow as pa
 from rich.console import Group
+from rich.padding import Padding
+from rich.segment import Segment
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.color import Color
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.coordinate import Coordinate
 from textual.css.query import NoMatches
 from textual.markup import escape
 from textual.message import Message
+from textual.renderables.styled import Styled
 from textual.suggester import Suggester
 from textual.theme import Theme
 from textual.widgets import DataTable, Input, Label, OptionList, Static, TabbedContent, TabPane
-from textual.widgets.data_table import ColumnKey
+from textual.widgets._data_table import RowRenderables, default_cell_formatter
+from textual.widgets.data_table import ColumnKey, Row, RowKey
+from textual.worker import get_current_worker
 
 from . import _terminal
 from . import config
 from . import fmt as F
 from . import plots
-from .data import ColumnStats, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec, quote_ident
+from .cells import (FAILED_MARK, MISSING, PLACEHOLDER, UNAVAILABLE, CellRow, ColumnCells, one_cell_per_char, RowCells, RowLayout, text_width,
+                    widest_candidates)
+from .data import (ColumnStats, Page, ParquetDataset, Stopped, View, guess_sky_columns, is_sql_query,
+                   parse_row_spec, quote_ident)
 from .screens import ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen, HelpScreen
 from .widgets import CursorList, DetailList
 
@@ -45,6 +59,16 @@ SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SAMPLE_ROWS = 2_000_000       # rows used for stats/plots when sampling
 AUTO_SAMPLE_ROWS = 200_000_000        # sampling defaults on above this many rows…
 AUTO_SAMPLE_BYTES = 8 * 1024 ** 3     # …or this file size
+FOOTER_WAIT = 2.0                     # s: Schema/Metadata wait at most this long for the grid's first page
+ROWGROUP_BATCH = 250                  # rows added to Metadata's row-group table per event-loop turn
+WIDTH_SAMPLE_ROWS = 16        # rows spread through a window that size its non-numeric columns
+LAZY_TAGS = ("cols", "detail")  # query tags of the column fetches for a page (and "cell:<column>"; see load_window)
+LAZY_MIN_SAVING_MS = 20  # load a plain view's window lazily only if that's estimated to save this much
+DETAIL_FETCH_DELAY = 0.1  # s the Details pane waits (for the cursor to settle) before loading a page's columns
+#: a typical value per formatting kind, to size a column not loaded yet that has no statistics
+KIND_SAMPLES = {"float": -1.2345678901234567, "float32": -1.2345678, "flux": -1234.5678901, "err": 0.012345678,
+                "mag": 21.123456, "angle": 123.4567891, "mjd": 60000.123456789, "bool": True,
+                "time": dt.datetime(2026, 1, 2, 3, 4, 5, 678901)}
 
 ACCENTS = ("blue", "cyan", "magenta", "green", "yellow")
 DIM_MODES = ("faint", "bright-black")
@@ -90,6 +114,20 @@ def _ui(fn):
 
 def _epoch_label(v: float) -> str:
     return dt.datetime.fromtimestamp(v, dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+
+def _with_placeholders(page: Page, columns: list[str], types: dict[str, pa.DataType]) -> Page:
+    """``page`` (holding some of ``columns``) as a page of all ``columns``, with
+    ``MISSING`` for the values of those it doesn't hold (listed in ``missing``)."""
+    have = {n: i for i, n in enumerate(page.columns)}
+    n = len(page.rows)
+    held = list(zip(*page.rows)) if page.rows else [()] * len(page.columns)
+    absent = (MISSING,) * n
+    data = [held[have[c]] if c in have else absent for c in columns]
+    rows = list(zip(*data)) if data else [() for _ in range(n)]
+    return Page(page.offset, list(columns), rows, page.row_numbers,
+                [page.types[have[c]] if c in have else types.get(c, pa.null()) for c in columns],
+                missing={c for c in columns if c not in have})
 
 
 def pqx_theme(accent: str, border: str) -> Theme:
@@ -168,11 +206,161 @@ class GridTable(DataTable):
     class HScroll(Message):
         """The set of horizontally visible columns may have changed."""
 
+    # Rendering. DataTable builds every line from all columns and then crops it
+    # to the viewport, which on a 300-column file is ~20x the work that shows.
+    # We render only the columns that overlap the crop and stand in blanks of
+    # the same width for the rest, so the crop lines up exactly as before.
+    render_all_columns = False  # True: render like DataTable (for tests and comparisons)
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # Room for a large terminal's worth of cells and lines (plus their
+        # cursor/hover variants), so a full repaint doesn't evict itself.
+        self._cell_render_cache.grow(20_000)
+        self._row_render_cache.grow(4_000)
+        self._line_cache.grow(4_000)
+        self._geometry: tuple | None = None  # per-frame column positions; see _column_geometry
+        self._widths: tuple = ()  # (column render widths, row label width, row labels shown)
+        self._widths_gen = 0  # bumped whenever any of those change
+        #: per column, in column order: what its cells share (see pqx.cells); set by set_rows
+        self.cell_columns: list[ColumnCells] = []
+        self._fast_cell_styles: dict = {}  # see _cell_styles
+
+    @property
+    def ordered_columns(self) -> list:
+        """DataTable's, cached: it rebuilds the list (and `_render_line` asks for it on every line)."""
+        key = (self._column_locations, len(self.columns), self._update_count)
+        cached = getattr(self, "_ordered_columns", None)
+        if cached is None or cached[0][0] is not key[0] or cached[0][1:] != key[1:]:
+            cached = self._ordered_columns = (key, DataTable.ordered_columns.fget(self))
+        return cached[1]
+
+    def render_lines(self, crop):
+        self._geometry = None  # widths, scroll and size may all have changed since the last frame
+        gen = self._widths_gen
+        self._column_geometry()
+        if gen != self._widths_gen:
+            # DataTable re-measures columns on idle without bumping _update_count, and its cell
+            # and line caches don't key on width: drop them before this frame serves a stale line.
+            self._clear_caches()
+        return super().render_lines(crop)
+
+    def _column_geometry(self) -> tuple:
+        """``(columns, starts, ends, fixed_width, scrollable_width, widths_gen)`` of the ordered
+        columns, positions within DataTable's scrollable line (which also holds the fixed ones)."""
+        if self._geometry is None:
+            cols = self.ordered_columns
+            widths = tuple(c.get_render_width(self) for c in cols)
+            sig = (widths, self._row_label_column_width, self._labelled_row_exists)
+            if sig != self._widths:
+                self._widths = sig
+                self._widths_gen += 1
+            starts = list(accumulate(widths, initial=0))
+            fixed = min(self.fixed_columns, len(cols))
+            self._geometry = (cols, starts[:-1], starts[1:], starts[fixed], starts[-1] - starts[fixed],
+                              self._widths_gen)
+        return self._geometry
+
+    def _render_line_in_row(self, row_key, line_no: int, base_style: Style, cursor_location: Coordinate,
+                            hover_location: Coordinate) -> tuple[list, list]:
+        """DataTable's, but only for the columns `_render_line` will keep (see the class comment).
+
+        The cache key holds the visible column range, and the cursor and hover
+        only for rows they touch, so a cursor move re-renders just its two rows."""
+        if self.render_all_columns:
+            return super()._render_line_in_row(row_key, line_no, base_style, cursor_location, hover_location)
+        cols, starts, ends, fixed_width, table_width, gen = self._column_geometry()
+        # the span _render_line crops the scrollable line to
+        x1 = self.scroll_offset.x + fixed_width
+        x2 = self.scroll_offset.x + self.size.width
+        lo = bisect_right(ends, x1)
+        hi = max(lo, bisect_left(starts, x2))
+        if ends and ends[-1] <= 3 * self.size.width:
+            lo, hi = 0, len(cols)  # a narrow table: render it all, so lines stay cached while scrolling sideways
+
+        row_index = self._row_locations.get(row_key) if row_key in self._row_locations else -1
+        cursor_type = self.cursor_type
+        if cursor_type == "column":
+            cur_key, hov_key = cursor_location.column, hover_location.column
+        elif cursor_type in ("cell", "row"):
+            cur_key = cursor_location if cursor_location.row == row_index else None
+            hov_key = hover_location if hover_location.row == row_index else None
+        else:
+            cur_key = hov_key = None
+        cache_key = (row_key, line_no, base_style, cur_key, hov_key, cursor_type, self.show_cursor,
+                     self._show_hover_cursor, self._update_count, self._pseudo_class_state, lo, hi, gen,
+                     self.size.width)
+        if cache_key in self._row_render_cache:
+            return self._row_render_cache[cache_key]
+
+        should_highlight = self._should_highlight
+        render_cell = self._render_cell
+        header_style = self.get_component_styles("datatable--header").rich_style
+
+        fixed_row = []
+        if self._labelled_row_exists and self.show_row_labels:
+            loc = Coordinate(row_index, -1)
+            fixed_row.append(render_cell(
+                row_index, -1, header_style, width=self._row_label_column_width,
+                cursor=should_highlight(cursor_location, loc, cursor_type),
+                hover=should_highlight(hover_location, loc, cursor_type))[line_no])
+        if self.fixed_columns:
+            if row_key is self._header_row_key:
+                fixed_style = header_style
+            else:
+                fixed_style = self.get_component_styles("datatable--fixed").rich_style
+                fixed_style += Style.from_meta({"fixed": True})
+            for column_index, column in enumerate(cols[: self.fixed_columns]):
+                loc = Coordinate(row_index, column_index)
+                fixed_row.append(render_cell(
+                    row_index, column_index, fixed_style, column.get_render_width(self),
+                    cursor=should_highlight(cursor_location, loc, cursor_type),
+                    hover=should_highlight(hover_location, loc, cursor_type))[line_no])
+
+        row_style = self._get_row_style(row_index, base_style)
+        scrollable_row = []
+        if lo:  # columns left of the view (all of them, when pinned ones push x1 past the end)
+            scrollable_row.append([Segment(" " * (starts[lo] if lo < len(cols) else ends[-1]))])
+        for column_index in range(lo, hi):
+            loc = Coordinate(row_index, column_index)
+            scrollable_row.append(render_cell(
+                row_index, column_index, row_style, ends[column_index] - starts[column_index],
+                cursor=should_highlight(cursor_location, loc, cursor_type),
+                hover=should_highlight(hover_location, loc, cursor_type))[line_no])
+        if hi < len(cols):
+            scrollable_row.append([Segment(" " * (ends[-1] - starts[hi]))])  # and right of it
+
+        # Extend the row's styling to fill the widget, as DataTable does.
+        remaining_space = max(0, self.size.width - (table_width + self._row_label_column_width))
+        if cursor_type == "row":
+            extend_style, _ = self._get_styles_to_render_cell(
+                row_index == -1, False, False,
+                should_highlight(hover_location, Coordinate(row_index or 0, 0), cursor_type),
+                row_index == cursor_location.row, self.show_cursor, self._show_hover_cursor, False, False)
+            extend_style = row_style + extend_style
+        elif row_style.bgcolor is not None:
+            faded = Color.from_rich_color(row_style.bgcolor).blend(self.background_colors[1], factor=0.25)
+            extend_style = Style.from_color(color=row_style.color, bgcolor=faded.rich_color)
+        else:
+            extend_style = Style.from_color(row_style.color, row_style.bgcolor)
+        extend_style += Style.from_meta({"row": row_index, "column": 0, "out_of_bounds": True})
+        scrollable_row.append([Segment(" " * remaining_space, extend_style)])
+
+        row_pair = (fixed_row, scrollable_row)
+        self._row_render_cache[cache_key] = row_pair
+        return row_pair
+
     def watch_scroll_x(self, old_value: float, new_value: float) -> None:
         super().watch_scroll_x(old_value, new_value)
+        self.fit_visible()
         self.post_message(self.HScroll())
 
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        super().watch_scroll_y(old_value, new_value)
+        self.fit_visible()
+
     def on_resize(self, event) -> None:
+        self.fit_visible()
         self.post_message(self.HScroll())
 
     def column_window(self) -> tuple[int, int, int, int]:
@@ -202,6 +390,25 @@ class GridTable(DataTable):
             return (0, -1, hl, hr)
         return (vis[0], vis[-1], hl, hr)
 
+    def columns_near(self, column: int | None = None, screens: float = 1.0, width: int = 0) -> list[int]:
+        """Indices of the pinned columns and of the scrollable ones within ``screens``
+        screens of the view, or of where scrolling the cursor to ``column`` would
+        bring the view. ``width``: the widget's width, if it isn't laid out yet."""
+        cols = self.ordered_columns
+        n = len(cols)
+        fixed = min(self.fixed_columns, n)
+        starts = list(accumulate((c.get_render_width(self) for c in cols), initial=0))
+        view = max(1, (self.size.width or width) - self._row_label_column_width - starts[fixed])
+        x1 = self.scroll_x + starts[fixed]
+        x2 = x1 + view
+        if column is not None and fixed <= column < n:
+            if starts[column] < x1:  # the view will scroll left until the column is its first
+                x1, x2 = starts[column], starts[column] + view
+            elif starts[column + 1] > x2:  # ... or right until it's its last
+                x1, x2 = starts[column + 1] - view, starts[column + 1]
+        lo, hi = x1 - screens * view, x2 + screens * view
+        return list(range(fixed)) + [i for i in range(fixed, n) if starts[i + 1] > lo and starts[i] < hi]
+
     offset: int = 0
     total: int | None = None  # rows in the whole view, when known
     window: int = 300
@@ -217,6 +424,281 @@ class GridTable(DataTable):
 
     def _page_rows(self) -> int:
         return max(1, self.scrollable_content_region.height - self.header_height - 1)
+
+    # ------------------------------------------------------- lazy cells
+    # Cells format on first draw (pqx.cells) and widen their column if they don't fit.
+    # Growth found while fitting cells for a draw (fit_visible, or a caller's sizing()
+    # block) is drawn by that same draw; growth found anywhere else (a renderer
+    # formatting a cell nobody fitted) schedules one relayout for the batch.
+    _sizing: bool = False  # inside sizing(): growth needn't schedule a relayout
+    _growth: int = 0  # how many times a column has widened (fit_visible compares before/after)
+    _relayout_pending: bool = False
+    FIT_PASSES = 4  # fit_visible: widening a column can bring others into view; this many rounds at most
+
+    def clear(self, columns: bool = False):
+        self.cell_columns = []
+        return super().clear(columns)
+
+    def column_cells(self, formatters: list[F.CellFormatter], raw: bool) -> list[ColumnCells]:
+        """Fresh per-column cell state for the current columns, wired to widen them."""
+        return [ColumnCells(fm, raw, col, self._widened) for fm, col in zip(formatters, self.ordered_columns)]
+
+    def set_rows(self, rows: list[tuple], labels: list[Text], cell_columns: list[ColumnCells]) -> None:
+        """Replace the (cleared) table's rows with ``rows`` of raw values, all at once.
+
+        Each row becomes a ``CellRow``, which makes its cells when they're first
+        asked for. Unlike ``add_row`` this measures no cells: column widths are
+        the caller's business (``ColumnCells`` widen their column as cells get
+        formatted). Row labels are measured here, since they're few."""
+        self.cell_columns = cell_columns
+        layout = RowLayout([c.key for c in self.ordered_columns], cell_columns)
+        locations, data, rows_meta = self._row_locations, self._data, self.rows
+        for i, (values, label) in enumerate(zip(rows, labels)):
+            key = RowKey()
+            locations[key] = i
+            data[key] = CellRow(values, layout)
+            rows_meta[key] = Row(key, 1, label)
+        if labels:
+            self._labelled_row_exists = True
+            self._label_column.content_width = max(self._label_column.content_width,
+                                                   max(text_width(t) for t in labels))
+        self._require_update_dimensions = True
+        self._update_count += 1
+        self.cursor_coordinate = self.cursor_coordinate
+        if self.row_count and self.columns and self.show_cursor and self.cursor_type != "none":
+            self._highlight_cursor()
+        self.refresh()
+        self.check_idle()
+
+    def _compute_row_renderables(self, row_index: int) -> RowRenderables:
+        """DataTable's, but a window row's cells are handed over as a lazy ``RowCells``:
+        DataTable would otherwise make (and check) a renderable for every column of
+        every row it draws, though only the columns in view are rendered."""
+        if row_index >= 0:
+            row_key = self._row_locations.get_key(row_index)
+            row = self._data.get(row_key)
+            meta = self.rows.get(row_key)
+            if isinstance(row, CellRow) and meta is not None:
+                label = None
+                if self._should_render_row_labels and meta.label:
+                    label = default_cell_formatter(meta.label, wrap=meta.height != 1, height=meta.height)
+                return RowRenderables(label, RowCells(row))
+        return super()._compute_row_renderables(row_index)
+
+    def _render_cell(self, row_index: int, column_index: int, base_style: Style, width: int,
+                     cursor: bool = False, hover: bool = False):
+        """DataTable's, with a fast path for the usual window cell: one line of plain Text
+        (no markup spans, every character one cell wide). Its segments — padding, the
+        justified and cropped text, padding — are built directly, with the styles Rich
+        gives them (learnt once per style combination from a one-character sample, see
+        _cell_styles); anything else goes through Rich as before."""
+        if row_index < 0 or column_index < 0 or self.cell_padding < 1 or self.render_all_columns:
+            return super()._render_cell(row_index, column_index, base_style, width, cursor, hover)
+        row_key = self._row_locations.get_key(row_index)
+        column_key = self._column_locations.get_key(column_index)
+        cache_key = (row_key, column_key, base_style, cursor, hover, self._show_hover_cursor, self._update_count,
+                     self._pseudo_class_state)
+        lines = self._cell_render_cache.get(cache_key)
+        if lines is not None:
+            return lines
+        row, meta = self._data.get(row_key), self.rows.get(row_key)
+        text = row.cell_at(column_index).text if isinstance(row, CellRow) and meta and meta.height == 1 else None
+        pad = self.cell_padding
+        inner = width - 2 * pad
+        s = text.plain if text is not None else ""
+        if not s or not one_cell_per_char(s):  # (tabs, wide or combining characters: Rich's job)
+            return super()._render_cell(row_index, column_index, base_style, width, cursor, hover)
+        if text.justify != "left":
+            s = s.rstrip()  # as Rich's right/center justification does
+        if (not s or inner < 1 or text._spans or text.justify not in ("left", "right", "center")
+                or text.overflow not in (None, "fold")):
+            return super()._render_cell(row_index, column_index, base_style, width, cursor, hover)
+        fixed = row_index < self.fixed_rows or column_index < self.fixed_columns
+        component, post = self._get_styles_to_render_cell(
+            False, False, fixed, hover, cursor, self.show_cursor, self._show_hover_cursor,
+            self.cursor_foreground_priority == "css", self.cursor_background_priority == "css")
+        styles = self._cell_styles(base_style, component, post, text.style)
+        if styles is None:
+            return super()._render_cell(row_index, column_index, base_style, width, cursor, hover)
+        n = len(s)
+        if n >= inner:
+            body = s[:inner]
+        elif text.justify == "right":
+            body = " " * (inner - n) + s
+        elif text.justify == "left":
+            body = s + " " * (inner - n)
+        else:
+            left = (inner - n) // 2
+            body = " " * left + s + " " * (inner - n - left)
+        where = Style.from_meta({"row": row_index, "column": column_index})
+        pad_style, body_style = styles[0] + where, styles[1] + where
+        edge = Segment(" " * pad, pad_style)
+        lines = [[edge, Segment(body, body_style), edge]]
+        self._cell_render_cache[cache_key] = lines
+        return lines
+
+    def _cell_styles(self, base_style: Style, component: Style, post: Style, text_style) -> tuple | None:
+        """The (padding, text) styles Rich gives a one-line Text cell, without the cell's
+        row/column meta: learnt by rendering a one-character sample the way DataTable
+        renders a cell. None if the sample doesn't come out as padding, text, padding."""
+        key = (base_style, component, post, text_style, self.cell_padding)
+        cache = self._fast_cell_styles
+        if key not in cache:
+            pad = self.cell_padding
+            sample = Text("x", style=text_style, justify="left")
+            options = self.app.console_options.update_dimensions(2 * pad + 1, 1).update(no_wrap=True)
+            lines = self.app.console.render_lines(
+                Styled(Padding(sample, (0, pad)), pre_style=base_style + component, post_style=post), options)
+            segs = lines[0] if len(lines) == 1 else []
+            ok = [seg.text for seg in segs] == [" " * pad, "x", " " * pad] and segs[0].style == segs[2].style
+            if len(cache) > 256:
+                cache.clear()
+            cache[key] = (segs[0].style, segs[1].style) if ok else None
+        return cache[key]
+
+    def add_column(self, *a, **kw):
+        if self.row_count and self.cell_columns:
+            # set_rows' CellRows share one column layout: a column added under them would read as missing.
+            raise NotImplementedError("add GridTable columns before set_rows (clear(columns=True) first)")
+        return super().add_column(*a, **kw)
+
+    def update_cell(self, *a, **kw):
+        # set_rows' CellRows hold Cells made from the window's values: a plain value put in
+        # their place would be drawn unformatted and never fitted. The app never edits cells.
+        raise NotImplementedError("GridTable cells come from set_rows; reload the window instead")
+
+    def remove_column(self, *a, **kw):
+        # A CellRow's layout is shared by the whole window; removing a column would desync it.
+        raise NotImplementedError("GridTable columns are rebuilt with clear(columns=True)")
+
+    def update_dimensions_now(self) -> None:
+        """Settle the virtual size now rather than on idle, so the cursor can be
+        scrolled into view at once (DataTable otherwise draws the top of the
+        table first, then scrolls after the refresh)."""
+        self._require_update_dimensions = False
+        new_rows = self._new_rows.copy()
+        self._new_rows.clear()
+        self._update_dimensions(new_rows)
+
+    def _widened(self) -> None:
+        """A cell outgrew its column (ColumnCells.on_grow)."""
+        self._growth += 1
+        if not self._sizing and not self._relayout_pending:
+            self._relayout_pending = True
+            self.call_later(self._relayout)
+
+    def _relayout(self) -> None:
+        self._relayout_pending = False
+        self.invalidate_cells()
+
+    @contextmanager
+    def sizing(self):
+        """Columns widened inside this block are drawn by the caller's own redraw: no extra one."""
+        outer, self._sizing = self._sizing, True
+        try:
+            yield
+        finally:
+            self._sizing = outer
+
+    def visible_cells(self) -> tuple[range, list[int]]:
+        """Rows and columns (indices) on screen at the current scroll position, partly visible ones included."""
+        cols = self.ordered_columns
+        fixed = min(self.fixed_columns, len(cols))
+        width = self.scrollable_content_region.width
+        x = self._row_label_column_width
+        out = []
+        for i in range(fixed):
+            out.append(i)
+            x += cols[i].get_render_width(self)
+        left, right = self.scroll_x + x, self.scroll_x + width
+        for i in range(fixed, len(cols)):
+            w = cols[i].get_render_width(self)
+            if x + w > left:
+                out.append(i)
+            x += w
+            if x >= right:
+                break
+        top = int(self.scroll_y)
+        h = max(0, self.scrollable_content_region.height - (self.header_height if self.show_header else 0))
+        return range(top, min(self.row_count, top + h + 1)), out
+
+    def fit_visible(self) -> None:
+        """Format the cells about to be drawn and widen any column they outgrow,
+        before the draw: a number is never shown cut off, even for a frame.
+
+        If that pushes the cursor cell (on screen until now) off it, as when a move
+        scrolls to a column that then widens, scroll it back into view."""
+        if not self.cell_columns or not self.row_count or self._sizing:
+            return
+        start = self._growth
+        cursor_was_in_view = self.cursor_cell_in_view()
+        for _ in range(self.FIT_PASSES):
+            before = self._growth
+            with self.sizing():
+                rows, cols = self.visible_cells()
+                self.fit_columns(rows, cols)
+            if self._growth == before:
+                break
+            self._update_count += 1  # every DataTable render cache is keyed on it
+            self.update_dimensions_now()
+            self.refresh()
+        if self._growth != start and cursor_was_in_view and not self.cursor_cell_in_view():
+            self._scroll_cursor_into_view()
+
+    def cursor_cell_in_view(self) -> bool:
+        """Whether the cursor cell is wholly on screen horizontally (a pinned one always is)."""
+        if self.cursor_type != "cell" or self.cursor_column < self.fixed_columns:
+            return True
+        region = self._get_cell_region(self.cursor_coordinate)
+        left = self._get_fixed_offset().left
+        return (self.scroll_x + left <= region.x
+                and region.right <= self.scroll_x + self.scrollable_content_region.width)
+
+    def scroll_cursor_fitted(self) -> None:
+        """Fit the cells on screen, then scroll the cursor cell into view (for after a
+        re-format, which can widen columns left of the cursor). The scroll's own fitting
+        keeps it in view if its column then widens (see fit_visible)."""
+        self.fit_visible()
+        if self.row_count:
+            self._scroll_cursor_into_view()
+
+    def watch_fixed_columns(self) -> None:
+        super().watch_fixed_columns()
+        self.fit_visible()  # pinning brings columns into view without scrolling
+
+    def invalidate_cells(self) -> None:
+        """Cells' text or column widths changed: drop rendered cells and lines, re-measure, redraw."""
+        self._update_count += 1  # every DataTable render cache is keyed on it
+        self.update_dimensions_now()
+        self.refresh()
+
+    def invalidate_columns(self, keys) -> None:
+        """The cells of columns ``keys`` changed, not any width: drop just those rendered cells
+        (and the lines, which are cheap to rebuild from the others), and redraw. Unlike
+        ``invalidate_cells`` this keeps every other cell's rendering cached."""
+        keys = set(keys)
+        cache = self._cell_render_cache
+        for k in [k for k in cache.keys() if k[1] in keys]:
+            cache.discard(k)
+        self._row_render_cache.clear()
+        self._row_renderable_cache.clear()
+        self._line_cache.clear()
+        self.refresh()
+
+    def fit_columns(self, rows: list[int] | None = None, columns: list[int] | None = None) -> None:
+        """Format the cells in ``rows`` × ``columns`` (default: all), growing columns to fit them."""
+        if rows is None:
+            rows = range(self.row_count)
+        data = self._data
+        keys = [c.key for c in self.ordered_columns]
+        if columns is not None:
+            keys = [keys[i] for i in columns if i < len(keys)]
+        row_keys = [self._row_locations.get_key(r) for r in rows]
+        for rk in row_keys:
+            row = data.get(rk)
+            if isinstance(row, CellRow):
+                for k in keys:
+                    row[k].text  # noqa: B018  (formats and widens the column)
 
     def action_cursor_down(self) -> None:
         if self.cursor_row >= self.row_count - 1 and self.more_below():
@@ -436,6 +918,16 @@ class PqxApp(App):
         self.col_formats.update(formats or {})
         self.raw = False
         self.page = None
+        # Lazy columns (see load_window): each load_window bumps _page_gen; _shown_gen is the
+        # generation of the page on screen. Column fetches for a page merge only while both match.
+        self._page_gen = 0
+        self._shown_gen = 0
+        self._fetch_seq = 0
+        self._inflight: dict[str, tuple[int, int, frozenset]] = {}  # tag -> (seq, page gen, columns)
+        self._cols_failed: set[str] = set()  # columns that failed to load for the page on screen
+        self._cols_cancelled = False  # a fetch for the page on screen was cancelled (see cell_highlighted)
+        self._cell_waiters: dict[str, list] = {}  # cell fetch tag -> actions waiting for that column
+        self._chunk_stats: dict[tuple[int, int], tuple] = {}  # (row group, leaf) -> (min, max) or ()
         self.total: int | None = self.ds.num_rows if self.view.is_trivial else None
         big = self.ds.num_rows > AUTO_SAMPLE_ROWS or self.ds.file_size > AUTO_SAMPLE_BYTES
         self.sampling = big if sample is None else sample
@@ -535,8 +1027,8 @@ class PqxApp(App):
         grid = self.query_one(GridTable)
         grid.window = max(150, min(1000, 40_000 // max(1, len(self.cols_shown))))
         grid.total = self.total
-        self._build_schema_tab()
-        self._build_meta_tab()
+        self._init_schema_tab()
+        self._init_meta_tab()
         self._build_stats_list()
         self._init_plot_controls()
         self.set_interval(0.1, self._tick)
@@ -545,6 +1037,7 @@ class PqxApp(App):
         else:
             self._rebuild_columns()
             self.load_window(0, 0)
+        self.read_footer()  # after the first page's fetch: Schema and Metadata fill in when it's done
         grid.focus()
         self._render_keys()
 
@@ -686,7 +1179,13 @@ class PqxApp(App):
         d = self.dim
         t = Text(no_wrap=True, overflow="ellipsis")
         tot = self.total
-        if self._last_error:
+        if self._last_error and self.ds.setup_error is not None:
+            t.append("✗", "red")
+            t.append(" DuckDB can't read this file", "bold")
+            t.append("   reason: ", d)
+            t.append(self._last_error)
+            t.append("   → Schema (2) and Metadata (5) still work", d)
+        elif self._last_error:
             t.append("✗", "red")
             t.append(" Query failed", "bold")
             t.append("   reason: ", d)
@@ -762,53 +1261,365 @@ class PqxApp(App):
                              (f"·{override}" if override else "", self.dim),
                              justify="right" if fm.right else "left")
 
-    @work(thread=True, exclusive=True, group="page")
     def load_window(self, offset: int, cursor_abs: int, column: int | None = None) -> None:
+        """Load the window of rows at ``offset`` (in a worker), cursor on row ``cursor_abs``.
+
+        Decoding cost follows the columns read, so when the view's rows have file
+        row numbers only the pinned columns and those within a screen of the view
+        are fetched; the others show placeholders until they come near the view
+        (``_ensure_columns``) or the Details pane needs them. A plain view's window
+        is read whole if that is cheap anyway (``ParquetDataset.window_cost``).
+        A new window cancels any column fetch still running for the old one."""
+        if self.ds.setup_error is not None:  # no query can run: say why (once), don't try
+            self._show_error(self.ds.setup_error)
+            return
+        self._page_gen += 1
+        self._cancel_column_fetches()
+        shown = list(self.cols_shown)
+        cols = None
+        grid = self.query_one(GridTable)
+        if self.ds.has_row_ids(self.view) and len(grid.ordered_columns) == len(shown):
+            target = grid.cursor_column if column is None else column
+            near = grid.columns_near(min(target, len(shown) - 1), width=self.size.width)
+            if len(near) < len(shown):
+                cols = [shown[i] for i in near]
+            if cols and self.view.is_trivial:  # (a filter or sort scans whatever columns it reads: always worth it)
+                full = self.ds.window_cost(max(0, offset), grid.window, shown)
+                part = self.ds.window_cost(max(0, offset), grid.window, cols)
+                if full is None or part is None or full - part < LAZY_MIN_SAVING_MS:
+                    cols = None  # cheap enough to read whole: no placeholders, no fetches while scrolling
+        self._load_window(offset, cursor_abs, column, shown, cols, self._page_gen)
+
+    @work(thread=True, exclusive=True, group="page")
+    def _load_window(self, offset: int, cursor_abs: int, column: int | None, shown: list[str],
+                     cols: list[str] | None, gen: int) -> None:
         grid = self.query_one(GridTable)
         view = self.view
         offset = max(0, offset)
         self.call_from_thread(self._set_busy, "page", "loading rows")
         try:
             with self.ds.tagged("page"):
-                page = self.ds.fetch(view, offset, grid.window, self.cols_shown)
+                page = self.ds.fetch(view, offset, grid.window, cols or shown)
         except duckdb.InterruptException:
+            self.call_from_thread(self._page_failed, gen)
             return
         except Exception as e:  # noqa: BLE001
             self.call_from_thread(self._show_error, e)
+            self.call_from_thread(self._page_failed, gen)
             return
         finally:
             self.call_from_thread(self._set_busy, "page", None)
         if view is not self.view:
+            self.call_from_thread(self._page_failed, gen)
             return
-        self.call_from_thread(self._apply_page, page, cursor_abs, column)
+        if cols is not None:
+            page = _with_placeholders(page, shown, dict(self.result_schema))
+        self.call_from_thread(self._apply_page, page, cursor_abs, column, gen)
 
     @_ui
-    def _apply_page(self, page, cursor_abs: int, column: int | None) -> None:
+    def _page_failed(self, gen: int) -> None:
+        """A window load came to nothing (failed, cancelled, or its view changed meanwhile). If it
+        was the newest, the page on screen stays, and its columns load as before."""
+        if gen == self._page_gen:
+            self._page_gen += 1
+            self._shown_gen = self._page_gen
+            self._ensure_columns()  # load_window cancelled the page's column fetches: start again
+            self._update_detail()  # (re-arms the pane's fetch, if it's shown)
+
+    @_ui
+    def _apply_page(self, page, cursor_abs: int, column: int | None, gen: int | None = None) -> None:
+        if gen is not None and gen != self._page_gen:
+            return  # a newer window is on its way (or already shown): this one is superseded
         grid = self.query_one(GridTable)
         col = grid.cursor_column if column is None else column
         scroll_x = grid.scroll_x
         grid.clear()
         grid.offset = page.offset
         fm = [self.formatters.get(n) or F.CellFormatter(n, t) for n, t in zip(page.columns, page.types)]
-        raw = self.raw
-        for i, row in enumerate(page.rows):
-            label_n = page.row_numbers[i] if page.row_numbers[i] is not None else page.offset + i
-            grid.add_row(*[f(v, raw) for f, v in zip(fm, row)], label=Text(f"{label_n:,}", style=self.dim))
+        # cells format themselves when first drawn (pqx.cells); widths come from a sample, below
+        dim, off = self.dim, page.offset
+        labels = [Text(f"{off + i if n is None else n:,}", style=dim) for i, n in enumerate(page.row_numbers)]
+        grid.set_rows(page.rows, labels, grid.column_cells(fm, self.raw))
+        if page is not self.page:
+            self._cols_failed = set()
         self.page = page
+        self._shown_gen = self._page_gen if gen is None else gen
+        self._fit_columns()
+        self._reserve_widths()
+        grid.update_dimensions_now()  # so the cursor scrolls into view now, not after a first draw at the top
         if page.rows:
             r = max(0, min(len(page.rows) - 1, cursor_abs - page.offset))
-            grid.move_cursor(row=r, column=min(col, max(0, len(self.cols_shown) - 1)), animate=False)
-            grid.scroll_x = scroll_x
+            with grid.sizing():  # fit what's on screen once, where the scrolling ends
+                grid.scroll_x = scroll_x  # first: the cursor must end up in view, wherever this was
+                grid.move_cursor(row=r, column=min(col, max(0, len(self.cols_shown) - 1)), animate=False)
+            grid.scroll_cursor_fitted()
+        else:
+            grid.fit_visible()
         if self.total is None and len(page.rows) < grid.window:
             self.total = page.offset + len(page.rows)  # hit the end: we now know the size
             grid.total = self.total
         self._render_status()
         self._update_detail()
         self.call_after_refresh(self._render_hscroll)
+        self._ensure_columns()
+
+    def _fit_columns(self, columns: list[int] | None = None) -> None:
+        """Size the grid's columns (default: all) for the window, formatting as few cells as possible.
+
+        A number or string column fits its likely widest values
+        (``widest_candidates``); any other column fits a sample of rows spread
+        through the window. The cells on screen are fitted before each draw
+        (``GridTable.fit_visible``), so a cell wider than this guess widens its
+        column before it is shown. Columns not loaded yet are left alone."""
+        grid = self.query_one(GridTable)
+        n = grid.row_count
+        page = self.page
+        if not n or page is None:
+            return
+        rows = page.rows
+        missing = page.missing
+        sampled = []
+        with grid.sizing():
+            for i in range(len(grid.cell_columns)) if columns is None else columns:
+                if i >= len(grid.cell_columns) or (i < len(page.columns) and page.columns[i] in missing):
+                    continue
+                cc = grid.cell_columns[i]
+                guess = widest_candidates([r[i] for r in rows], cc.fmt.kind, cc.raw) if i < len(page.columns) else None
+                if guess is None:
+                    sampled.append(i)
+                else:
+                    cc.fit_values(guess)
+            if sampled:
+                grid.fit_columns(range(0, n, max(1, n // WIDTH_SAMPLE_ROWS)), sampled)
+
+    # ------------------------------------------------------------ lazy columns
+    def _cancel_column_fetches(self) -> None:
+        """Forget and interrupt the column fetches for the page on screen (a new one is coming).
+        Tags don't interrupt each other, so each is interrupted here."""
+        tags = set(LAZY_TAGS) | set(self._inflight)
+        self._inflight.clear()
+        self._cell_waiters.clear()
+        for tag in tags:
+            self.ds.interrupt(tag)
+
+    def _lazy_ready(self) -> bool:
+        """Whether the page on screen has columns to load and no newer page is on its way."""
+        page = self.page
+        return page is not None and bool(page.missing) and self._shown_gen == self._page_gen
+
+    def _ensure_columns(self) -> None:
+        """Fetch the columns near the view that the page on screen doesn't have yet.
+
+        When a column within a screen of the view is missing, the missing ones
+        within two screens are fetched. One fetch at a time: while one runs,
+        columns it brings that are still near the view are left to it (and the
+        rest fetched when it's done); if none are, a fresh fetch replaces it (the
+        same tag interrupts the old one)."""
+        if not self._lazy_ready():
+            return
+        page = self.page
+        grid = self.query_one(GridTable)
+        if len(grid.ordered_columns) != len(page.columns):
+            return
+
+        coming = set()  # what the Details pane's fetch will bring anyway
+        detail = self._inflight.get("detail")
+        if detail is not None and detail[1] == self._page_gen:
+            coming = detail[2]
+
+        def missing(screens):
+            return [n for n in (page.columns[i] for i in grid.columns_near(screens=screens))
+                    if n in page.missing and n not in self._cols_failed and n not in coming]
+        need = missing(1)
+        if not need:
+            return
+        cur = self._inflight.get("cols")
+        if cur is not None and cur[1] == self._page_gen and cur[2] & set(need):
+            return  # its completion checks again
+        # a screen further than needed, so scrolling sideways fetches about once a screen, not every column
+        self._fetch_columns("cols", missing(2))
+
+    def _fetch_columns(self, tag: str, names: list[str], then=None) -> None:
+        """Fetch ``names`` for the page on screen under ``tag`` and merge them into it;
+        then call ``then()`` (if the page is still on screen)."""
+        self._fetch_seq += 1
+        self._inflight[tag] = (self._fetch_seq, self._page_gen, frozenset(names))
+        self._columns_worker(tag, self._fetch_seq, self._page_gen, self.page, list(names), then)
+
+    @work(thread=True, group="columns")
+    def _columns_worker(self, tag: str, seq: int, gen: int, page, names: list[str], then) -> None:
+        self.call_from_thread(self._set_busy, f"columns-{tag}", "loading columns")
+        got, err = None, None
+        try:
+            with self.ds.tagged(tag):
+                got = self.ds.fetch_columns(page.row_numbers, names)
+        except duckdb.InterruptException:
+            pass
+        except Exception as e:  # noqa: BLE001
+            err = e
+        finally:
+            self.call_from_thread(self._set_busy, f"columns-{tag}", None)
+        self.call_from_thread(self._columns_done, tag, seq, gen, page, names, got, err, then)
+
+    @_ui
+    def _columns_done(self, tag: str, seq: int, gen: int, page, names: list[str], got, err, then) -> None:
+        cur = self._inflight.get(tag)
+        latest = cur is not None and cur[0] == seq
+        if latest:
+            del self._inflight[tag]
+        current = gen == self._page_gen and page is self.page
+        if latest and (got is None or not current):
+            self._cell_waiters.pop(tag, None)  # the actions waiting on it are dropped with it
+        if latest and current and got is None and err is None:
+            self._cols_cancelled = True  # not retried by itself (Esc means stop), but on the next move
+        if err is not None and current:
+            self._cols_failed.update(names)
+            self._mark_unavailable(page, names)
+            self.notify(f"Couldn't load {len(names)} column{'s' if len(names) != 1 else ''}: "
+                        f"{escape(str(err).splitlines()[0][:200])}", title="✗ Columns", severity="error", timeout=6)
+        if got is None or not current:
+            return  # cancelled (Esc, a newer fetch, a new page) or superseded: nothing to merge
+        self._merge_columns(page, got)
+        if then is not None:
+            then()
+        self._ensure_columns()
+
+    def _mark_unavailable(self, page, names: list[str]) -> None:
+        """Show the columns ``names`` that failed to load for ``page`` as such (✗), not as loading.
+        They stay missing (and aren't fetched again for this page)."""
+        idx = {n: i for i, n in enumerate(page.columns)}
+        cols = [idx[n] for n in names if n in idx and n in page.missing]
+        if not cols:
+            return
+        rows = page.rows
+        for r in range(len(rows)):
+            vals = list(rows[r])
+            for i in cols:
+                if vals[i] is MISSING:
+                    vals[i] = UNAVAILABLE
+            rows[r] = tuple(vals)
+        grid = self.query_one(GridTable)
+        if grid.row_count == len(rows) and len(grid.cell_columns) == len(page.columns):
+            keys = [ColumnKey(page.columns[i]) for i in cols]
+            data, locations = grid._data, grid._row_locations
+            for r in range(len(rows)):
+                row = data.get(locations.get_key(r))
+                if isinstance(row, CellRow):
+                    row.set_values(rows[r], keys)
+            grid.invalidate_columns(keys)
+        self._update_detail()
+
+    def _merge_columns(self, page, got) -> None:
+        """Put the fetched columns ``got`` (for ``page``'s rows) into the page and the grid.
+        Only columns still missing are filled: loaded values are never replaced."""
+        idx = {n: i for i, n in enumerate(page.columns)}
+        pairs = [(idx[n], j) for j, n in enumerate(got.columns) if n in page.missing and n in idx]
+        if not pairs or len(got.rows) != len(page.rows):
+            return
+        got_cols = list(zip(*got.rows))
+        rows = page.rows
+        for r in range(len(rows)):
+            vals = list(rows[r])
+            for i, j in pairs:
+                vals[i] = got_cols[j][r]
+            rows[r] = tuple(vals)
+        for i, j in pairs:
+            page.types[i] = got.types[j]
+        names = [page.columns[i] for i, _ in pairs]
+        page.missing.difference_update(names)
+        grid = self.query_one(GridTable)
+        if grid.row_count == len(rows) and len(grid.cell_columns) == len(page.columns):
+            keys = [ColumnKey(n) for n in names]
+            data, locations = grid._data, grid._row_locations
+            for r in range(len(rows)):
+                row = data.get(locations.get_key(r))
+                if isinstance(row, CellRow):
+                    row.set_values(rows[r], keys)
+            was_in_view = grid.cursor_cell_in_view()
+            growth = grid._growth
+            self._fit_columns([i for i, _ in pairs])
+            if grid._growth != growth:
+                grid.invalidate_cells()  # widths changed: everything moves
+            else:
+                grid.invalidate_columns(keys)  # (the usual case, with reserved widths)
+            grid.fit_visible()
+            if was_in_view and not grid.cursor_cell_in_view():
+                grid._scroll_cursor_into_view()  # a column left of the cursor outgrew its reserve
+            self.call_after_refresh(self._render_hscroll)
+        self._update_detail()
+
+    def _reserve_widths(self, columns: list[int] | None = None) -> None:
+        """Make the not-yet-loaded columns (of ``columns``, default all) as wide as their
+        values will likely be, so the grid doesn't shift when they arrive: from the
+        min/max statistics of the row groups the page comes from, else from the kind."""
+        page, grid = self.page, self.query_one(GridTable)
+        if page is None or not page.missing or len(grid.cell_columns) != len(page.columns):
+            return
+        rgs = None
+        with grid.sizing():
+            for i in range(len(page.columns)) if columns is None else columns:
+                name = page.columns[i]
+                if name not in page.missing:
+                    continue
+                if rgs is None:
+                    rgs = self._page_row_groups(page)
+                cc = grid.cell_columns[i]
+                cc.fit(self._reserved_width(name, cc.fmt, cc.raw, rgs))
+
+    def _page_row_groups(self, page, limit: int = 8) -> list[int]:
+        """Row groups holding the page's rows (at most ``limit``, spread out)."""
+        starts = self.ds._rg_starts()
+        rns = [r for r in page.row_numbers if r is not None]
+        if not starts or not rns:
+            return []
+        rgs = sorted({bisect_right(starts, r) - 1 for r in (rns if len(rns) <= 4096 else rns[::len(rns) // 4096])})
+        if len(rgs) > limit:
+            rgs = [rgs[round(k * (len(rgs) - 1) / (limit - 1))] for k in range(limit)]
+        return rgs
+
+    def _chunk_min_max(self, rg: int, leaf: int) -> tuple:
+        key = (rg, leaf)
+        hit = self._chunk_stats.get(key)
+        if hit is None:
+            hit = ()
+            try:
+                st = self.ds.meta.row_group(rg).column(leaf).statistics
+                if st is not None and st.has_min_max:
+                    hit = (st.min, st.max)
+            except Exception:  # noqa: BLE001 - statistics pyarrow can't decode: none
+                pass
+            self._chunk_stats[key] = hit
+        return hit
+
+    def _reserved_width(self, name: str, fm: F.CellFormatter, raw: bool, rgs: list[int]) -> int:
+        """How wide ``name``'s values likely format: its row groups' min and max (for a
+        float kind with all its significant digits, as a real value has), else a typical
+        value of its kind. Capped at the width a long string is cut to."""
+        leaves = self.ds._leaves().get(name, [])
+        vals: list = []
+        if len(leaves) == 1:
+            for rg in rgs:
+                vals.extend(self._chunk_min_max(rg, leaves[0]))
+        if fm.kind in F.SIG_DIGITS:
+            floats = [v for v in vals if isinstance(v, float) and math.isfinite(v)]
+            vals = [math.copysign(1.2345678901234567, v) * 10.0 ** math.floor(math.log10(abs(v)))
+                    if isinstance(v, float) and math.isfinite(v) and v else v for v in vals]
+            if floats and min(floats) < 0 < max(floats):  # values near zero, with leading zeros
+                vals += [-0.012345678901234567, 0.012345678901234567]
+        if not vals and fm.kind in KIND_SAMPLES:
+            vals = [KIND_SAMPLES[fm.kind]]
+        width = 0
+        for v in vals:
+            try:
+                width = max(width, text_width(fm.plain(v, raw)))
+            except Exception:  # noqa: BLE001 - a statistic of an unexpected type: no guess from it
+                pass
+        return min(width, 40)
 
     @on(GridTable.HScroll)
     def _hscroll(self) -> None:
         self._debounced("hscroll", 0.03, self._render_hscroll)
+        self._ensure_columns()
 
     @_ui
     def _render_hscroll(self) -> None:
@@ -862,6 +1673,9 @@ class PqxApp(App):
         self._hidden_hint = None
         self._render_status()
         self._update_detail()
+        if self._cols_cancelled:  # columns left loading by a cancelled fetch (Esc): load them now
+            self._cols_cancelled = False
+            self._ensure_columns()
 
     @on(DataTable.CellSelected, "#grid")
     def cell_selected(self) -> None:
@@ -872,6 +1686,7 @@ class PqxApp(App):
         self._sort_by(str(event.column_key.value))
 
     def _cursor_value(self):
+        """``(column, value)`` under the grid cursor; the value is ``MISSING`` if the column isn't loaded yet."""
         grid = self.query_one(GridTable)
         if self.page is None or not self.page.rows:
             return None, None
@@ -880,6 +1695,31 @@ class PqxApp(App):
         if r >= len(self.page.rows) or c >= len(self.page.columns):
             return None, None
         return self.page.columns[c], self.page.rows[r][c]
+
+    def _with_cursor_value(self, fn) -> None:
+        """Call ``fn(column, value)`` with the value under the cursor, loading its column first if need be."""
+        name, v = self._cursor_value()
+        if name is None:
+            return
+        if v is UNAVAILABLE:
+            self.notify(f"{escape(name)} couldn't be loaded for these rows", severity="error", timeout=4)
+            return
+        if v is not MISSING:
+            fn(name, v)
+            return
+        page, r, c = self.page, self.query_one(GridTable).cursor_row, self.query_one(GridTable).cursor_column
+
+        def then():
+            if self.page is page and page.rows[r][c] is not MISSING and page.rows[r][c] is not UNAVAILABLE:
+                fn(name, page.rows[r][c])
+        # one fetch per column: a second action on it while it loads waits for the same fetch
+        tag = f"cell:{name}"
+        waiting = self._cell_waiters.setdefault(tag, [])
+        waiting.append(then)
+        cur = self._inflight.get(tag)
+        if cur is not None and cur[1] == self._page_gen:
+            return
+        self._fetch_columns(tag, [name], lambda: [f() for f in self._cell_waiters.pop(tag, [])])
 
     # ---------------------------------------------------------- current column
     def set_current_column(self, name: str | None, source: str) -> None:
@@ -947,6 +1787,12 @@ class PqxApp(App):
         cur_col = self.page.columns[grid.cursor_column] if grid.cursor_column < len(self.page.columns) else None
         entries = []
         for name, typ, v in zip(self.page.columns, self.page.types, row):
+            if v is MISSING:  # loading (_fetch_detail_columns, below)
+                entries.append((name, Text(PLACEHOLDER, style=self.dim)))
+                continue
+            if v is UNAVAILABLE:
+                entries.append((name, Text.assemble((FAILED_MARK, "red"), (" couldn't load", self.dim))))
+                continue
             fmt = self.formatters.get(name) or F.CellFormatter(name, typ)
             full = F.format_value(F.shortest(v, typ), fmt.kind, raw=True, width=0)
             if len(full) > 300:  # keep one huge JSON/blob from burying every other column
@@ -963,6 +1809,21 @@ class PqxApp(App):
         lst = self.query_one(DetailList)
         lst.set_entries(entries, min(22, max((len(n) for n, _ in entries), default=0)))
         lst.select(cur_col)
+        if self.page.missing - self._cols_failed:
+            self._debounced("detail-columns", DETAIL_FETCH_DELAY, self._fetch_detail_columns)
+
+    def _fetch_detail_columns(self) -> None:
+        """The pane shows every column: fetch all the page's missing ones, once per page
+        (they're merged into the page, so the grid has them too, and every row of it)."""
+        if not self._lazy_ready() or not self.query_one("#detail").display:
+            return
+        cur = self._inflight.get("detail")
+        if cur is not None and cur[1] == self._page_gen:
+            return
+        page = self.page
+        names = [n for n in page.columns if n in page.missing and n not in self._cols_failed]
+        if names:
+            self._fetch_columns("detail", names)
 
     # --------------------------------------------------------------- filtering
     def action_focus_filter(self) -> None:
@@ -994,6 +1855,9 @@ class PqxApp(App):
 
     @work(thread=True, exclusive=True, group="filter")
     def apply_filter(self, text: str, keep_file_row: int | None = None) -> None:
+        if self.ds.setup_error is not None:  # no query can run: say why (once), don't try
+            self.call_from_thread(self._show_error, self.ds.setup_error)
+            return
         if is_sql_query(text):
             view = View(sql=text)
         else:
@@ -1086,9 +1950,9 @@ class PqxApp(App):
         self.action_clear_filter()
 
     def action_filter_value(self) -> None:
-        name, v = self._cursor_value()
-        if name is None:
-            return
+        self._with_cursor_value(self._filter_value)
+
+    def _filter_value(self, name: str, v) -> None:
         if self.view.sql:
             self.notify("= filtering works on the table, not on SQL results", severity="warning")
             return
@@ -1121,6 +1985,17 @@ class PqxApp(App):
     @_ui
     def _show_error(self, e: Exception, mark_input: bool = False) -> None:
         msg = str(e).strip()
+        if e is self.ds.setup_error:  # not this query's fault: no query can run on this file
+            reason = re.sub(r"^[A-Za-z ]+ Error:\s*", "", msg.split("\n")[0])
+            reason = re.sub(r"^Failed to read Parquet file '.*?':\s*", "", reason)
+            self._last_error = reason[:160]
+            self._error_hint = ""
+            if not self.__dict__.get("_unreadable_notified"):  # once: stats, plots etc. fail the same way
+                self._unreadable_notified = True
+                self.notify(f"{msg[:600]}\n\nSchema and Metadata (from the footer) still work.",
+                            title="✗ DuckDB can't read this file", severity="error", timeout=12)
+            self._render_status()
+            return
         first = msg.split("\n")[0]
         first = re.sub(r"^(Binder|Parser|Catalog|Conversion|Invalid Input|Out of Range) Error:\s*", "", first)
         first = re.sub(r'Referenced column ("[^"]+") not found in FROM clause!?', r"unknown column \1", first)
@@ -1193,12 +2068,18 @@ class PqxApp(App):
         grid = self.query_one(GridTable)
         grid.fixed_columns = 0 if grid.fixed_columns else grid.cursor_column + 1
         self.call_after_refresh(self._render_hscroll)
+        self.call_after_refresh(self._ensure_columns)  # pinning brings columns into view without scrolling
 
     def action_toggle_raw(self) -> None:
         self.raw = not self.raw
         grid = self.query_one(GridTable)
-        if self.page is not None:
-            self._apply_page(self.page, grid.abs_row, grid.cursor_column)
+        for cc in grid.cell_columns:  # cells re-format when next drawn
+            cc.invalidate(self.raw)
+        self._fit_columns()
+        self._reserve_widths()  # raw values are wider: so are the ones still loading
+        grid.invalidate_cells()
+        grid.scroll_cursor_fitted()  # columns left of the cursor may have widened
+        self._render_status()
 
     def _cursor_formatter(self) -> F.CellFormatter | None:
         grid = self.query_one(GridTable)
@@ -1226,12 +2107,12 @@ class PqxApp(App):
         fm = self._cursor_formatter()
         if fm is None:
             return
-        _, sample = self._cursor_value()
 
         def done(text):
             if text is not None:
                 self._set_format(fm, config.parse_override(text))
-        self.push_screen(FormatScreen(fm.name, fm.kind, fm.override, sample), done)
+        self._with_cursor_value(lambda _, sample: self.push_screen(FormatScreen(fm.name, fm.kind, fm.override,
+                                                                                  sample), done))
 
     def _set_format(self, fm: F.CellFormatter, value: int | str | None) -> None:
         """Apply a column's format override (None = automatic), redraw, and remember it."""
@@ -1245,8 +2126,15 @@ class PqxApp(App):
         if col is not None:
             col.label = self._column_label(fm.name)
             col.content_width = max(line.cell_len for line in col.label.split())  # let it shrink to fit
-        if self.page is not None:
-            self._apply_page(self.page, grid.abs_row, grid.cursor_column)
+        for i, cc in enumerate(grid.cell_columns):
+            if cc.fmt.name == fm.name:  # re-format the column: all of it, so its width is exact
+                cc.fmt = fm
+                cc.invalidate()
+                with grid.sizing():
+                    grid.fit_columns(columns=[i])
+                self._reserve_widths([i])  # (if it's still loading)
+        grid.invalidate_cells()
+        grid.scroll_cursor_fitted()
         if (self._stats_rendered and self._stats_rendered[0] is self.view and self._stats_rendered[1] == fm.name
                 and not self._stats_stale):
             self._render_stats(*self._stats_rendered[1:])  # reformat what's shown; no need to re-profile
@@ -1260,9 +2148,9 @@ class PqxApp(App):
         self.notify(f"✓ {name}: {shown}", timeout=2)
 
     def action_copy_cell(self) -> None:
-        name, v = self._cursor_value()
-        if name is None:
-            return
+        self._with_cursor_value(self._copy_value)
+
+    def _copy_value(self, name: str, v) -> None:
         typ = dict(self.result_schema).get(name, pa.null())
         s = F.format_value(F.shortest(v, typ), "float", raw=True, width=0) if v is not None else ""
         self.copy_to_clipboard(s)
@@ -1363,9 +2251,12 @@ class PqxApp(App):
                                            f"\n→ {opts['path']}", timeout=8)
 
     # ------------------------------------------------------------ schema tab
-    def _build_schema_tab(self) -> None:
+    # Schema and Metadata need a pass over every column chunk in the footer (sizes,
+    # statistics): seconds for thousands of row groups x hundreds of columns. So
+    # they're set up empty with the grid, read_footer does the pass on a thread,
+    # and they fill in when it's done.
+    def _init_schema_tab(self) -> None:
         t = self.query_one("#schema-table", DataTable)
-        d = self.dim
         # A missing unit is a dim "–", never a blank: blank unit cells next to the
         # right-aligned null counts made those read as units. The null share has its
         # own column so the counts stay narrow and line up under their header.
@@ -1373,8 +2264,62 @@ class PqxApp(App):
                 ("null %", True), ("min", True), ("max", True), ("size", True), ("ratio", True)]
         for label, right in cols:
             t.add_column(Text(label, style="bold", justify="right" if right else "left"), key=label)
-        summ = {s["path"]: s for s in self.ds.column_chunk_summary()}
-        self._schema_info = {}
+        self._schema_info: dict[str, tuple] = {}
+        self._schema_skip = 0  # highlights to take as the table being built, not as the user moving
+        md = self.ds.meta
+        self.query_one("#schema-desc", Static).update(Text.assemble(
+            "Reading sizes and statistics from the footer …",
+            (f"   {md.num_row_groups:,} row groups × {md.num_columns:,} columns", self.dim)))
+
+    @work(thread=True, exclusive=True, group="footer")
+    def read_footer(self) -> None:
+        # The pass is Python (it holds the GIL) and converting timestamp statistics imports pandas
+        # (~0.3 s): let the grid's first page in first, unless that's taking a while.
+        worker = get_current_worker()
+        deadline = time.monotonic() + FOOTER_WAIT
+        while self.page is None and self.ds.setup_error is None and time.monotonic() < deadline:
+            if worker.is_cancelled:  # quitting
+                return
+            time.sleep(0.01)
+        if self.page is not None:  # and on screen
+            painted = threading.Event()
+            try:
+                self.call_from_thread(self.call_after_refresh, painted.set)
+            except RuntimeError:  # the app has stopped
+                return
+            deadline = time.monotonic() + FOOTER_WAIT
+            while not painted.wait(0.01) and time.monotonic() < deadline:
+                if worker.is_cancelled:
+                    return
+        stop = lambda: worker.is_cancelled  # noqa: E731 - quitting needn't wait for the whole pass
+        try:
+            summ = self.ds.column_chunk_summary(stop)
+            rgs = self.ds.row_groups(stop)
+            rg_rows = self._rowgroup_rows(rgs)
+        except Stopped:
+            return
+        except Exception as e:  # noqa: BLE001 - say so in both tabs; the rest of pqx works without it
+            self.call_from_thread(self._footer_failed, e)
+            return
+        self.call_from_thread(self._build_footer_tabs, summ, rgs, rg_rows)
+
+    @_ui
+    def _build_footer_tabs(self, summ: list[dict], rgs: list[dict], rg_rows: list[tuple]) -> None:
+        self._build_schema_tab(summ)
+        self._build_meta_footer(summ, rgs, rg_rows)
+
+    @_ui
+    def _footer_failed(self, e: Exception) -> None:
+        msg = Text.assemble(("✗", "red"), " Couldn't read the footer's statistics", (f"   {e}", self.dim))
+        self.query_one("#schema-desc", Static).update(msg)
+        self.query_one("#meta-status", Static).update(msg)
+
+    def _build_schema_tab(self, summ_list: list[dict]) -> None:
+        t = self.query_one("#schema-table", DataTable)
+        d = self.dim
+        summ = {s["path"]: s for s in summ_list}
+        info = {}
+        rows = []
         for i, c in enumerate(self.ds.columns):
             s = summ.get(c.name)
             fm = F.CellFormatter(c.name, c.arrow_type, c.unit)
@@ -1383,15 +2328,14 @@ class PqxApp(App):
                 size = sum(v["compressed"] for v in leaves)
                 usize = sum(v["uncompressed"] for v in leaves)
                 mn = mx = nulls = None
-                enc, comp = "", (leaves[0]["compression"] if leaves else "")
+                comp = leaves[0]["compression"] if leaves else ""
             else:
                 size, usize = s["compressed"], s["uncompressed"]
                 mn, mx = s["min"], s["max"]
                 nulls = s["nulls"] if s["has_stats"] else None
-                enc = ", ".join(sorted(e.replace("RLE_DICTIONARY", "dict").lower() for e in s["encodings"]))
                 comp = s["compression"]
             ratio = f"{usize / size:.1f}×" if size else ""
-            self._schema_info[c.name] = (i, size, ratio, str(comp).lower(), enc)
+            info[c.name] = (i, size, ratio, str(comp).lower(), s is not None)
             if nulls is None:
                 null_n, null_p = Text("–", style=d, justify="right"), Text("")
             elif nulls:
@@ -1405,17 +2349,40 @@ class PqxApp(App):
                       fm(mn) if mn is not None else Text("–", style=d, justify="right"),
                       fm(mx) if mx is not None else Text("–", style=d, justify="right"),
                       Text(F.human_bytes(size), justify="right"), Text(ratio, style=d, justify="right")]
-            t.add_row(*cells, key=c.name)
+            rows.append((cells, c.name))
+        self._schema_info = info
+        # adding the first row highlights it: that's not the user moving
+        self._schema_skip = int(bool(rows) and t.show_cursor and t.cursor_type != "none")
+        for cells, key in rows:
+            t.add_row(*cells, key=key)
+        if self._tab_is("tab-schema"):  # built while shown: go to the current column now
+            self._sync_schema()
+
+    def _sync_schema(self) -> None:
+        """Put the Schema cursor on the current column (its highlight event updates the description)."""
+        t = self.query_one("#schema-table", DataTable)
+        # SQL-result columns may not be in the file: then Schema keeps its own cursor
+        if self.current_column in self._schema_info:
+            row = t.get_row_index(self.current_column)
+            if t.cursor_row != row:
+                t.move_cursor(row=row, animate=False)
 
     @on(DataTable.RowHighlighted, "#schema-table")
     def schema_row(self, event: DataTable.RowHighlighted) -> None:
         name = str(event.row_key.value) if event.row_key else None
-        if name is None or name not in self.ds._by_name:
+        building = self._schema_skip > 0
+        if building:
+            self._schema_skip -= 1
+        if name is None or name not in self._schema_info:
             return
-        if self._tab_is("tab-schema"):  # not the highlight the table gets when it's built
+        if self._tab_is("tab-schema") and not building:
             self.set_current_column(name, "schema")
         c = self.ds.column(name)
-        i, size, ratio, comp, enc = self._schema_info[name]
+        i, size, ratio, comp, leaf = self._schema_info[name]
+        enc = ""
+        if leaf:
+            enc = ", ".join(sorted(e.replace("RLE_DICTIONARY", "dict").lower()
+                                   for e in self.ds.column_encodings(name)))
         d = self.dim
         t = Text.assemble((c.name, "bold cyan"), f"   {c.arrow_type}", (f"   [{c.unit}]" if c.unit else ""),
                           (f"   {'nullable' if c.nullable else 'not null'}  ·  {F.human_bytes(size)}"
@@ -1431,48 +2398,16 @@ class PqxApp(App):
         self._show_stats_for(str(event.row_key.value))
 
     # ---------------------------------------------------------- metadata tab
-    def _build_meta_tab(self) -> None:
+    def _init_meta_tab(self) -> None:
         ds, md, d = self.ds, self.ds.meta, self.dim
-        rgs = ds.row_groups()
-        avg_rg = (sum(r["rows"] for r in rgs) / len(rgs)) if rgs else 0
-        comp = sum(r["compressed"] for r in rgs)
-        unc = sum(r["uncompressed"] for r in rgs)
-        ov = Table.grid(padding=(0, 2))
-        ov.add_column(style=d, no_wrap=True)
-        ov.add_column()
-        rows = [
-            ("path", Text.assemble((os.path.basename(ds.path), "cyan"), (f"   {os.path.dirname(ds.path)}/", d))),
-            ("file size", Text.assemble(F.human_bytes(ds.file_size), (f"   {ds.file_size:,} bytes", d))),
-            ("rows", Text(f"{ds.num_rows:,}")),
-            ("columns", Text.assemble(f"{len(ds.columns)}", (f"   {md.num_columns} leaf", d))),
-            ("row groups", Text.assemble(f"{md.num_row_groups:,}", (f"   ~{avg_rg:,.0f} rows each", d))),
-            ("data", Text.assemble(F.human_bytes(comp), (f"   compressed  ·  {F.human_bytes(unc)} raw"
-                                                         + (f"  ·  {unc / comp:.2f}×" if comp else ""), d))),
-            ("format", Text(str(md.format_version))),
-            ("created by", Text(str(md.created_by or "?"))),
-            ("footer", Text(F.human_bytes(md.serialized_size))),
-        ]
-        for k, v in rows:
-            ov.add_row(k, v)
-        self.query_one("#meta-overview", Static).update(ov)
+        self._render_meta_overview(None)
         t = self.query_one("#rowgroups", DataTable)
         for label, right in [("#", True), ("first row", True), ("rows", True), ("compressed", True), ("", False),
                              ("ratio", True)]:
             t.add_column(Text(label, style="bold", justify="right" if right else "left"))
-        cmax = max((r["compressed"] for r in rgs), default=1) or 1
-        for r in rgs[:5000]:
-            n = round(10 * r["compressed"] / cmax)
-            bar = Text.assemble("▰" * n, ("▱" * (10 - n), d))
-            t.add_row(Text(str(r["index"]), style=d, justify="right"), Text(f"{r['start']:,}", justify="right"),
-                      Text(f"{r['rows']:,}", justify="right"), Text(F.human_bytes(r["compressed"]), justify="right"),
-                      bar, Text(f"{r['uncompressed'] / r['compressed']:.2f}×" if r["compressed"] else "", style=d,
-                                justify="right"))
-        self.query_one("#meta-rg-panel").border_title = self._dim_markup(f"row groups  {len(rgs):,}")
-        n_stats = sum(1 for s in ds.column_chunk_summary() if s["has_stats"])
-        st = Text.assemble(("✓", "green"), " Footer read",
-                           (f"   {F.human_bytes(md.serialized_size)}  ·  {md.num_row_groups:,} row groups  ·  "
-                            f"stats on {n_stats}/{md.num_columns} columns", d))
-        self.query_one("#meta-status", Static).update(st)
+        self.query_one("#meta-rg-panel").border_title = self._dim_markup(f"row groups  {md.num_row_groups:,}")
+        self.query_one("#meta-status", Static).update(Text.assemble(
+            "Reading the footer …", (f"   {F.human_bytes(md.serialized_size)}  ·  {md.num_row_groups:,} row groups", d)))
         kv = ds.key_value_metadata()
         parts = [Text(""), Text("key-value metadata", style="bold")]
         from rich.json import JSON
@@ -1488,6 +2423,71 @@ class PqxApp(App):
         if len(parts) == 2:
             parts.append(Text("none", style=d))
         self.query_one("#meta-kv", Static).update(Group(*parts))
+
+    def _render_meta_overview(self, rgs: list[dict] | None) -> None:
+        """The file overview; ``rgs`` (``ds.row_groups()``) fills in the per-row-group figures."""
+        ds, md, d = self.ds, self.ds.meta, self.dim
+        ov = Table.grid(padding=(0, 2))
+        ov.add_column(style=d, no_wrap=True)
+        ov.add_column()
+        if rgs is None:
+            groups = Text(f"{md.num_row_groups:,}")
+            data = Text("…", style=d)
+        else:
+            avg_rg = (sum(r["rows"] for r in rgs) / len(rgs)) if rgs else 0
+            comp = sum(r["compressed"] for r in rgs)
+            unc = sum(r["uncompressed"] for r in rgs)
+            groups = Text.assemble(f"{md.num_row_groups:,}", (f"   ~{avg_rg:,.0f} rows each", d))
+            data = Text.assemble(F.human_bytes(comp), (f"   compressed  ·  {F.human_bytes(unc)} raw"
+                                                       + (f"  ·  {unc / comp:.2f}×" if comp else ""), d))
+        rows = [
+            ("path", Text.assemble((os.path.basename(ds.path), "cyan"), (f"   {os.path.dirname(ds.path)}/", d))),
+            ("file size", Text.assemble(F.human_bytes(ds.file_size), (f"   {ds.file_size:,} bytes", d))),
+            ("rows", Text(f"{ds.num_rows:,}")),
+            ("columns", Text.assemble(f"{len(ds.columns)}", (f"   {md.num_columns} leaf", d))),
+            ("row groups", groups),
+            ("data", data),
+            ("format", Text(str(md.format_version))),
+            ("created by", Text(str(md.created_by or "?"))),
+            ("footer", Text(F.human_bytes(md.serialized_size))),
+        ]
+        for k, v in rows:
+            ov.add_row(k, v)
+        self.query_one("#meta-overview", Static).update(ov)
+
+    def _rowgroup_rows(self, rgs: list[dict]) -> list[tuple]:
+        """Cells of the Metadata tab's row-group table (the first 5000); no widgets, so any thread."""
+        d = self.dim
+        cmax = max((r["compressed"] for r in rgs), default=1) or 1
+        rows = []
+        for r in rgs[:5000]:
+            n = round(10 * r["compressed"] / cmax)
+            bar = Text.assemble("▰" * n, ("▱" * (10 - n), d))
+            rows.append((Text(str(r["index"]), style=d, justify="right"), Text(f"{r['start']:,}", justify="right"),
+                         Text(f"{r['rows']:,}", justify="right"),
+                         Text(F.human_bytes(r["compressed"]), justify="right"),
+                         bar, Text(f"{r['uncompressed'] / r['compressed']:.2f}×" if r["compressed"] else "", style=d,
+                                   justify="right")))
+        return rows
+
+    @_ui
+    def _add_rowgroup_rows(self, rows: list[tuple]) -> None:
+        """Add ``rows`` to the row-group table a few hundred per event-loop turn: each
+        batch costs the DataTable a measuring pass, which shouldn't hold up the UI."""
+        self.query_one("#rowgroups", DataTable).add_rows(rows[:ROWGROUP_BATCH])
+        if len(rows) > ROWGROUP_BATCH:
+            self.set_timer(0.01, lambda: self._add_rowgroup_rows(rows[ROWGROUP_BATCH:]))
+
+    def _build_meta_footer(self, summ: list[dict], rgs: list[dict], rg_rows: list[tuple]) -> None:
+        md, d = self.ds.meta, self.dim
+        self._render_meta_overview(rgs)
+        self._add_rowgroup_rows(rg_rows)
+        self.query_one("#meta-rg-panel").border_title = self._dim_markup(f"row groups  {len(rgs):,}")
+        n_stats = sum(1 for s in summ if s["has_stats"])
+        st = Text.assemble(("✓", "green"), " Footer read",
+                           (f"   {F.human_bytes(md.serialized_size)}  ·  {md.num_row_groups:,} row groups  ·  "
+                            f"stats on {n_stats}/{md.num_columns} columns", d))
+        self.query_one("#meta-status", Static).update(st)
 
     # -------------------------------------------------------------- stats tab
     def _build_stats_list(self) -> None:
@@ -1551,13 +2551,8 @@ class PqxApp(App):
             self.query_one(PlotControls).focus()
             self.call_after_refresh(self.replot)  # after layout, so the plot fills the pane
         elif pane == "tab-schema":
-            t = self.query_one("#schema-table", DataTable)
-            # SQL-result columns may not be in the file: then Schema keeps its own cursor
-            if self.current_column in self.ds._by_name:
-                row = t.get_row_index(self.current_column)
-                if t.cursor_row != row:
-                    t.move_cursor(row=row, animate=False)  # its highlight event updates the description
-            t.focus()
+            self._sync_schema()  # (if it's still being read, it syncs once built)
+            self.query_one("#schema-table", DataTable).focus()
         elif pane == "tab-data":
             name = self.current_column
             if name and not self._move_grid_to_column(name) and name in dict(self.result_schema):

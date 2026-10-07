@@ -254,6 +254,10 @@ class CellFormatter:
         self.right = self.kind in ("mjd", "angle", "mag", "flux", "err", "float", "float32", "int")
         self.override = override
 
+    def plain(self, v: Any, raw: bool = False) -> str:
+        """The cell's text, without styling."""
+        return format_value(v, self.kind, raw=raw, override=self.override)
+
     def __call__(self, v: Any, raw: bool = False) -> Text:
         s = format_value(v, self.kind, raw=raw, override=self.override)
         justify = "right" if self.right else "left"
