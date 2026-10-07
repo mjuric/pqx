@@ -45,6 +45,49 @@ def test_derived():
     assert F.shortest(0.10000000149011612, pa.float32()) == 0.1
 
 
+def test_derived_angles():
+    d = F.derived
+    # RA-like names: hours
+    for name in ("ra", "RA", "raJ2000", "coord_ra", "coordRa", "ra_deg", "ra_icrs"):
+        assert d(name, "angle", 180.0) == "12h00m00.000s", name
+    # Dec / latitudes: signed degrees, only within ±90
+    for name in ("dec", "decl", "decJ2000", "coordDec", "lat", "glat", "elat", "beta", "pickup_lat"):
+        assert d(name, "angle", -30.5) == "-30°30′00.00″", name
+        assert d(name, "angle", 45.25) == "+45°15′00.00″", name
+        assert d(name, "angle", 120.0) == "", name
+    # every other longitude: degrees, any range, no hours
+    assert d("pickup_lon", "angle", -74.000439) == "-74°00′01.58″"
+    for name in ("lon", "glon", "elon", "lambda", "pickup_lon"):
+        assert d(name, "angle", 285.5) == "285°30′00.00″", name
+        assert d(name, "angle", 12.0) == "12°00′00.00″", name
+        assert d(name, "angle", -170.25) == "-170°15′00.00″", name
+    assert "h" not in d("lon", "angle", 30.0)
+    assert d("pickup_longitude", "angle", -73.5) == "-73°30′00.00″"
+    assert d("pickup_latitude", "angle", 40.75) == "+40°45′00.00″"
+    # matched by name alone, a "longitude" beyond ±360 is likely something else (lambda = 5000 Å)
+    assert d("lambda", "angle", 5000.0) == "" and d("lon", "angle", 1e20) == ""
+    assert d("lambda", "angle", 360.0) == "360°00′00.00″"
+    assert d("lambda", "angle", 5000.0, "deg") == "5000°00′00.00″"   # declared degrees: any range
+    # VizieR-style names
+    for name in ("RAJ2000", "RA_ICRS", "RA"):
+        assert F.kind_for(name, pa.float64()) == "angle"
+        assert d(name, "angle", 180.0) == "12h00m00.000s", name
+    for name in ("DEJ2000", "DE_ICRS", "DE"):
+        assert F.kind_for(name, pa.float64()) == "angle"
+        assert d(name, "angle", -30.5) == "-30°30′00.00″", name
+    for name in ("RATIO", "RANGE", "DEPTH", "altitude"):
+        assert F.kind_for(name, pa.float64()) != "angle", name
+    assert F.kind_for("latitude", pa.float64()) == "angle"
+    # rounding: a longitude just under 360 reads 0, and the sign is decided after rounding
+    assert d("lon", "angle", 359.999999999) == "00°00′00.00″"
+    assert d("lon", "angle", 360.0) == "360°00′00.00″"
+    assert d("lon", "angle", -1e-9) == "00°00′00.00″"
+    assert d("dec", "angle", -1e-9) == "+00°00′00.00″"
+    assert d("dec", "angle", -0.0000013) == "+00°00′00.00″"   # -0.0047″ rounds to 0 …
+    assert F.deg_to_dms(-0.000002) == "-00°00′00.01″"            # … -0.0072″ doesn't
+    assert F.deg_to_dms(10.999999999) == "+11°00′00.00″"
+
+
 def test_percent():
     assert F.percent(1_290_773, 1_290_773) == "100%"     # was "1e+02%"
     assert F.percent(0, 10) == "0%"
@@ -114,7 +157,7 @@ def test_version_comes_from_git():
     # setuptools-scm wrote pqx/_version.py at install time; the fallback means it didn't
     assert pqx.__version__ != "0.0.0.dev0"
     out = subprocess.run([sys.executable, "-m", "pqx", "--version"], capture_output=True, text=True).stdout
-    assert out.strip() == f"pqx {pqx.__version__}"
+    assert out.splitlines()[0] == f"pqx {pqx.__version__}"
 
 
 def test_overrides():

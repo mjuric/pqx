@@ -11,6 +11,8 @@ Screen {
 
 #titlebar {
     height: 1;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
     margin: 0 1;
 }
 
@@ -294,6 +296,10 @@ ModalScreen {
 #help-box {
     width: 96;
     height: 90%;
+}
+
+#help-head {
+    margin-bottom: 1;
 }
 
 #help-foot {

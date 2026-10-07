@@ -5,9 +5,52 @@ import argparse
 import os
 import sys
 
-from . import __version__
+from . import AUTHOR, HOMEPAGE, __version__
 from .config import parse_override
 from .fmt import override_error, sanitize
+
+
+VERSION_TEXT = f"""\
+pqx {__version__}
+Copyright (C) 2026 {AUTHOR}
+License BSD-3-Clause: <https://opensource.org/license/bsd-3-clause>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+
+Written by {AUTHOR}."""
+
+EPILOG = f"""\
+Examples:
+  pqx trips.parquet
+  pqx trips.parquet -w "payment_type = 'card'"
+  pqx trips.parquet -w "select vendor, count(*) from t group by 1"
+
+Inside pqx, press ? for keys.
+
+Report bugs at: <{HOMEPAGE}/issues>
+pqx home page: <{HOMEPAGE}>
+Written by {AUTHOR}."""
+
+
+class _HelpFormatter(argparse.HelpFormatter):
+    """Description and option help wrapped as usual; the epilog (the text with line breaks)
+    kept as written."""
+
+    def _fill_text(self, text, width, indent):
+        if "\n" not in text:
+            return super()._fill_text(text, width, indent)
+        return "".join(indent + line for line in text.splitlines(keepends=True))
+
+
+class _VersionAction(argparse.Action):
+    """``--version``: GNU-style version and licence text (argparse's own would rewrap it)."""
+
+    def __init__(self, option_strings, dest=argparse.SUPPRESS, default=argparse.SUPPRESS, help=None):
+        super().__init__(option_strings, dest=dest, default=default, nargs=0, help=help)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        print(VERSION_TEXT)
+        parser.exit()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -15,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
         prog="pqx",
         description="Interactive terminal explorer for Parquet files: browse, filter (SQL), profile, "
                     "plot and export — lazily, so files of any size open instantly.",
+        epilog=EPILOG,
+        formatter_class=_HelpFormatter,
     )
     p.add_argument("path", help="Parquet file to open")
     p.add_argument("-w", "--where", default="",
@@ -39,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="display format for a column this session: a Python spec (.3f, .2e, ,d) or a number "
                         "of digits; repeatable. Formats set in the grid (< > F) are saved to "
                         "$XDG_CONFIG_HOME/pqx/formats.yaml (default ~/.config/pqx/formats.yaml)")
-    p.add_argument("--version", action="version", version=f"pqx {__version__}")
+    p.add_argument("--version", action=_VersionAction, help="show the version and licence, and exit")
     a = p.parse_args(argv)
     formats = {}
     for item in a.formats:
