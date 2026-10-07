@@ -61,6 +61,13 @@ without losing the current view.
 | Esc | cancel running queries / leave the filter bar |
 | `?` · `q` | help · quit |
 
+Data, Schema and Stats stay on the same column: move to a column in one of
+them and the others are on it when you switch tabs, with the grid on the same
+row. A column hidden in the grid leaves the grid where it is and the status
+line says `‹col› is hidden · c to show`. Columns computed by a SQL query
+aren't in the file's schema, so Schema keeps its own row for them. Plot has
+its own column pickers.
+
 ## Column formats
 
 Values get an automatic format from the column's name, type and unit (see the
