@@ -137,6 +137,29 @@ def check_select(sql: str) -> str:
     return sql
 
 
+class UnbalancedFilter(duckdb.ParserException):
+    """A filter whose parentheses don't balance (see ``where_sql``)."""
+
+
+def where_sql(where: str) -> str:
+    """A filter's text as a condition to put in a query, parenthesized so it can't reach out.
+
+    A filter is spliced into queries next to conditions of pqx's own (``... AND (<filter>)``),
+    so its parentheses must balance: ``i = 3) OR (s = 'b'`` would turn ``x AND (i = 3) OR
+    (s = 'b')`` into a different query. Parentheses are counted on DuckDB's own tokens (not
+    those in literals, quoted names or comments), and the closing one goes on a new line,
+    out of reach of a trailing ``--`` comment."""
+    depth = 0
+    for start, kind in duckdb.tokenize(where):
+        if kind == duckdb.token_type.operator and where[start] in "()":
+            depth += 1 if where[start] == "(" else -1
+            if depth < 0:
+                raise UnbalancedFilter(f"unbalanced parentheses: the ) at character {start + 1} closes nothing")
+    if depth:
+        raise UnbalancedFilter(f"unbalanced parentheses: {depth} ( left open")
+    return f"({where}\n)"
+
+
 def is_sql_query(text: str) -> bool:
     """True when ``text`` is a full query rather than a WHERE expression."""
     return bool(_SQL_START.match(text or ""))
@@ -510,7 +533,7 @@ class ParquetDataset:
             src = TABLE
         sql = f"SELECT {cols} FROM {src}"
         if view.where.strip():
-            sql += f" WHERE ({view.where})"
+            sql += f" WHERE {where_sql(view.where)}"
         if view.order_by:
             keys = [f"{self._qcol(c)} {'DESC' if d else 'ASC'} NULLS LAST" for c, d in view.order_by]
             if with_rownum and self._has_rownum:
@@ -537,7 +560,7 @@ class ParquetDataset:
             cols = ", ".join(self._qcol(c) for c in (columns or self.column_names))
             sql = f"SELECT {cols} FROM __pqx_src WHERE {cond}"
             if view.where.strip():
-                sql += f" AND ({view.where})"
+                sql += f" AND {where_sql(view.where)}"
             return sql
         v = View(where=view.where)  # order is irrelevant for aggregates
         return self._base_sql(v, columns, with_rownum=False)
@@ -582,7 +605,7 @@ class ParquetDataset:
         else:
             sql = f"SELECT count(*) FROM {TABLE}"
             if view.where.strip():
-                sql += f" WHERE ({view.where})"
+                sql += f" WHERE {where_sql(view.where)}"
         return int(self.cursor().execute(check_select(sql)).fetchone()[0])
 
     def fetch(self, view: View, offset: int, limit: int, columns: list[str] | None = None) -> Page:
@@ -604,7 +627,50 @@ class ParquetDataset:
             base = self._base_sql(view, columns, with_rownum=not is_sql)
             sel = ", ".join(quote_ident(c) for c in columns) if (is_sql and columns) else "*"
             sql = check_select(f"SELECT {sel} FROM ({base}) LIMIT {limit} OFFSET {offset}")
-        tbl = cur.execute(sql).arrow()
+        return self._to_page(view, cur.execute(sql), offset)
+
+    def can_fetch_around(self, view: View) -> bool:
+        """Whether ``fetch_around`` works for ``view``: a filtered, unsorted view of a file whose rows
+        DuckDB numbers (it keeps the file's order, so its rows near one are found by file row)."""
+        return not view.sql.strip() and not view.order_by and bool(view.where.strip()) and self._has_rownum
+
+    def fetch_around(self, view: View, file_row: int, pos: int, offset: int, limit: int,
+                     columns: list[str] | None = None) -> Page:
+        """``fetch(view, offset, limit, columns)`` for a window holding file row ``file_row``, the
+        view's row ``pos`` (``can_fetch_around`` views only). It finds the window's rows by file row
+        number near ``file_row`` rather than counting the view's rows from its start, so its cost
+        doesn't grow with ``pos``: rows after it are the first matches from it on; rows before it
+        are looked for in file-row ranges reaching further back until there are enough."""
+        offset, limit, pos = max(0, int(offset)), max(1, int(limit)), int(pos)
+        if not offset <= pos < offset + limit:  # (not a window holding the row)
+            return self.fetch(view, offset, limit, columns)
+        fr, rn, where = int(file_row), self._rownum, where_sql(view.where)
+        cur = self.cursor()
+        after = cur.execute(check_select(
+            f"SELECT {rn} FROM __pqx_src WHERE {rn} >= {fr} AND {where} LIMIT {max(1, offset + limit - pos)}"
+        )).fetchall()
+        hi = max((r[0] for r in after), default=fr)
+        lo, k = fr, pos - offset  # k rows of the view before the record are wanted
+        span = max(4 * k, 1024)
+        while k > 0:
+            a = max(0, fr - span)
+            got = cur.execute(check_select(
+                f"SELECT {rn} FROM __pqx_src WHERE {rn} >= {a} AND {rn} < {fr} AND {where} "
+                f"ORDER BY {rn} DESC LIMIT {k}")).fetchall()
+            if len(got) >= k or a == 0:
+                lo = min((r[0] for r in got), default=fr)
+                offset = pos - len(got)
+                break
+            span *= 8
+        cols = ", ".join(self._qcol(c) for c in (columns or self.column_names))
+        sql = (f"SELECT {rn}, {cols} FROM __pqx_src WHERE {rn} >= {lo} AND {rn} <= {hi} AND {where} "
+               f"ORDER BY {rn}")
+        return self._to_page(view, cur.execute(check_select(sql)), offset)
+
+    def _to_page(self, view: View, result, offset: int) -> Page:
+        """A page of query ``result`` (its first column the file row number, if it has them)."""
+        is_sql = bool(view.sql.strip())
+        tbl = result.arrow()
         if isinstance(tbl, pa.RecordBatchReader):
             tbl = tbl.read_all()
         names = tbl.column_names
@@ -1032,11 +1098,22 @@ class ParquetDataset:
         return min(pa_ms, duck_ms)
 
     def find_row(self, view: View, file_row: int) -> int | None:
-        """Position of file row ``file_row`` within a filtered/sorted view."""
+        """Position of file row ``file_row`` within a filtered/sorted view (None if it isn't in it).
+
+        An unsorted view keeps the file's order, so there the position is a count
+        of the matching rows before it, which reads only the row groups up to it
+        (``file_row_number`` is pushed down); a sorted one numbers its rows."""
         if view.is_trivial:
             return file_row
         if view.sql.strip() or not self._has_rownum:
             return None
+        fr = int(file_row)
+        if not view.order_by:
+            sql = (f"SELECT count(*) FILTER (WHERE {self._rownum} < {fr}), "
+                   f"count(*) FILTER (WHERE {self._rownum} = {fr}) "
+                   f"FROM __pqx_src WHERE {self._rownum} <= {fr} AND {where_sql(view.where)}")
+            before, hit = self.cursor().execute(check_select(sql)).fetchone()
+            return int(before) if hit else None
         base = self._base_sql(view, [self.column_names[0]], with_rownum=True)
         sql = (f"SELECT pos FROM (SELECT {self._rownum}, row_number() OVER () - 1 AS pos "
                f"FROM ({base})) WHERE {self._rownum} = {int(file_row)}")

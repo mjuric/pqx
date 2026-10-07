@@ -45,6 +45,19 @@ def test_filter_sort_count(ds, truth):
     assert ds.find_row(v, page.row_numbers[3]) == 3
 
 
+def test_find_row(ds, truth):
+    v = View(where="band = 'r'")  # unsorted: a count of the matching rows before it
+    exp = list(truth.index[truth.band == "r"])
+    for pos in (0, 1, 999, 1000, len(exp) - 1):
+        assert ds.find_row(v, exp[pos]) == pos
+    assert ds.find_row(v, int(truth.index[truth.band != "r"][5])) is None  # not in the view
+    v = View(where="band = 'r'", order_by=[("mag", False)])  # sorted: numbered
+    exp = list(truth[truth.band == "r"].sort_values("mag", kind="stable").index)
+    for pos in (0, 1234, len(exp) - 1):
+        assert ds.find_row(v, exp[pos]) == pos
+    assert ds.find_row(View(), 777) == 777
+
+
 def test_sql_mode(ds, truth):
     v = View(sql="select band, count(*) as n from t group by band order by band")
     schema = ds.validate(v)
@@ -217,3 +230,44 @@ def test_init_failure_after_footer_parse_stops_setup_thread(demo_path, monkeypat
         ParquetDataset(demo_path)
     assert time.perf_counter() - t0 < 5
     assert started and not started[0].is_alive()
+
+
+@pytest.mark.parametrize("where, match", [("band = 'r'", lambda t: t.band == "r"),
+                                          ("detector = 7", lambda t: t.detector == 7),  # (sparse)
+                                          ("mag < 30", lambda t: t.mag < 30)])
+def test_fetch_around_matches_fetch(ds, truth, where, match):
+    v = View(where=where)
+    rows = list(truth.index[match(truth)])
+    for pos in sorted({min(p, len(rows) - 1) for p in (0, 3, 400, len(rows) // 2, len(rows) - 1)}):
+        fr = int(rows[pos])
+        for offset in (pos, max(0, pos - 150), max(0, pos - 299), max(0, pos - 999)):
+            got = ds.fetch_around(v, fr, pos, offset, 300, ["diaSourceId", "mag"])
+            exp = ds.fetch(v, offset, 300, ["diaSourceId", "mag"])
+            assert got.offset == offset and got.row_numbers == exp.row_numbers and got.rows == exp.rows
+
+
+@pytest.mark.parametrize("bad", ["detector = 3) OR (band = 'r'", "(detector = 3", "detector = 3)",
+                                 "detector = 3)) OR ((band = 'r'"])
+def test_filters_cannot_escape_their_parentheses(ds, truth, bad):
+    """``x) OR (y`` parses on its own (WHERE (x) OR (y)), but next to pqx's own conditions it
+    would mean something else: such filters are refused everywhere they'd be spliced in."""
+    v = View(where=bad)
+    with pytest.raises(duckdb.ParserException, match="unbalanced parentheses"):
+        ds.validate(v)
+    for call in (lambda: ds.count(v), lambda: ds.fetch(v, 0, 10), lambda: ds.find_row(v, 5),
+                 lambda: ds.fetch_around(v, 5, 0, 0, 150), lambda: ds.relation_sql(v)):
+        with pytest.raises(duckdb.ParserException, match="unbalanced parentheses"):
+            call()
+
+
+@pytest.mark.parametrize("where", ["band = ')' or detector = 3", "detector = 3 -- )", "detector = 3 /* ( */",
+                                   "(detector = 3) or (band = 'r')", '"detector" = 3 or "band" = \'(\''])
+def test_parentheses_in_literals_and_comments_are_fine(ds, where):
+    v = View(where=where)
+    ds.validate(v)
+    n = ds.count(v)
+    rows = ds.fetch(v, 0, n, ["diaSourceId"]).row_numbers
+    for pos in sorted({0, len(rows) // 2, len(rows) - 1}):
+        got = ds.fetch_around(v, rows[pos], pos, max(0, pos - 75), 150, ["diaSourceId"])
+        assert len(got.rows) <= 150 and got.row_numbers == rows[got.offset:got.offset + 150]
+        assert ds.find_row(v, rows[pos]) == pos
