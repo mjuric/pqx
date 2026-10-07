@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import atexit
 import bisect
+import functools
 import math
 import os
 import re
@@ -34,6 +35,8 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from .fmt import sanitize
+
 ROWNUM = "__pqx_row"
 TABLE = "t"
 
@@ -41,11 +44,97 @@ _SQL_START = re.compile(r"^\s*(select|with|from|pivot|unpivot|describe|summarize
 
 
 def quote_ident(name: str) -> str:
+    if "\x00" in name:  # DuckDB's parser would take it for the end of the query
+        raise ValueError(f"column {sanitize(name)} has a NUL character in its name, which SQL can't refer to")
     return '"' + name.replace('"', '""') + '"'
 
 
 def quote_str(s: str) -> str:
     return "'" + s.replace("'", "''") + "'"
+
+
+_GLOB_ESCAPES = str.maketrans({"*": "[*]", "?": "[?]", "[": "[[]"})
+
+
+def path_literal(path: str) -> str:
+    """``path`` as a string literal for DuckDB's ``read_parquet``, which takes it for
+    a glob pattern: ``*``, ``?`` and ``[`` are escaped, so it reads that one file."""
+    return quote_str(path.translate(_GLOB_ESCAPES))
+
+
+_PLAIN_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+@functools.lru_cache(maxsize=1)
+def sql_keywords() -> frozenset[str]:
+    """DuckDB's keywords (lower case), any category: a column so named needs quotes somewhere."""
+    con = duckdb.connect(":memory:")
+    try:
+        return frozenset(r[0].lower() for r in con.execute("SELECT keyword_name FROM duckdb_keywords()").fetchall())
+    finally:
+        con.close()
+
+
+def is_plain_ident(name: str) -> bool:
+    """Whether ``name`` can go into SQL as is: a plain identifier that isn't a keyword."""
+    return bool(_PLAIN_IDENT.fullmatch(name)) and name.lower() not in sql_keywords()
+
+
+def sql_ident(name: str) -> str:
+    """``name`` as it reads best in SQL: bare if that's safe (``is_plain_ident``), else quoted."""
+    return name if is_plain_ident(name) else quote_ident(name)
+
+
+def _has_controls(s: str) -> bool:
+    return any(0 <= ord(c) < 0x20 or 0x7F <= ord(c) < 0xA0 for c in s)
+
+
+def sql_text_literal(s: str) -> str:
+    """A SQL expression for the string ``s`` with no control character in its text:
+    those are spelled ``chr(N)``, so it can sit in an input box and still match exactly."""
+    if s.isprintable() or not _has_controls(s):
+        return quote_str(s)
+    parts, run = [], []
+    for c in s:
+        o = ord(c)
+        if o < 0x20 or 0x7F <= o < 0xA0:
+            if run:
+                parts.append(quote_str("".join(run)))
+                run = []
+            parts.append(f"chr({o})")
+        else:
+            run.append(c)
+    if run:
+        parts.append(quote_str("".join(run)))
+    return "(" + " || ".join(parts) + ")"
+
+
+def sql_column_ref(name: str) -> str:
+    """A reference to column ``name`` for a filter typed or shown in the filter box:
+    ``sql_ident``, unless the name has control characters, which no input box should
+    hold: then ``COLUMNS(c -> c = <name spelled with chr()>)``, which matches it alone."""
+    if not _has_controls(name):
+        return sql_ident(name)
+    return f"COLUMNS(c -> c = {sql_text_literal(name)})"
+
+
+class QueryNotAllowed(duckdb.InvalidInputException):
+    """User SQL that is more than one SELECT (see ``check_select``)."""
+
+
+def check_select(sql: str) -> str:
+    """``sql``, if it is exactly one SELECT statement; else raise ``QueryNotAllowed``.
+
+    Every query built around user text (a filter, a full query) goes through this
+    before it runs, as it will run: text such as ``1); COPY ... ; SELECT (1`` must
+    not smuggle in statements of its own. A PIVOT without an IN list makes DuckDB
+    add a CREATE TYPE of its own (with no source text): that one is allowed."""
+    stmts = duckdb.extract_statements(sql)
+    selects = [s for s in stmts if s.type == duckdb.StatementType.SELECT]
+    others = [s for s in stmts if s.type != duckdb.StatementType.SELECT]
+    if len(selects) != 1 or any(s.type != duckdb.StatementType.CREATE or s.query.strip() for s in others):
+        raise QueryNotAllowed("only a single SELECT query is allowed here")
+    return sql
 
 
 def is_sql_query(text: str) -> bool:
@@ -145,6 +234,7 @@ class ParquetDataset:
         self._encodings: dict[str, set[str]] = {}
         self._io_errors = 0
         self._bad_rgs: set[int] = set()  # row groups pyarrow failed on in a way we couldn't pin down
+        self._rownum = ROWNUM  # the file row number's column name in __pqx_src (see below)
         # Database-wide config: every cursor shows timestamps in UTC rather than local time, and the
         # footer is parsed once rather than on every query (~1 s each for 2000 row groups x 300
         # columns); DuckDB's cache checks the file's modification time.
@@ -166,8 +256,12 @@ class ParquetDataset:
             self._wide_decimals = {f.name for f in self.arrow_schema
                                    if pa.types.is_decimal(f.type) and f.type.precision > 38}
             # file_row_number collides if the file already has such a column; then
-            # fall back to OFFSET-based seeking everywhere.
-            self._has_rownum = "file_row_number" not in self._by_name
+            # fall back to OFFSET-based seeking everywhere. (DuckDB's names ignore case.)
+            lower = {c.name.lower() for c in self.columns}
+            self._has_rownum = "file_row_number" not in lower
+            # the row number's own name, too, must not be one of the file's
+            while self._rownum.lower() in lower:
+                self._rownum += "_"
             self._opened = True
         except BaseException:
             self._schema_known.set()
@@ -194,15 +288,15 @@ class ParquetDataset:
         return self._setup_error if self._ready.is_set() else None
 
     def _create_views(self) -> None:
-        src = f"read_parquet({quote_str(self.path)}, file_row_number=true)"
+        src = f"read_parquet({path_literal(self.path)}, file_row_number=true)"
         if self._has_rownum:
             self._con.execute(
-                f"CREATE VIEW __pqx_src AS SELECT * RENAME (file_row_number AS {ROWNUM}) FROM {src}"
+                f"CREATE VIEW __pqx_src AS SELECT * RENAME (file_row_number AS {self._rownum}) FROM {src}"
             )
-            self._con.execute(f"CREATE VIEW {TABLE} AS SELECT * EXCLUDE ({ROWNUM}) FROM __pqx_src")
+            self._con.execute(f"CREATE VIEW {TABLE} AS SELECT * EXCLUDE ({self._rownum}) FROM __pqx_src")
         else:
             self._con.execute(
-                f"CREATE VIEW {TABLE} AS SELECT * FROM read_parquet({quote_str(self.path)})"
+                f"CREATE VIEW {TABLE} AS SELECT * FROM read_parquet({path_literal(self.path)})"
             )
 
     # ------------------------------------------------------------------ schema
@@ -376,7 +470,7 @@ class ParquetDataset:
             return view.sql.strip().rstrip(";")
         cols = ", ".join(quote_ident(c) for c in (columns or self.column_names))
         if with_rownum and self._has_rownum:
-            cols = f"{ROWNUM}, {cols}"
+            cols = f"{self._rownum}, {cols}"
             src = "__pqx_src"
         else:
             src = TABLE
@@ -386,7 +480,7 @@ class ParquetDataset:
         if view.order_by:
             keys = [f"{quote_ident(c)} {'DESC' if d else 'ASC'} NULLS LAST" for c, d in view.order_by]
             if with_rownum and self._has_rownum:
-                keys.append(ROWNUM)  # stable order
+                keys.append(self._rownum)  # stable order
             sql += " ORDER BY " + ", ".join(keys)
         return sql
 
@@ -431,14 +525,14 @@ class ParquetDataset:
         chunk = max(1, -(-sample // k))
         picks = sorted({round(i * (len(rows) - 1) / max(k - 1, 1)) for i in range(k)})
         ranges = [(starts[i], starts[i] + min(chunk, rows[i])) for i in picks]
-        return "(" + " OR ".join(f"({ROWNUM} >= {a} AND {ROWNUM} < {b})" for a, b in ranges) + ")"
+        return "(" + " OR ".join(f"({self._rownum} >= {a} AND {self._rownum} < {b})" for a, b in ranges) + ")"
 
     def validate(self, view: View) -> list[tuple[str, pa.DataType]]:
         """Bind the query without running it; returns its output schema.
 
         Raises ``duckdb.Error`` with a user-presentable message on failure."""
         cur = self.cursor()
-        rel = cur.sql(f"SELECT * FROM ({self._base_sql(view, None, False)}) LIMIT 0")
+        rel = cur.sql(check_select(f"SELECT * FROM ({self._base_sql(view, None, False)}) LIMIT 0"))
         tbl = rel.arrow()
         if isinstance(tbl, pa.RecordBatchReader):
             tbl = tbl.read_all()
@@ -453,7 +547,7 @@ class ParquetDataset:
             sql = f"SELECT count(*) FROM {TABLE}"
             if view.where.strip():
                 sql += f" WHERE ({view.where})"
-        return int(self.cursor().execute(sql).fetchone()[0])
+        return int(self.cursor().execute(check_select(sql)).fetchone()[0])
 
     def fetch(self, view: View, offset: int, limit: int, columns: list[str] | None = None) -> Page:
         """Fetch ``limit`` rows of the view starting at ``offset``."""
@@ -468,19 +562,19 @@ class ParquetDataset:
         is_sql = bool(view.sql.strip())
         if view.is_trivial and self._has_rownum:
             cols = ", ".join(quote_ident(c) for c in (columns or self.column_names))
-            sql = (f"SELECT {ROWNUM}, {cols} FROM __pqx_src WHERE {ROWNUM} >= {offset} "
-                   f"AND {ROWNUM} < {offset + limit} ORDER BY {ROWNUM}")
+            sql = (f"SELECT {self._rownum}, {cols} FROM __pqx_src WHERE {self._rownum} >= {offset} "
+                   f"AND {self._rownum} < {offset + limit} ORDER BY {self._rownum}")
         else:
             base = self._base_sql(view, columns, with_rownum=not is_sql)
             sel = ", ".join(quote_ident(c) for c in columns) if (is_sql and columns) else "*"
-            sql = f"SELECT {sel} FROM ({base}) LIMIT {limit} OFFSET {offset}"
+            sql = check_select(f"SELECT {sel} FROM ({base}) LIMIT {limit} OFFSET {offset}")
         tbl = cur.execute(sql).arrow()
         if isinstance(tbl, pa.RecordBatchReader):
             tbl = tbl.read_all()
         names = tbl.column_names
-        if names and names[0] == ROWNUM:
+        if names and names[0] == self._rownum:
             rn = tbl.column(0).to_pylist()
-            tbl = tbl.drop_columns([ROWNUM])
+            tbl = tbl.drop_columns([self._rownum])
         elif not is_sql and view.is_trivial:
             rn = list(range(offset, offset + tbl.num_rows))
         else:
@@ -566,11 +660,11 @@ class ParquetDataset:
         if self._has_rownum or not uniq:
             sql = f"SELECT {cols} FROM {TABLE} LIMIT 0"
             if uniq:
-                sql = (f"SELECT {ROWNUM}, {cols} FROM __pqx_src WHERE {ROWNUM} IN "
-                       f"({', '.join(map(str, uniq))}) ORDER BY {ROWNUM}")
+                sql = (f"SELECT {self._rownum}, {cols} FROM __pqx_src WHERE {self._rownum} IN "
+                       f"({', '.join(map(str, uniq))}) ORDER BY {self._rownum}")
             tbl = _arrow(cur.execute(sql))
             if uniq:
-                tbl = tbl.drop_columns([ROWNUM])
+                tbl = tbl.drop_columns([self._rownum])
         else:  # no row-number column to select by: contiguous runs with LIMIT/OFFSET
             tbl = pa.concat_tables([_arrow(cur.execute(f"SELECT {cols} FROM {TABLE} LIMIT {b - a} OFFSET {a}"))
                                     for a, b in _runs(uniq)])
@@ -762,7 +856,7 @@ class ParquetDataset:
         how. Sets ``_ready`` whatever happens; ``con`` raises a failure."""
         try:
             try:
-                self._con.execute(f"SELECT * FROM read_parquet({quote_str(self.path)}) LIMIT 0")
+                self._con.execute(f"SELECT * FROM read_parquet({path_literal(self.path)}) LIMIT 0")
             except Exception:  # noqa: BLE001 - creating the views says what's wrong
                 pass
             self._schema_known.wait()
@@ -907,9 +1001,9 @@ class ParquetDataset:
         if view.sql.strip() or not self._has_rownum:
             return None
         base = self._base_sql(view, [self.column_names[0]], with_rownum=True)
-        sql = (f"SELECT pos FROM (SELECT {ROWNUM}, row_number() OVER () - 1 AS pos "
-               f"FROM ({base})) WHERE {ROWNUM} = {int(file_row)}")
-        r = self.cursor().execute(sql).fetchone()
+        sql = (f"SELECT pos FROM (SELECT {self._rownum}, row_number() OVER () - 1 AS pos "
+               f"FROM ({base})) WHERE {self._rownum} = {int(file_row)}")
+        r = self.cursor().execute(check_select(sql)).fetchone()
         return None if r is None else int(r[0])
 
     # ------------------------------------------------------------------ stats
@@ -940,7 +1034,7 @@ class ParquetDataset:
             aggs += [f"avg({wf})", f"stddev_samp({wf})"]
             aggs.append("count(*) FILTER (WHERE isnan(v))" if ci.is_float else "NULL")
             aggs.append(f"approx_quantile({wf}, [{', '.join(map(str, qs))}])")
-        r = cur.execute(f"SELECT {', '.join(aggs)} FROM {rel}").fetchone()
+        r = cur.execute(check_select(f"SELECT {', '.join(aggs)} FROM {rel}")).fetchone()
         st.count, nonnull = int(r[0]), int(r[1])
         st.nulls = st.count - nonnull
         st.min, st.max = r[2], r[3]
@@ -953,9 +1047,9 @@ class ParquetDataset:
         if not ci.is_nested and top_k and not (ci.is_float and (st.distinct or 0) > 1000) and not near_unique:
             st.top = [
                 (v, int(n))
-                for v, n in cur.execute(
+                for v, n in cur.execute(check_select(
                     f"SELECT v, count(*) AS n FROM {rel} GROUP BY v ORDER BY n DESC, v LIMIT {int(top_k)}"
-                ).fetchall()
+                )).fetchall()
             ]
             non_null_top = [v for v, _ in st.top if v is not None]
             if len(st.top) < top_k:  # the list is the whole distribution: exact distinct count
@@ -977,7 +1071,7 @@ class ParquetDataset:
                f"WHERE v IS NOT NULL AND isfinite(v)")
         cur = self.cursor()
         if lo is None or hi is None:
-            a, b = cur.execute(f"SELECT min(v), max(v) FROM {rel}").fetchone()
+            a, b = cur.execute(check_select(f"SELECT min(v), max(v) FROM {rel}")).fetchone()
             lo = a if lo is None else lo
             hi = b if hi is None else hi
         if lo is None or hi is None:
@@ -987,10 +1081,10 @@ class ParquetDataset:
             hi = lo + 1.0
             lo = lo - 0.0
         w = (hi - lo) / bins
-        res = cur.execute(
+        res = cur.execute(check_select(
             f"SELECT least(greatest(floor((v - {lo!r}) / {w!r}), 0), {bins - 1})::INT AS b, count(*) "
             f"FROM {rel} AND v >= {lo!r} AND v <= {hi!r} GROUP BY b"
-        ).fetchall()
+        )).fetchall()
         counts = [0] * bins
         for b, n in res:
             counts[int(b)] = int(n)
@@ -1013,7 +1107,7 @@ class ParquetDataset:
         sql = (f"SELECT least(floor((((a % 360) + 360) % 360) / {res_deg!r}), {nlon - 1})::INT AS i, "
                f"least(floor((d + 90) / {res_deg!r}), {nlat - 1})::INT AS j, count(*) AS n "
                f"FROM {rel} GROUP BY i, j")
-        tbl = self.cursor().execute(sql).arrow()
+        tbl = self.cursor().execute(check_select(sql)).arrow()
         if isinstance(tbl, pa.RecordBatchReader):
             tbl = tbl.read_all()
         grid = np.zeros((nlat, nlon), dtype=np.int64)
@@ -1033,10 +1127,10 @@ class ParquetDataset:
                f"({self.relation_sql(view, sample=sample)})) WHERE isfinite(x) AND isfinite(y)")
         cur = self.cursor()
         if xlim is None or ylim is None:
-            r = cur.execute(
+            r = cur.execute(check_select(
                 f"SELECT approx_quantile(x, 0.001), approx_quantile(x, 0.999), "
                 f"approx_quantile(y, 0.001), approx_quantile(y, 0.999), min(x), max(x), min(y), max(y) FROM {rel}"
-            ).fetchone()
+            )).fetchone()
             if r[0] is None:
                 return np.zeros((ny, nx), dtype=np.int64), (0.0, 1.0), (0.0, 1.0)
             # robust range: clip the extreme 0.1% tails unless that collapses the range
@@ -1046,11 +1140,11 @@ class ParquetDataset:
             ylim = ylim or (float(y0), float(y1) if y1 > y0 else float(y0) + 1)
         (x0, x1), (y0, y1) = xlim, ylim
         wx, wy = (x1 - x0) / nx, (y1 - y0) / ny
-        tbl = cur.execute(
+        tbl = cur.execute(check_select(
             f"SELECT floor((x - {x0!r}) / {wx!r})::INT AS i, floor((y - {y0!r}) / {wy!r})::INT AS j, "
             f"count(*) AS n FROM {rel} AND x >= {x0!r} AND x < {x1!r} AND y >= {y0!r} AND y < {y1!r} "
             f"GROUP BY i, j"
-        ).arrow()
+        )).arrow()
         if isinstance(tbl, pa.RecordBatchReader):
             tbl = tbl.read_all()
         grid = np.zeros((ny, nx), dtype=np.int64)
@@ -1074,8 +1168,13 @@ class ParquetDataset:
         opts = {"parquet": "FORMAT parquet, COMPRESSION zstd",
                 "csv": "FORMAT csv, HEADER true",
                 "json": "FORMAT json"}[fmt]
+        check_select(f"SELECT * FROM ({base})")  # the query, parenthesised as COPY will have it
+        copy = f"COPY ({base}) TO {quote_str(out_path)} ({opts})"
+        stmts = duckdb.extract_statements(copy)
+        if len(stmts) != 1 or stmts[0].type != duckdb.StatementType.COPY:
+            raise QueryNotAllowed("only a single SELECT query is allowed here")
         cur = self.cursor()
-        cur.execute(f"COPY ({base}) TO {quote_str(out_path)} ({opts})")
+        cur.execute(copy)
         return self.count(View(where=view.where, sql=view.sql))
 
 
