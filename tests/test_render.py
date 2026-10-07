@@ -49,14 +49,29 @@ def test_textual_render_hooks_unchanged():
         assert hasattr(t, cache)
 
 
-# Hashes of the DataTable code GridTable copies (_render_line_in_row, ordered_columns) or relies
-# on (how render_line / _render_line crop each line), as of Textual 8.2.8.
+# Hashes of the DataTable code GridTable copies or relies on, as of Textual 8.2.8.
 UPSTREAM_SOURCE = {
     "_render_line_in_row": "669cc46a7ca119d2",
     "_render_line": "a32c6991165cea90",
     "render_line": "dfc24fd4f26a530e",
     "render_lines": "4e0ae4f0a9bd61c0",
     "ordered_columns": "aa1124cb7bcaa0ce",
+    # Lazy cells (GridTable.set_rows / _compute_row_renderables / fit_visible, pqx/cells.py) stand in
+    # for add_row and its idle measuring, hand rows over as CellRow/RowCells, settle dimensions
+    # themselves and scroll the cursor with DataTable's own helpers.
+    "add_row": "9404928b4fdd9dab",
+    "_compute_row_renderables": "6906170428250b3c",
+    "_get_row_renderables": "4766e26ce80d09dd",
+    "get_row": "7f4134ffa6f7b3b9",
+    "_on_idle": "d94152378c36b0c2",
+    "_update_dimensions": "c62ef3216f7c354b",
+    "_render_cell": "56c87899a3bfc4da",  # also: GridTable._render_cell's fast path mirrors it
+    "_get_styles_to_render_cell": "058dea3ae068f137",
+    "clear": "6af902cb1b84743d",
+    "move_cursor": "f312ced43e2c45fd",
+    "watch_cursor_coordinate": "a4f113b27d09127b",
+    "watch_fixed_columns": "af846fa34a6922c8",
+    "_scroll_cursor_into_view": "9e4419fb40c5be82",
 }
 
 
@@ -66,8 +81,9 @@ def test_textual_render_source_unchanged(name):
     src = inspect.getsource(obj.fget if isinstance(obj, property) else obj)
     assert hashlib.sha256(src.encode()).hexdigest()[:16] == UPSTREAM_SOURCE[name], (
         f"Textual changed DataTable.{name}. Diff it against the version GridTable was written for "
-        f"(Textual 8.2.8), port any change into GridTable._render_line_in_row / ordered_columns / "
-        f"render_lines in pqx/app.py, run tests/test_render.py, then update this hash.")
+        f"(Textual 8.2.8), port any change into GridTable (pqx/app.py: the rendering overrides, or the "
+        f"lazy-cell ones: set_rows, _compute_row_renderables, fit_visible, scroll_cursor_fitted) and "
+        f"pqx/cells.py, run tests/test_render.py and tests/test_cells.py, then update this hash.")
 
 
 def _strips(g: GridTable) -> list:
@@ -175,7 +191,9 @@ def _frame(g: GridTable) -> list:
 
 async def test_render_after_remeasure(wide300_path):
     """DataTable re-measures column and row-label widths on idle without invalidating its caches:
-    a frame drawn before that must not leave lines at the old widths behind."""
+    a frame drawn before that must not leave lines at the old widths behind. (The grid now
+    settles its widths when it loads or re-formats, but a frame drawn at once must still
+    match one drawn after idle.)"""
     app = PqxApp(wide300_path)
     async with app.run_test(size=SIZE) as pilot:
         await settle(pilot, app)
@@ -186,11 +204,27 @@ async def test_render_after_remeasure(wide300_path):
                    "raw": app.action_toggle_raw, "digits": lambda: app.action_step_digits(1)}
         for what, reload in reloads.items():
             reload()
-            assert g._require_update_dimensions, what  # not re-measured yet
-            _frame(g)  # drawn now, with the row labels' width still 0
+            first = _frame(g)  # drawn at once, before any idle
             await settle(pilot, app)
             assert not g._require_update_dimensions, what
-            assert _frame(g) == _reference(g), what
+            assert _frame(g) == _reference(g) == first, what
+
+
+async def test_render_after_width_change_behind_the_caches(wide300_path):
+    """A column or row-label width that changes without an _update_count bump (as DataTable's
+    idle re-measuring does) must not leave lines cached at the old widths."""
+    app = PqxApp(wide300_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        _frame(g)  # warm every cache
+        count = g._update_count
+        g.ordered_columns[1].content_width += 3
+        assert g._update_count == count
+        assert _frame(g) == _reference(g), "column"
+        _frame(g)
+        g._label_column.content_width += 2
+        assert _frame(g) == _reference(g), "row labels"
 
 
 async def test_render_work_scales_with_visible_columns(wide300_path):
@@ -227,3 +261,141 @@ async def test_render_work_scales_with_visible_columns(wide300_path):
         await settle(pilot, app)
         assert calls and len(calls) <= 2 * in_view  # the two rows the cursor touched
         assert {r for r, _ in calls} <= {g.cursor_row - 1, g.cursor_row}
+
+
+@pytest.fixture(scope="module")
+def styled_path(tmp_path_factory):
+    """Cells of every look: dim NULL/NaN/∞, bold ✓ and dim · booleans, left/right/center
+    justification, empty and wide (CJK) strings, long text cut by its column, timestamps, blobs."""
+    n = 200
+    rng = np.random.default_rng(2)
+    x = rng.normal(size=n)
+    x[::7] = np.nan
+    x[3] = np.inf
+    strs = [None if i % 5 == 0 else ("" if i % 5 == 1 else ("日本語" if i % 5 == 2 else "w" * (i % 30)))
+            for i in range(n)]
+    tbl = pa.table({
+        "id": np.arange(n),
+        "x": pa.array([None if i % 11 == 0 else v for i, v in enumerate(x)]),
+        "flag": pa.array([None if i % 4 == 0 else i % 3 == 0 for i in range(n)]),
+        "s": pa.array(strs),
+        "day": pa.array(np.datetime64("2026-01-01") + (np.arange(n) * 3_600_123).astype("timedelta64[ms]")),
+        "blob": pa.array([bytes([i % 256]) * (i % 20) for i in range(n)], type=pa.binary()),
+        "tags": pa.array([["a", "b"][: i % 3] for i in range(n)], type=pa.list_(pa.string())),
+        **{f"c{i}": rng.normal(scale=10.0 ** i, size=n) for i in range(12)},
+    })
+    p = tmp_path_factory.mktemp("data") / "styled.parquet"
+    pq.write_table(tbl, p)
+    return str(p)
+
+
+async def test_render_matches_datatable_styled_cells(styled_path):
+    """GridTable._render_cell's fast path for one-line Text cells must draw exactly what
+    DataTable's Rich rendering does, for every cell look, cursor, hover and pinned style."""
+    app = PqxApp(styled_path)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        await _check_look(pilot, app, g, "start")
+        assert g._fast_cell_styles, "the fast path wasn't used"
+        for col in range(1, 7):
+            g.move_cursor(row=col + 3, column=col)
+            await settle(pilot, app)
+            await _check_look(pilot, app, g, f"cursor on column {col}")
+        g._set_hover_cursor(True)
+        g.hover_coordinate = Coordinate(5, 2)
+        await _check_look(pilot, app, g, "hover")
+        g._set_hover_cursor(False)
+        g.move_cursor(column=3)
+        await pilot.press("p")  # pin id..s: fixed-cell styles, and the cursor on a pinned cell
+        await settle(pilot, app)
+        await _check_look(pilot, app, g, "pinned")
+        await pilot.press("f")
+        await settle(pilot, app)
+        await _check_look(pilot, app, g, "raw")
+        await pilot.press("end", "pagedown")
+        await settle(pilot, app)
+        await _check_look(pilot, app, g, "pinned, scrolled")
+        g.blur()
+        await _check_look(pilot, app, g, "blurred")
+
+
+@pytest.mark.parametrize("size,keys", [(SIZE, ["end", "p"]), ((80, 24), ["end", "left", "left", "p"])])
+async def test_pin_while_scrolled_right(wide300_path, size, keys):
+    """Pinning far right puts the scrollable part's left edge past the table's end: no crash,
+    and still drawn like DataTable."""
+    app = PqxApp(wide300_path)
+    async with app.run_test(size=size) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        for k in keys:
+            await pilot.press(k)
+            await settle(pilot, app)
+        assert g.fixed_columns > 200
+        await _check_look(pilot, app, g, "pinned far right")
+
+
+# Characters that trip up a naive one-line renderer: tabs, controls, wide, combining, joiners,
+# variation selectors, flags, skin tones, Hangul jamo, trailing spaces.
+FUZZ_ALPHABET = (list("abcXYZ019 .-_") + [" ", "  ", "\t", "\r", "\x00", "\x1b", "\x7f", "\x85", "\xa0", "\xad",
+                 "中", "日本", "ｱ", "Ａ", "́", "​", "‍", "️", "ᄀ", "ᅡ", "ᆨ", "👍", "❤", "🇺🇸",
+                 "é", "ß", "Ω", "∞", "·", "✓", "–", "…", " ", "　", "ا", "\U0001F3FD", "ั", "⃝", "∅"])
+
+
+async def test_render_cell_fast_path_matches_datatable_fuzz(monkeypatch, tmp_path):
+    """GridTable._render_cell vs DataTable._render_cell on random one-line texts, styles,
+    justifications and widths, under random cursor, hover, pinned, zebra, padding, CSS
+    priority and focus states (seeded, so failures reproduce)."""
+    import random
+
+    from rich.style import Style
+    from rich.text import Text
+
+    from pqx import cells as C
+
+    rnd = random.Random(1234)
+    n = 40
+    p = tmp_path / "fuzz.parquet"
+    pq.write_table(pa.table({"id": np.arange(n), **{f"s{i}": [f"v{i}{j}" for j in range(n)] for i in range(6)}}), p)
+    current = [None]
+    real = C.Cell.text
+    monkeypatch.setattr(C.Cell, "text", property(lambda self: real.fget(self) if current[0] is None else current[0]))
+    styles = ["", "dim", "bold", "bold red", Style(italic=True), Style(color="red", bgcolor="blue")]
+    app = PqxApp(str(p))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        from pqx.app import pqx_theme
+        app.register_theme(pqx_theme("red", "#808080"))
+        themes = [app.theme, "pqx-red"]
+        bad = []
+        for t in range(1500):
+            if t % 150 == 0:
+                g.zebra_stripes = rnd.random() < 0.5
+                g.cursor_type = rnd.choice(["cell", "row", "column", "cell"])
+                g.cursor_foreground_priority = rnd.choice(["css", "renderable"])
+                g.cursor_background_priority = rnd.choice(["css", "renderable"])
+                g.fixed_columns = rnd.choice([0, 2, 2])
+                g.cell_padding = rnd.choice([1, 1, 2])
+                g.blur() if rnd.random() < 0.3 else g.focus()
+                app.theme = rnd.choice(themes)
+                await pilot.pause(0.02)
+            s = "".join(rnd.choice(FUZZ_ALPHABET) for _ in range(rnd.randint(0, 12)))
+            current[0] = Text(s, style=rnd.choice(styles), justify=rnd.choice(["left", "right", "center"]))
+            r, c = rnd.randint(0, 20), rnd.randint(0, 6)
+            if c < g.fixed_columns:
+                base = g.get_component_styles("datatable--fixed").rich_style + Style.from_meta({"fixed": True})
+            else:
+                base = g._get_row_style(r, g.rich_style)
+            width = rnd.randint(1, 30)
+            cursor, hover = rnd.random() < 0.4, rnd.random() < 0.3
+            g._show_hover_cursor = rnd.random() < 0.5
+            g._cell_render_cache.clear()
+            ours = GridTable._render_cell(g, r, c, base, width, cursor, hover)
+            g._cell_render_cache.clear()
+            ref = DataTable._render_cell(g, r, c, base, width, cursor, hover)
+            g._cell_render_cache.clear()
+            if [[(x.text, x.style) for x in line] for line in ours] != [[(x.text, x.style) for x in line] for line in ref]:
+                bad.append((s, current[0].justify, width, cursor, hover, c < g.fixed_columns))
+        assert g._fast_cell_styles, "the fast path wasn't used"
+        assert not bad, bad[:5]
