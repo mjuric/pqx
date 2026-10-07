@@ -47,7 +47,7 @@ SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SAMPLE_ROWS = 2_000_000       # rows used for stats/plots when sampling
 AUTO_SAMPLE_ROWS = 200_000_000        # sampling defaults on above this many rows…
 AUTO_SAMPLE_BYTES = 8 * 1024 ** 3     # …or this file size
-WIDTH_SAMPLE_ROWS = 16        # rows spread through a window that set its column widths (plus those on screen)
+WIDTH_SAMPLE_ROWS = 16        # rows spread through a window that size its non-numeric columns
 
 ACCENTS = ("blue", "cyan", "magenta", "green", "yellow")
 DIM_MODES = ("faint", "bright-black")
@@ -173,9 +173,15 @@ class GridTable(DataTable):
 
     def watch_scroll_x(self, old_value: float, new_value: float) -> None:
         super().watch_scroll_x(old_value, new_value)
+        self.fit_visible()
         self.post_message(self.HScroll())
 
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        super().watch_scroll_y(old_value, new_value)
+        self.fit_visible()
+
     def on_resize(self, event) -> None:
+        self.fit_visible()
         self.post_message(self.HScroll())
 
     def column_window(self) -> tuple[int, int, int, int]:
@@ -267,7 +273,9 @@ class GridTable(DataTable):
 
     def _widened(self) -> None:
         """A cell outgrew its column: redraw with the new widths, once per batch of growth."""
-        if not self._widen_pending:
+        if self._sizing:
+            self._grew = True
+        elif not self._widen_pending:
             self._widen_pending = True
             self.call_later(self._relayout)
 
@@ -275,21 +283,65 @@ class GridTable(DataTable):
         self._widen_pending = False
         self.invalidate_cells()
 
+    _sizing: bool = False
+    _grew: bool = False
+
     @contextmanager
     def sizing(self):
-        """Columns widened inside this block are drawn by the caller's own redraw: no extra one."""
-        pending, self._widen_pending = self._widen_pending, True
+        """Columns widened inside this block are drawn by the caller's own redraw: no extra one.
+
+        Yields a function telling whether any column grew in the block."""
+        outer, outer_grew = self._sizing, self._grew
+        self._sizing, self._grew = True, False
+        grew = [False]
         try:
-            yield
+            yield lambda: grew[0]
         finally:
-            self._widen_pending = pending
+            grew[0] = self._grew
+            self._sizing, self._grew = outer, outer_grew or self._grew
+
+    def visible_cells(self) -> tuple[range, list[int]]:
+        """Rows and columns (indices) on screen at the current scroll position, partly visible ones included."""
+        cols = self.ordered_columns
+        fixed = min(self.fixed_columns, len(cols))
+        width = self.scrollable_content_region.width
+        x = self._row_label_column_width
+        out = []
+        for i in range(fixed):
+            out.append(i)
+            x += cols[i].get_render_width(self)
+        left, right = self.scroll_x + x, self.scroll_x + width
+        for i in range(fixed, len(cols)):
+            w = cols[i].get_render_width(self)
+            if x + w > left:
+                out.append(i)
+            x += w
+            if x >= right:
+                break
+        top = int(self.scroll_y)
+        h = max(0, self.scrollable_content_region.height - (self.header_height if self.show_header else 0))
+        return range(top, min(self.row_count, top + h + 1)), out
+
+    def fit_visible(self) -> None:
+        """Format the cells about to be drawn and widen any column they outgrow,
+        before the draw: a number is never shown cut off, even for a frame."""
+        if not self.cell_columns or not self.row_count or self._sizing:
+            return
+        for _ in range(4):  # a column that grows can bring others into view
+            with self.sizing() as grew:
+                rows, cols = self.visible_cells()
+                self.fit_columns(rows, cols)
+            if not grew():
+                return
+            self._update_count += 1  # every DataTable render cache is keyed on it
+            self.update_dimensions_now()
+            self.refresh()
 
     def invalidate_cells(self) -> None:
         """Cells' text or column widths changed: drop rendered cells and lines, re-measure, redraw."""
         self._update_count += 1  # every DataTable render cache is keyed on it
-        self._require_update_dimensions = True
+        self.update_dimensions_now()
         self.refresh()
-        self.check_idle()
 
     def fit_columns(self, rows: list[int] | None = None, columns: list[int] | None = None) -> None:
         """Format the cells in ``rows`` × ``columns`` (default: all), growing columns to fit them."""
@@ -888,13 +940,13 @@ class PqxApp(App):
         labels = [Text(f"{off + i if n is None else n:,}", style=dim) for i, n in enumerate(page.row_numbers)]
         grid.set_rows(rows, labels, ccols)
         self.page = page
-        r = max(0, min(len(page.rows) - 1, cursor_abs - page.offset))
-        h = max(1, grid.scrollable_content_region.height - grid.header_height)
-        self._fit_columns(max(0, r - h + 1))  # where the cursor lands, scrolled into view from the top
-        grid.update_dimensions_now()
+        self._fit_columns()
+        grid.update_dimensions_now()  # so the cursor scrolls into view now, not after a first draw at the top
         if page.rows:
+            r = max(0, min(len(page.rows) - 1, cursor_abs - page.offset))
             grid.move_cursor(row=r, column=min(col, max(0, len(self.cols_shown) - 1)), animate=False)
             grid.scroll_x = scroll_x
+        grid.fit_visible()
         if self.total is None and len(page.rows) < grid.window:
             self.total = page.offset + len(page.rows)  # hit the end: we now know the size
             grid.total = self.total
@@ -902,13 +954,14 @@ class PqxApp(App):
         self._update_detail()
         self.call_after_refresh(self._render_hscroll)
 
-    def _fit_columns(self, top: int) -> None:
+    def _fit_columns(self) -> None:
         """Size the grid's columns for the window, formatting as few cells as possible.
 
         A number or string column fits its likely widest values
         (``widest_candidates``); any other column fits a sample of rows spread
-        through the window plus the screenful from row ``top``. A cell that
-        turns out wider widens its column when first drawn."""
+        through the window. The cells on screen are fitted before each draw
+        (``GridTable.fit_visible``), so a cell wider than this guess widens its
+        column before it is shown."""
         grid = self.query_one(GridTable)
         n = grid.row_count
         if not n or self.page is None:
@@ -923,10 +976,7 @@ class PqxApp(App):
                 else:
                     cc.fit_values(guess)
             if sampled:
-                h = max(1, grid.scrollable_content_region.height - grid.header_height)
-                step = max(1, n // WIDTH_SAMPLE_ROWS)
-                rows = sorted({*range(0, n, step), n - 1, *range(top, min(n, top + h))})
-                grid.fit_columns(rows, sampled)
+                grid.fit_columns(range(0, n, max(1, n // WIDTH_SAMPLE_ROWS)), sampled)
 
     @on(GridTable.HScroll)
     def _hscroll(self) -> None:
@@ -1321,8 +1371,9 @@ class PqxApp(App):
         grid = self.query_one(GridTable)
         for cc in grid.cell_columns:  # cells re-format when next drawn
             cc.invalidate(self.raw)
-        self._fit_columns(int(grid.scroll_y))
+        self._fit_columns()
         grid.invalidate_cells()
+        grid.fit_visible()
         self._render_status()
 
     def _cursor_formatter(self) -> F.CellFormatter | None:
@@ -1377,6 +1428,7 @@ class PqxApp(App):
                 with grid.sizing():
                     grid.fit_columns(columns=[i])
         grid.invalidate_cells()
+        grid.fit_visible()
         if (self._stats_rendered and self._stats_rendered[0] is self.view and self._stats_rendered[1] == fm.name
                 and not self._stats_stale):
             self._render_stats(*self._stats_rendered[1:])  # reformat what's shown; no need to re-profile
