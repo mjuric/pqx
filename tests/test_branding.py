@@ -1,8 +1,11 @@
-"""Filter-box hint from the file's own data."""
+"""Filter-box hint from the file's own data; version, help and title-bar branding."""
 import pyarrow as pa
 import pyarrow.parquet as pq
-from textual.widgets import Input
+import pytest
+from textual.widgets import Input, Label, Static
 
+from pqx import __version__, cli
+from pqx.screens import HelpScreen
 from pqx.app import FILTER_EXAMPLE, PqxApp, filter_placeholder
 from pqx.cells import MISSING
 from pqx.fmt import sanitize
@@ -50,3 +53,55 @@ async def test_placeholder_set_from_first_page(tmp_path):
         await settle(pilot, app)
         assert app.query_one("#filter", Input).placeholder == ph
 
+
+def test_version_gnu_style(capsys):
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--version"])
+    assert e.value.code == 0
+    out = capsys.readouterr().out
+    assert out.splitlines() == [
+        f"pqx {__version__}",
+        "Copyright (C) 2026 Mario Juric",
+        "License BSD-3-Clause: <https://opensource.org/license/bsd-3-clause>",
+        "This is free software: you are free to change and redistribute it.",
+        "There is NO WARRANTY, to the extent permitted by law.",
+        "",
+        "Written by Mario Juric.",
+    ]
+
+
+def test_help_epilog(capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "80")
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    out = capsys.readouterr().out
+    assert out.startswith("usage: pqx ")
+    assert "--format COL=SPEC" in out and "--version" in out
+    assert out.rstrip().endswith(
+        "Examples:\n"
+        "  pqx trips.parquet\n"
+        "  pqx trips.parquet -w \"payment_type = 'card'\"\n"
+        "  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n"
+        "\n"
+        "Inside pqx, press ? for keys.\n"
+        "\n"
+        "Report bugs at: <https://github.com/mjuric/pqx/issues>\n"
+        "pqx home page: <https://github.com/mjuric/pqx>\n"
+        "Written by Mario Juric.")
+    assert max(len(line) for line in out.splitlines()) <= 80   # description and options still wrap
+
+
+async def test_titlebar_and_help_show_version(demo_path):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        title = app.query_one("#titlebar", Static).render()
+        assert title.plain.startswith(f"pqx {__version__}  ·  demo.parquet  ·  ")
+        start = title.plain.index(__version__)
+        assert any(s.start <= start and s.end >= start + len(__version__) and str(s.style) == app.dim
+                   for s in title.spans)   # the version is dimmed
+        await pilot.press("question_mark")
+        assert isinstance(app.screen, HelpScreen)
+        head = app.screen.query_one("#help-head", Label).render().plain
+        assert f"pqx {__version__}" in head and "Written by Mario Juric" in head
+        assert "https://github.com/mjuric/pqx" in head

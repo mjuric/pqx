@@ -41,7 +41,7 @@ from textual.widgets._data_table import RowRenderables, default_cell_formatter
 from textual.widgets.data_table import ColumnKey, Row, RowKey
 from textual.worker import get_current_worker
 
-from . import _terminal
+from . import __version__, _terminal
 from . import config
 from . import fmt as F
 from . import plots
@@ -1169,7 +1169,7 @@ class PqxApp(App):
     def _render_titlebar(self) -> None:
         ds, d = self.ds, self.dim
         t = Text.assemble(
-            ("pqx", "bold"), ("  ·  ", d), (F.sanitize(os.path.basename(ds.path)), "bold cyan"),
+            ("pqx", "bold"), (f" {__version__}", d), ("  ·  ", d), (F.sanitize(os.path.basename(ds.path)), "bold cyan"),
             (f"  ·  {ds.num_rows:,} rows  ·  {len(ds.columns)} columns  ·  {F.human_bytes(ds.file_size)}"
              f"  ·  {ds.meta.num_row_groups:,} row groups", d),
         )

@@ -13,6 +13,7 @@ from textual.widgets import (Button, Checkbox, Input, Label, Markdown, OptionLis
                              SelectionList)
 from textual.widgets.selection_list import Selection
 
+from . import AUTHOR, HOMEPAGE, __version__
 from . import fmt as F
 from .config import parse_override
 
@@ -102,6 +103,9 @@ class HelpScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="help-box", classes="dialog"):
+            dim = getattr(self.app, "dim", "dim")
+            yield Label(Text.assemble(("pqx", "bold"), f" {__version__}", ("  ·  ", dim), f"Written by {AUTHOR}",
+                                      ("  ·  ", dim), (HOMEPAGE, dim)), id="help-head")
             with VerticalScroll():
                 yield Markdown(HELP)
             yield Label("[dim]Esc to close[/dim]", id="help-foot")

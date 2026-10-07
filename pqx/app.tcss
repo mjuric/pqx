@@ -296,6 +296,10 @@ ModalScreen {
     height: 90%;
 }
 
+#help-head {
+    margin-bottom: 1;
+}
+
 #help-foot {
     margin-top: 1;
 }

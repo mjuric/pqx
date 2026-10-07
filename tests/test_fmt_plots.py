@@ -133,7 +133,7 @@ def test_version_comes_from_git():
     # setuptools-scm wrote pqx/_version.py at install time; the fallback means it didn't
     assert pqx.__version__ != "0.0.0.dev0"
     out = subprocess.run([sys.executable, "-m", "pqx", "--version"], capture_output=True, text=True).stdout
-    assert out.strip() == f"pqx {pqx.__version__}"
+    assert out.splitlines()[0] == f"pqx {pqx.__version__}"
 
 
 def test_overrides():
