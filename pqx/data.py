@@ -137,6 +137,29 @@ def check_select(sql: str) -> str:
     return sql
 
 
+class UnbalancedFilter(duckdb.ParserException):
+    """A filter whose parentheses don't balance (see ``where_sql``)."""
+
+
+def where_sql(where: str) -> str:
+    """A filter's text as a condition to put in a query, parenthesized so it can't reach out.
+
+    A filter is spliced into queries next to conditions of pqx's own (``... AND (<filter>)``),
+    so its parentheses must balance: ``i = 3) OR (s = 'b'`` would turn ``x AND (i = 3) OR
+    (s = 'b')`` into a different query. Parentheses are counted on DuckDB's own tokens (not
+    those in literals, quoted names or comments), and the closing one goes on a new line,
+    out of reach of a trailing ``--`` comment."""
+    depth = 0
+    for start, kind in duckdb.tokenize(where):
+        if kind == duckdb.token_type.operator and where[start] in "()":
+            depth += 1 if where[start] == "(" else -1
+            if depth < 0:
+                raise UnbalancedFilter(f"unbalanced parentheses: the ) at character {start + 1} closes nothing")
+    if depth:
+        raise UnbalancedFilter(f"unbalanced parentheses: {depth} ( left open")
+    return f"({where}\n)"
+
+
 def is_sql_query(text: str) -> bool:
     """True when ``text`` is a full query rather than a WHERE expression."""
     return bool(_SQL_START.match(text or ""))
@@ -510,7 +533,7 @@ class ParquetDataset:
             src = TABLE
         sql = f"SELECT {cols} FROM {src}"
         if view.where.strip():
-            sql += f" WHERE ({view.where})"
+            sql += f" WHERE {where_sql(view.where)}"
         if view.order_by:
             keys = [f"{self._qcol(c)} {'DESC' if d else 'ASC'} NULLS LAST" for c, d in view.order_by]
             if with_rownum and self._has_rownum:
@@ -537,7 +560,7 @@ class ParquetDataset:
             cols = ", ".join(self._qcol(c) for c in (columns or self.column_names))
             sql = f"SELECT {cols} FROM __pqx_src WHERE {cond}"
             if view.where.strip():
-                sql += f" AND ({view.where})"
+                sql += f" AND {where_sql(view.where)}"
             return sql
         v = View(where=view.where)  # order is irrelevant for aggregates
         return self._base_sql(v, columns, with_rownum=False)
@@ -582,7 +605,7 @@ class ParquetDataset:
         else:
             sql = f"SELECT count(*) FROM {TABLE}"
             if view.where.strip():
-                sql += f" WHERE ({view.where})"
+                sql += f" WHERE {where_sql(view.where)}"
         return int(self.cursor().execute(check_select(sql)).fetchone()[0])
 
     def fetch(self, view: View, offset: int, limit: int, columns: list[str] | None = None) -> Page:
@@ -621,7 +644,7 @@ class ParquetDataset:
         offset, limit, pos = max(0, int(offset)), max(1, int(limit)), int(pos)
         if not offset <= pos < offset + limit:  # (not a window holding the row)
             return self.fetch(view, offset, limit, columns)
-        fr, rn, where = int(file_row), self._rownum, f"({view.where})"
+        fr, rn, where = int(file_row), self._rownum, where_sql(view.where)
         cur = self.cursor()
         after = cur.execute(check_select(
             f"SELECT {rn} FROM __pqx_src WHERE {rn} >= {fr} AND {where} LIMIT {max(1, offset + limit - pos)}"
@@ -1088,7 +1111,7 @@ class ParquetDataset:
         if not view.order_by:
             sql = (f"SELECT count(*) FILTER (WHERE {self._rownum} < {fr}), "
                    f"count(*) FILTER (WHERE {self._rownum} = {fr}) "
-                   f"FROM __pqx_src WHERE {self._rownum} <= {fr} AND ({view.where})")
+                   f"FROM __pqx_src WHERE {self._rownum} <= {fr} AND {where_sql(view.where)}")
             before, hit = self.cursor().execute(check_select(sql)).fetchone()
             return int(before) if hit else None
         base = self._base_sql(view, [self.column_names[0]], with_rownum=True)

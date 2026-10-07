@@ -435,3 +435,14 @@ async def test_record_page_found_by_file_row_and_not_yanked_after_a_move(demo_pa
         await pilot.press("equals_sign")
         await settle(pilot, app)
         assert record(app) == 15_000 and app._keep is None
+
+
+async def test_a_filter_with_unbalanced_parentheses_is_refused_inline(demo_path):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        await pilot.press("slash", *"detector = 3) OR (band = 'r'", "enter")
+        await settle(pilot, app)
+        assert app.view.is_trivial and app.total == 20_000
+        assert app.query_one("#filterbox").has_class("error")
+        assert "unbalanced parentheses" in app._last_error

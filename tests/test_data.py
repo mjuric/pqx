@@ -244,3 +244,30 @@ def test_fetch_around_matches_fetch(ds, truth, where, match):
             got = ds.fetch_around(v, fr, pos, offset, 300, ["diaSourceId", "mag"])
             exp = ds.fetch(v, offset, 300, ["diaSourceId", "mag"])
             assert got.offset == offset and got.row_numbers == exp.row_numbers and got.rows == exp.rows
+
+
+@pytest.mark.parametrize("bad", ["detector = 3) OR (band = 'r'", "(detector = 3", "detector = 3)",
+                                 "detector = 3)) OR ((band = 'r'"])
+def test_filters_cannot_escape_their_parentheses(ds, truth, bad):
+    """``x) OR (y`` parses on its own (WHERE (x) OR (y)), but next to pqx's own conditions it
+    would mean something else: such filters are refused everywhere they'd be spliced in."""
+    v = View(where=bad)
+    with pytest.raises(duckdb.ParserException, match="unbalanced parentheses"):
+        ds.validate(v)
+    for call in (lambda: ds.count(v), lambda: ds.fetch(v, 0, 10), lambda: ds.find_row(v, 5),
+                 lambda: ds.fetch_around(v, 5, 0, 0, 150), lambda: ds.relation_sql(v)):
+        with pytest.raises(duckdb.ParserException, match="unbalanced parentheses"):
+            call()
+
+
+@pytest.mark.parametrize("where", ["band = ')' or detector = 3", "detector = 3 -- )", "detector = 3 /* ( */",
+                                   "(detector = 3) or (band = 'r')", '"detector" = 3 or "band" = \'(\''])
+def test_parentheses_in_literals_and_comments_are_fine(ds, where):
+    v = View(where=where)
+    ds.validate(v)
+    n = ds.count(v)
+    rows = ds.fetch(v, 0, n, ["diaSourceId"]).row_numbers
+    for pos in sorted({0, len(rows) // 2, len(rows) - 1}):
+        got = ds.fetch_around(v, rows[pos], pos, max(0, pos - 75), 150, ["diaSourceId"])
+        assert len(got.rows) <= 150 and got.row_numbers == rows[got.offset:got.offset + 150]
+        assert ds.find_row(v, rows[pos]) == pos

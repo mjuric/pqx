@@ -332,8 +332,11 @@ def test_queries_must_be_one_select(tmp_path):
         for where in bad:
             with pytest.raises(duckdb.Error) as e:
                 call(View(where=where))
-            refused.append("only a single SELECT query is allowed here" in str(e.value))
-        assert any(refused), what  # (the filter that fits this query's parentheses)
+            # (refused for closing parentheses it didn't open, or, were that missed, for the
+            # statements it would add: the filter that fits this query's parentheses)
+            refused.append(any(m in str(e.value) for m in ("only a single SELECT query is allowed here",
+                                                            "unbalanced parentheses")))
+        assert all(refused), what
         assert not os.path.exists(pwn), what
     sql = View(sql=f"select * from t; COPY (SELECT 1) TO '{pwn}'")
     with pytest.raises(duckdb.Error):
@@ -343,6 +346,8 @@ def test_queries_must_be_one_select(tmp_path):
     assert not os.path.exists(pwn)
     with pytest.raises(duckdb.Error, match="single SELECT"):
         check_select("CREATE TYPE x AS ENUM ('a'); SELECT 1")
+    with pytest.raises(duckdb.Error, match="single SELECT"):  # (the second line of defence)
+        check_select(f"SELECT * FROM t WHERE (a > 0); COPY (SELECT 1) TO '{pwn}'; SELECT (1)")
     # what's allowed still works: queries, CTEs, FROM-first, PIVOT (which adds a CREATE TYPE of its own)
     for q in ("select a, count(*) from t group by 1", "with x as (select * from t) select * from x",
               "from t", "pivot t on b using sum(a)", "summarize t"):
@@ -360,7 +365,8 @@ async def test_smuggled_statement_is_refused_in_the_app(tmp_path):
                                                  "SELECT * FROM (SELECT 1 AS x WHERE (1")
         await pilot.press("slash", "enter")
         await settle(pilot, app)
-        assert app.is_running and "only a single SELECT query is allowed here" in app._last_error
+        assert app.is_running and ("only a single SELECT query is allowed here" in app._last_error
+                                   or "unbalanced parentheses" in app._last_error)
     assert not pwn.exists()
 
 
