@@ -126,6 +126,10 @@ def test_sanitize_shows_controls_visibly():
     for v in evil_values("/x"):
         assert not controls(sanitize(v, keep_ws=True)) and not any_controls(sanitize(v))
     assert has_controls(ESC) and not has_controls("a\tb\n", keep_ws=True) and has_controls("a\tb")
+    # bidi controls reorder what's around them, zero-width characters hide: both are shown
+    assert sanitize("abc‮dcba") == "abc⟨U+202E⟩dcba"
+    for c in "‪‫‬‭‮⁦⁧⁨⁩‎‏؜​‌‍⁠﻿":
+        assert sanitize("x" + c, keep_ws=True) == f"x⟨U+{ord(c):04X}⟩" and has_controls(c)
 
 
 def test_format_value_sanitizes_strings_and_nested_values():
@@ -217,12 +221,12 @@ async def test_copy_sanitizes_and_says_so(tmp_path):
         await pilot.press("y")
         await settle(pilot, app)
         assert app.clipboard and ESC not in app.clipboard and app.clipboard.startswith("␛]52;c;")
-        assert "control characters" in str(list(app._notifications)[-1].message)
+        assert "characters copied as visible symbols" in str(list(app._notifications)[-1].message)
         g.move_cursor(row=vals.index("tab\there\nnew line"))
         await pilot.press("y")
         await settle(pilot, app)
         assert app.clipboard == "tab\there\nnew line"  # tab and newline are text, copied as they are
-        assert "control characters" not in str(list(app._notifications)[-1].message)
+        assert "copied as visible symbols" not in str(list(app._notifications)[-1].message)
 
 
 async def test_widgets_show_no_control_characters(tmp_path):
@@ -511,3 +515,75 @@ def test_cli_prints_no_control_characters(tmp_path, capsys):
     assert main([str(bad)]) == 1
     err = capsys.readouterr().err
     assert "␛]0;T" in err and not controls(err)
+
+
+# --------------------------------------------------------------- review follow-ups
+def case_dup_file(tmp_path):
+    """Columns whose names differ only in case: one name to DuckDB, which calls the second name_1."""
+    p = tmp_path / "case.parquet"
+    pq.write_table(pa.table({"Name": ["A", "B", "C"], "name": ["a", "b", "c"], "x": [1, 2, 3]}), p)
+    return str(p)
+
+
+def test_case_duplicate_columns_each_show_their_own_data(tmp_path):
+    ds = ParquetDataset(case_dup_file(tmp_path))
+    assert ds.sql_name("name") == "name_1" and ds.sql_name("Name") == "Name"
+    for view in (View(), View(where="x > 1"), View(order_by=[("name", True)])):
+        page = ds.fetch(view, 0, 10)
+        assert page.columns == ["Name", "name", "x"], view
+        assert all(r[0].lower() == r[1] for r in page.rows), (view, page.rows)
+        assert [n for n, _ in ds.validate(view)] == ["Name", "name", "x"]
+    assert ds.fetch(View(order_by=[("name", True)]), 0, 10).rows[0] == ("C", "c", 3)
+    assert ds.fetch_columns([2, 0], ["name"]).rows == [("c",), ("a",)]
+    st = ds.column_stats(View(where="x > 0"), "name")
+    assert (st.min, st.max) == ("a", "c")
+
+
+async def test_case_duplicate_columns_in_the_app(tmp_path):
+    app = PqxApp(case_dup_file(tmp_path))
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        assert g.row_count == 3 and app._last_error == ""
+        assert [(r[0], r[1]) for r in app.page.rows] == [("A", "a"), ("B", "b"), ("C", "c")]
+        g.move_cursor(row=1, column=1)
+        await pilot.press("equals_sign")  # filters on name (DuckDB's name_1), not on Name
+        await settle(pilot, app)
+        assert app.query_one("#filter", Input).value == "name_1 = 'b'"
+        assert app.total == 1 and app.page.rows[0][:2] == ("B", "b") and app._last_error == ""
+        await pilot.press("ctrl+x", "s")  # sort on it
+        await settle(pilot, app)
+        assert app._last_error == "" and [r[1] for r in app.page.rows] == ["a", "b", "c"]
+
+
+async def test_trailing_backslash_in_names_is_not_markup(tmp_path):
+    p = tmp_path / "bs.parquet"
+    name = "dir\\"
+    pq.write_table(pa.table({name: [1.5, 2.5], "b": [1, 2]}), p)
+    app = PqxApp(str(p))
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        await pilot.press("F")
+        await settle(pilot, app)
+        assert type(app.screen).__name__ == "FormatScreen"
+        labels = [plain(lab) for lab in app.screen.query(Label)]
+        assert "Format of dir\\" in labels  # one backslash, and no [/cyan] leaking out
+        await pilot.press("escape")
+        await settle(pilot, app)
+        await pilot.press("minus")
+        await settle(pilot, app)
+        note = list(app._notifications)[-1]
+        assert note.message == "Hid dir\\ · c brings it back" and not note.markup
+
+
+async def test_long_json_metadata_is_cut(tmp_path):
+    import json
+
+    p = tmp_path / "kv.parquet"
+    big = json.dumps({f"k{i}": "v" * 50 for i in range(500)})
+    pq.write_table(pa.table({"a": [1]}).replace_schema_metadata({"big": big}), p)
+    app = PqxApp(str(p))
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        text = rendered(app.query_one("#meta-kv"))
+        assert len(text) < 6000 and "…" in text
