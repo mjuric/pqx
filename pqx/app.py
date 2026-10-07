@@ -11,6 +11,7 @@ import datetime as dt
 import math
 import os
 import re
+import threading
 import time
 from bisect import bisect_left, bisect_right
 from contextlib import contextmanager
@@ -2280,6 +2281,16 @@ class PqxApp(App):
             if worker.is_cancelled:  # quitting
                 return
             time.sleep(0.01)
+        if self.page is not None:  # and on screen
+            painted = threading.Event()
+            try:
+                self.call_from_thread(self.call_after_refresh, painted.set)
+            except RuntimeError:  # the app has stopped
+                return
+            deadline = time.monotonic() + FOOTER_WAIT
+            while not painted.wait(0.01) and time.monotonic() < deadline:
+                if worker.is_cancelled:
+                    return
         stop = lambda: worker.is_cancelled  # noqa: E731 - quitting needn't wait for the whole pass
         try:
             summ = self.ds.column_chunk_summary(stop)

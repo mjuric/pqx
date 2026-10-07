@@ -6,7 +6,8 @@
 
 For each file: wall and CPU (process time: all threads) from constructing the
 app to (1) the first page in the grid, (2) the Schema and Metadata tabs filled,
-(3) no work left; and the longest the event loop went unresponsive before and
+(3) no work left; how long a key press (→) sent as the first page appears takes
+to move the cursor; and the longest the event loop went unresponsive before and
 after the first page (what a key press would have waited). Headless at 200x50
 through Textual's pilot; run from the repo root where `import pqx` resolves to
 this checkout.
@@ -21,10 +22,11 @@ import pstats
 import tempfile
 import time
 
+from textual import events
 from textual.widgets import DataTable
 from textual.worker import WorkerState
 
-from pqx.app import PqxApp
+from pqx.app import GridTable, PqxApp
 
 
 def _tabs_ready(app) -> bool:
@@ -59,17 +61,31 @@ async def run(path: str) -> dict[str, float]:
     app = PqxApp(path)
     out["init wall"], out["init cpu"] = time.perf_counter() - w0, time.process_time() - c0
     async with app.run_test(size=(200, 50)) as pilot:
+        grid = app.query_one(GridTable)
+        key: list = []  # (sent at, cursor column then): a → once the first page is in
+
+        def key_done() -> bool:
+            if key and grid.cursor_column != key[1]:
+                out["first key"] = time.perf_counter() - key[0]
+                return True
+            return False
+
         marks = {"grid": lambda: app.page is not None, "tabs": lambda: _tabs_ready(app),
-                 "idle": lambda: _tabs_ready(app) and _idle(app)}
+                 "idle": lambda: _tabs_ready(app) and _idle(app), "key": key_done}
         t_grid = None
         while marks:
             for k, f in list(marks.items()):
                 if f():
-                    out[f"{k} wall"], out[f"{k} cpu"] = time.perf_counter() - w0, time.process_time() - c0
+                    if k != "key":
+                        out[f"{k} wall"], out[f"{k} cpu"] = time.perf_counter() - w0, time.process_time() - c0
                     del marks[k]
                     if k == "grid":
                         t_grid = time.perf_counter()
-            await pilot.pause(0.01)
+                        # straight to the driver, as a terminal would: pilot.press waits for the whole
+                        # process (worker threads included) to go idle first
+                        key[:] = [time.perf_counter(), grid.cursor_column]
+                        app._driver.send_message(events.Key("right", None))
+            await pilot.pause(0.005)
         done.set()
         await watcher
         out["stall to grid"] = max((s for t, s in stalls if t <= t_grid), default=0)
