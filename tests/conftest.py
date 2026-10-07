@@ -35,3 +35,11 @@ def odd_path(tmp_path_factory):
     })
     pq.write_table(tbl, p, row_group_size=300)
     return str(p)
+
+
+@pytest.fixture(autouse=True)
+def config_home(tmp_path, monkeypatch):
+    """Keep saved column formats out of the real ~/.config."""
+    d = tmp_path / "config"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(d))
+    return d

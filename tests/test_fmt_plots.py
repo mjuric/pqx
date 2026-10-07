@@ -24,7 +24,7 @@ def test_kinds():
 def test_format_values():
     assert F.format_value(None, "float") == F.NULL
     assert F.format_value(float("nan"), "float") == "NaN"
-    assert F.format_value(60800.123456789, "mjd") == "60800.12346"
+    assert F.format_value(60800.123456789, "mjd") == "60800.1234568"
     assert F.format_value(12.3456789, "angle") == "12.345679"
     assert F.format_value(21.123456, "mag") == "21.123"
     assert F.format_value(28561.3, "flux") == "28560"
@@ -115,3 +115,46 @@ def test_version_comes_from_git():
     assert pqx.__version__ != "0.0.0.dev0"
     out = subprocess.run([sys.executable, "-m", "pqx", "--version"], capture_output=True, text=True).stdout
     assert out.strip() == f"pqx {pqx.__version__}"
+
+
+def test_overrides():
+    # ints are decimals for fixed-point kinds, significant digits for the others
+    assert F.format_value(12.3456789, "angle", override=2) == "12.35"
+    assert F.format_value(28561.3, "flux", override=2) == "29000"
+    assert F.format_value(28561.3, "flux", override=".2e") == "2.86e+04"
+    assert F.format_value(1234567, "int", override=",d") == "1,234,567"
+    assert F.format_value(1234567, "int", override=3) == "1234567"  # digits mean nothing for ints
+    assert F.format_value(1.5, "float", override=",d") == "1.5"  # a spec that doesn't fit falls back
+    assert F.format_value(1.5, "float", override=".3f", raw=True) == "1.5"  # raw wins
+    assert F.format_value(None, "float", override=".3f") == F.NULL
+    assert F.format_value(float("nan"), "float", override=".3f") == "NaN"
+
+    assert F.step_override(None, "angle", -1) == 5
+    assert F.step_override(None, "flux", 1) == 5
+    assert F.step_override(0, "mag", -1) == 0 and F.step_override(1, "err", -1) == 1
+    assert F.step_override(".3e", "float", 1) == ".4e"
+    assert F.step_override(",d", "flux", 1) == 5  # no precision in the spec: start from the default
+    assert F.step_override(None, "int", 1) is None and F.step_override(None, "str", 1) is None
+
+    assert F.describe_override(4, "angle") == ".4f"
+    assert F.describe_override(4, "flux") == "4 sig"
+    assert F.describe_override(".2e", "flux") == ".2e"
+    assert F.override_error(".2f", "float", 1.5) is None and F.override_error(",d", "float", 1.5)
+    assert F.override_error(",d") is None  # no kind: fine if it suits some column
+    assert F.override_error(".2f", "time")  # strftime would echo it back literally
+    assert F.override_error("%Y-%m", "time") is None and F.override_error("%Y-%m") is None
+    assert F.override_error(4, "int") and F.override_error(4, "flux") is None
+    assert F.override_error(18, "flux") and F.override_error(".100000000f")  # would hang the grid
+    assert F.override_error(".2f", "bool")
+    assert "Unknown format code" in F.override_error(".2q")  # not the timestamp hint
+    assert F.override_error("%Y-2026 (UTC+0100)") is None and F.override_error(".100%")
+
+
+def test_override_edge_cases():
+    import decimal
+
+    assert F.format_value(decimal.Decimal("1.23456"), "float", override=3) == "1.23"
+    assert F.format_value(1.0, "float", override=10**8) == F.format_value(1.0, "float", override=F.MAX_DIGITS)
+    assert F.format_value(True, "bool", override=".2f") == "✓"  # specs don't apply to bools
+    assert len(F.format_value("x", "str", override="<200")) == 40  # still truncated to the cell width
+    assert F.format_value(dt.datetime(2026, 1, 2), "time", override="%Y-%m") == "2026-01"

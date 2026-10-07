@@ -300,13 +300,13 @@ ModalScreen {
     height: 80%;
 }
 
-#picker-filter, #goto-input, #export-path {
+#picker-filter, #goto-input, #format-input, #export-path {
     border: solid $pqx-border;
     background: ansi_default;
     height: 3;
 }
 
-#picker-filter:focus, #goto-input:focus, #export-path:focus {
+#picker-filter:focus, #goto-input:focus, #format-input:focus, #export-path:focus {
     border: solid $primary;
 }
 

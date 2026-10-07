@@ -3,17 +3,21 @@
 A column gets a *formatter* chosen once from its name, Arrow type and unit;
 the grid then calls it per cell. Heuristics (by name / unit, case-insensitive):
 
-* MJD / JD times      → 5 decimals (~1 s); detail view adds the UTC calendar date
+* MJD / JD times      → 7 decimals (~10 ms); detail view adds the UTC calendar date
 * RA / Dec / lon/lat  → 6 decimals (~4 mas); detail view adds sexagesimal
 * magnitudes          → 3 decimals
 * fluxes              → 4 significant digits
 * errors / sigmas     → 3 significant digits
 * other floats        → up to 7 (float32) / 10 (float64) significant digits
 * ids / integers      → verbatim (no thousands separators — ids are copied around)
+
+A column can carry an *override*: an int (decimals for the fixed-point kinds,
+significant digits for the others) or a Python format spec such as ``.2e``.
 """
 from __future__ import annotations
 
 import datetime as dt
+import decimal
 import math
 import re
 from typing import Any
@@ -92,7 +96,88 @@ def shortest(v: Any, typ: pa.DataType) -> Any:
     return v
 
 
-def format_value(v: Any, kind: str, *, raw: bool = False, width: int = 40) -> str:
+#: Default digits per float kind: decimals for the fixed-point kinds, significant digits otherwise.
+FIXED_DIGITS = {"mjd": 7, "angle": 6, "mag": 3}
+SIG_DIGITS = {"flux": 4, "err": 3, "float32": 7, "float": 9}
+MAX_DIGITS = 17
+#: Largest width or precision a format spec may ask for (a typo like .1000000f would hang the grid).
+MAX_SPEC_NUMBER = 64
+_SPEC_PRECISION = re.compile(r"\.(\d+)")
+# a standard format spec: [[fill]align][sign][z][#][0][width][grouping][.precision][type]
+_STD_SPEC = re.compile(r"(?:.?[<>=^])?[-+ ]?z?#?0?(?P<width>\d*)[,_]?(?:\.(?P<prec>\d+))?[a-zA-Z%]?", re.S)
+#: Kinds a format spec doesn't apply to: they keep their automatic rendering.
+NO_SPEC_KINDS = ("bool", "binary", "nested")
+_SAMPLES = {"int": 1, "str": "abc", "time": dt.datetime(2026, 1, 2, 3, 4, 5)}
+
+
+def default_digits(kind: str) -> int | None:
+    """The digits a float kind shows without an override; None for non-float kinds."""
+    return FIXED_DIGITS.get(kind, SIG_DIGITS.get(kind))
+
+
+def step_override(override: int | str | None, kind: str, delta: int) -> int | str | None:
+    """One digit more (``delta`` > 0) or fewer than ``override``; None if the column has no digits to step.
+
+    A spec with a precision (``.3e``) has that precision stepped; any other spec, or
+    no override, starts from what the kind shows by default."""
+    if isinstance(override, str):
+        m = _SPEC_PRECISION.search(override)
+        if m:
+            n = max(0, min(MAX_DIGITS, int(m.group(1)) + delta))
+            return override[: m.start(1)] + str(n) + override[m.end(1):]
+        override = None
+    cur = override if override is not None else default_digits(kind)
+    if cur is None:
+        return None
+    return max(0 if kind in FIXED_DIGITS else 1, min(MAX_DIGITS, cur + delta))
+
+
+def describe_override(override: int | str | None, kind: str) -> str:
+    """Short label for a header: ``.4f`` for fixed digits, ``4 sig`` for significant ones, or the spec."""
+    if override is None:
+        return ""
+    if isinstance(override, int):
+        return f".{override}f" if kind in FIXED_DIGITS else f"{override} sig"
+    return override
+
+
+def override_error(value: int | str, kind: str | None = None, sample: Any = None) -> str | None:
+    """Why ``value`` can't be a column's override, or None if it can.
+
+    ``kind`` and ``sample`` (a value from the column) narrow the check; without them
+    a spec only has to suit some column (a float, an int, a string or a timestamp)."""
+    if isinstance(value, int):
+        if kind is not None and default_digits(kind) is None:
+            return "a digit count applies only to float columns; use a format spec such as ,d"
+        if value > MAX_DIGITS:
+            return f"at most {MAX_DIGITS} digits"
+        return None
+    m = _STD_SPEC.fullmatch(value)  # anything else (strftime) can't ask for huge output
+    if m and any(int(n or 0) > MAX_SPEC_NUMBER for n in (m["width"], m["prec"])):
+        return f"widths and precisions are limited to {MAX_SPEC_NUMBER}"
+    if kind in NO_SPEC_KINDS:
+        return f"{kind} columns can't take a format spec"
+    if sample is not None:
+        samples = [sample]
+    elif kind is not None:
+        samples = [_SAMPLES.get(kind, 1.5)]
+    else:
+        samples = [1.5, *_SAMPLES.values()]
+    errors = []
+    for v in samples:
+        if isinstance(v, (dt.date, dt.time)) and "%" not in value:
+            errors.append("timestamps take strftime codes, e.g. %Y-%m-%d %H:%M")
+            continue
+        try:
+            format(v, value)
+            return None
+        except (ValueError, TypeError) as e:
+            errors.append(str(e))
+    return errors[0]  # the first sample is the column's own value, or a float
+
+
+def format_value(v: Any, kind: str, *, raw: bool = False, width: int = 40,
+                 override: int | str | None = None) -> str:
     """Plain-text rendering of one value."""
     if v is None:
         return NULL
@@ -103,19 +188,22 @@ def format_value(v: Any, kind: str, *, raw: bool = False, width: int = 40) -> st
             return "∞" if v > 0 else "-∞"
         if raw:
             return repr(v)
-        if kind == "mjd":
-            return _fixed(v, 5)
-        if kind == "angle":
-            return _fixed(v, 6)
-        if kind == "mag":
-            return _fixed(v, 3)
-        if kind == "flux":
-            return _fmt_float(v, 4)
-        if kind == "err":
-            return _fmt_float(v, 3)
-        if kind == "float32":
-            return _fmt_float(v, 7)
-        return _fmt_float(v, 9)
+    if isinstance(override, str) and not raw and kind not in NO_SPEC_KINDS:
+        try:
+            s = format(v, override)
+        except (ValueError, TypeError):
+            pass  # a spec that doesn't fit this value: fall back to the automatic format
+        else:
+            if width and len(s) > width and kind not in ("int", "float", "float32", *FIXED_DIGITS, *SIG_DIGITS):
+                s = s[: width - 1] + "…"
+            return s
+    if isinstance(v, decimal.Decimal) and isinstance(override, int) and not raw and v.is_finite():
+        v = float(v)  # digits for a decimal column: render it like any other float
+    if isinstance(v, float):
+        digits = min(override, MAX_DIGITS) if isinstance(override, int) else None
+        if kind in FIXED_DIGITS:
+            return _fixed(v, FIXED_DIGITS[kind] if digits is None else digits)
+        return _fmt_float(v, SIG_DIGITS.get(kind, 9) if digits is None else max(1, digits))
     if isinstance(v, bool):
         return "✓" if v else "·" if not raw else str(v)
     if isinstance(v, int):
@@ -159,14 +247,15 @@ def _guess_kind(v: Any) -> str:
 class CellFormatter:
     """Per-column formatter producing Rich ``Text`` for the grid."""
 
-    def __init__(self, name: str, typ: pa.DataType, unit: str = ""):
+    def __init__(self, name: str, typ: pa.DataType, unit: str = "", override: int | str | None = None):
         self.name = name
         self.type = typ
         self.kind = kind_for(name, typ, unit)
         self.right = self.kind in ("mjd", "angle", "mag", "flux", "err", "float", "float32", "int")
+        self.override = override
 
     def __call__(self, v: Any, raw: bool = False) -> Text:
-        s = format_value(v, self.kind, raw=raw)
+        s = format_value(v, self.kind, raw=raw, override=self.override)
         justify = "right" if self.right else "left"
         if v is None:
             return Text(s, style=DIM, justify=justify)

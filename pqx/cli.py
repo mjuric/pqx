@@ -6,6 +6,8 @@ import os
 import sys
 
 from . import __version__
+from .config import parse_override
+from .fmt import override_error
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -33,8 +35,22 @@ def main(argv: list[str] | None = None) -> int:
                    help="always scan every row for stats/plots")
     p.add_argument("--threads", type=int, default=None,
                    help="DuckDB worker threads (default: all cores; lower it on shared machines)")
+    p.add_argument("--format", dest="formats", action="append", default=[], metavar="COL=SPEC",
+                   help="display format for a column this session: a Python spec (.3f, .2e, ,d) or a number "
+                        "of digits; repeatable. Formats set in the grid (< > F) are saved to "
+                        "$XDG_CONFIG_HOME/pqx/formats.yaml (default ~/.config/pqx/formats.yaml)")
     p.add_argument("--version", action="version", version=f"pqx {__version__}")
     a = p.parse_args(argv)
+    formats = {}
+    for item in a.formats:
+        name, eq, spec = item.partition("=")
+        name = name.strip()
+        if not eq or not name or not spec.strip():
+            p.error(f"--format expects COL=SPEC, got {item!r}")
+        formats[name] = parse_override(spec)
+        err = override_error(formats[name])
+        if err:
+            p.error(f"--format {item}: {err}")
 
     if not os.path.exists(a.path):
         print(f"pqx: {a.path}: no such file", file=sys.stderr)
@@ -42,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from .app import PqxApp
         app = PqxApp(a.path, where=a.where, theme=a.theme, sample=a.sample, threads=a.threads,
-                     accent=a.accent, dim=a.dim, border=a.border)
+                     accent=a.accent, dim=a.dim, border=a.border, formats=formats)
     except Exception as e:  # noqa: BLE001 — surface unreadable files cleanly
         print(f"pqx: cannot open {a.path}: {e}", file=sys.stderr)
         return 1
