@@ -44,15 +44,32 @@ class _Missing:
         return "MISSING"
 
 
+class _Unavailable(_Missing):
+    """The value of a cell whose column failed to load (see :data:`UNAVAILABLE`)."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "UNAVAILABLE"
+
+
 #: Stands in for the values of a column that hasn't been fetched yet.
 MISSING = _Missing()
+#: Stands in for the values of a column that couldn't be fetched (for this window).
+UNAVAILABLE = _Unavailable()
 #: What a not-yet-loaded cell shows.
 PLACEHOLDER = "…"
+#: What a cell of a column that failed to load shows.
+FAILED_MARK = "✗"
 
 
-def placeholder(fmt: CellFormatter) -> Text:
-    """The dim placeholder of a not-yet-loaded cell, aligned like the column's values."""
-    return Text(PLACEHOLDER, style=_fmt.DIM, justify="right" if fmt.right else "left")
+def placeholder(fmt: CellFormatter, failed: bool = False) -> Text:
+    """The dim placeholder of a not-yet-loaded cell (a red mark if its column failed to
+    load), aligned like the column's values."""
+    justify = "right" if fmt.right else "left"
+    if failed:
+        return Text(FAILED_MARK, style="red", justify=justify)
+    return Text(PLACEHOLDER, style=_fmt.DIM, justify=justify)
 
 
 class ColumnCells:
@@ -168,8 +185,8 @@ class Cell:
     def text(self) -> Text:
         col = self.col
         if self._gen != col.gen:
-            if self.value is MISSING:  # not loaded yet: nothing to fit the column to
-                self._text = placeholder(col.fmt)
+            if isinstance(self.value, _Missing):  # not loaded (yet): nothing to fit the column to
+                self._text = placeholder(col.fmt, self.value is UNAVAILABLE)
                 self._gen = col.gen
                 return self._text
             t = col.fmt(self.value, col.raw)

@@ -44,7 +44,7 @@ from . import _terminal
 from . import config
 from . import fmt as F
 from . import plots
-from .cells import (MISSING, PLACEHOLDER, CellRow, ColumnCells, one_cell_per_char, RowCells, RowLayout, text_width,
+from .cells import (FAILED_MARK, MISSING, PLACEHOLDER, UNAVAILABLE, CellRow, ColumnCells, one_cell_per_char, RowCells, RowLayout, text_width,
                     widest_candidates)
 from .data import (ColumnStats, Page, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec,
                    quote_ident)
@@ -58,7 +58,7 @@ SAMPLE_ROWS = 2_000_000       # rows used for stats/plots when sampling
 AUTO_SAMPLE_ROWS = 200_000_000        # sampling defaults on above this many rows…
 AUTO_SAMPLE_BYTES = 8 * 1024 ** 3     # …or this file size
 WIDTH_SAMPLE_ROWS = 16        # rows spread through a window that size its non-numeric columns
-LAZY_TAGS = ("cols", "detail", "cell")  # query tags of the column fetches for a page (see load_window)
+LAZY_TAGS = ("cols", "detail")  # query tags of the column fetches for a page (and "cell:<column>"; see load_window)
 LAZY_MIN_SAVING_MS = 20  # load a plain view's window lazily only if that's estimated to save this much
 DETAIL_FETCH_DELAY = 0.1  # s the Details pane waits (for the cursor to settle) before loading a page's columns
 #: a typical value per formatting kind, to size a column not loaded yet that has no statistics
@@ -921,6 +921,7 @@ class PqxApp(App):
         self._fetch_seq = 0
         self._inflight: dict[str, tuple[int, int, frozenset]] = {}  # tag -> (seq, page gen, columns)
         self._cols_failed: set[str] = set()  # columns that failed to load for the page on screen
+        self._cell_waiters: dict[str, list] = {}  # cell fetch tag -> actions waiting for that column
         self._chunk_stats: dict[tuple[int, int], tuple] = {}  # (row group, leaf) -> (min, max) or ()
         self.total: int | None = self.ds.num_rows if self.view.is_trivial else None
         big = self.ds.num_rows > AUTO_SAMPLE_ROWS or self.ds.file_size > AUTO_SAMPLE_BYTES
@@ -1307,9 +1308,13 @@ class PqxApp(App):
         if gen == self._page_gen:
             self._page_gen += 1
             self._shown_gen = self._page_gen
+            self._ensure_columns()  # load_window cancelled the page's column fetches: start again
+            self._update_detail()  # (re-arms the pane's fetch, if it's shown)
 
     @_ui
     def _apply_page(self, page, cursor_abs: int, column: int | None, gen: int | None = None) -> None:
+        if gen is not None and gen != self._page_gen:
+            return  # a newer window is on its way (or already shown): this one is superseded
         grid = self.query_one(GridTable)
         col = grid.cursor_column if column is None else column
         scroll_x = grid.scroll_x
@@ -1376,8 +1381,10 @@ class PqxApp(App):
     def _cancel_column_fetches(self) -> None:
         """Forget and interrupt the column fetches for the page on screen (a new one is coming).
         Tags don't interrupt each other, so each is interrupted here."""
+        tags = set(LAZY_TAGS) | set(self._inflight)
         self._inflight.clear()
-        for tag in LAZY_TAGS:
+        self._cell_waiters.clear()
+        for tag in tags:
             self.ds.interrupt(tag)
 
     def _lazy_ready(self) -> bool:
@@ -1400,9 +1407,14 @@ class PqxApp(App):
         if len(grid.ordered_columns) != len(page.columns):
             return
 
+        coming = set()  # what the Details pane's fetch will bring anyway
+        detail = self._inflight.get("detail")
+        if detail is not None and detail[1] == self._page_gen:
+            coming = detail[2]
+
         def missing(screens):
             return [n for n in (page.columns[i] for i in grid.columns_near(screens=screens))
-                    if n in page.missing and n not in self._cols_failed]
+                    if n in page.missing and n not in self._cols_failed and n not in coming]
         need = missing(1)
         if not need:
             return
@@ -1437,11 +1449,15 @@ class PqxApp(App):
     @_ui
     def _columns_done(self, tag: str, seq: int, gen: int, page, names: list[str], got, err, then) -> None:
         cur = self._inflight.get(tag)
-        if cur is not None and cur[0] == seq:
+        latest = cur is not None and cur[0] == seq
+        if latest:
             del self._inflight[tag]
         current = gen == self._page_gen and page is self.page
+        if latest and (got is None or not current):
+            self._cell_waiters.pop(tag, None)  # the actions waiting on it are dropped with it
         if err is not None and current:
             self._cols_failed.update(names)
+            self._mark_unavailable(page, names)
             self.notify(f"Couldn't load {len(names)} column{'s' if len(names) != 1 else ''}: "
                         f"{escape(str(err).splitlines()[0][:200])}", title="✗ Columns", severity="error", timeout=6)
         if got is None or not current:
@@ -1450,6 +1466,31 @@ class PqxApp(App):
         if then is not None:
             then()
         self._ensure_columns()
+
+    def _mark_unavailable(self, page, names: list[str]) -> None:
+        """Show the columns ``names`` that failed to load for ``page`` as such (✗), not as loading.
+        They stay missing (and aren't fetched again for this page)."""
+        idx = {n: i for i, n in enumerate(page.columns)}
+        cols = [idx[n] for n in names if n in idx and n in page.missing]
+        if not cols:
+            return
+        rows = page.rows
+        for r in range(len(rows)):
+            vals = list(rows[r])
+            for i in cols:
+                if vals[i] is MISSING:
+                    vals[i] = UNAVAILABLE
+            rows[r] = tuple(vals)
+        grid = self.query_one(GridTable)
+        if grid.row_count == len(rows) and len(grid.cell_columns) == len(page.columns):
+            keys = [ColumnKey(page.columns[i]) for i in cols]
+            data, locations = grid._data, grid._row_locations
+            for r in range(len(rows)):
+                row = data.get(locations.get_key(r))
+                if isinstance(row, CellRow):
+                    row.set_values(rows[r], keys)
+            grid.invalidate_columns(keys)
+        self._update_detail()
 
     def _merge_columns(self, page, got) -> None:
         """Put the fetched columns ``got`` (for ``page``'s rows) into the page and the grid.
@@ -1615,6 +1656,7 @@ class PqxApp(App):
         self._hidden_hint = None
         self._render_status()
         self._update_detail()
+        self._ensure_columns()  # (columns left loading by a cancelled fetch: Esc)
 
     @on(DataTable.CellSelected, "#grid")
     def cell_selected(self) -> None:
@@ -1640,15 +1682,25 @@ class PqxApp(App):
         name, v = self._cursor_value()
         if name is None:
             return
+        if v is UNAVAILABLE:
+            self.notify(f"{escape(name)} couldn't be loaded for these rows", severity="error", timeout=4)
+            return
         if v is not MISSING:
             fn(name, v)
             return
         page, r, c = self.page, self.query_one(GridTable).cursor_row, self.query_one(GridTable).cursor_column
 
         def then():
-            if self.page is page and page.rows[r][c] is not MISSING:
+            if self.page is page and page.rows[r][c] is not MISSING and page.rows[r][c] is not UNAVAILABLE:
                 fn(name, page.rows[r][c])
-        self._fetch_columns("cell", [name], then)
+        # one fetch per column: a second action on it while it loads waits for the same fetch
+        tag = f"cell:{name}"
+        waiting = self._cell_waiters.setdefault(tag, [])
+        waiting.append(then)
+        cur = self._inflight.get(tag)
+        if cur is not None and cur[1] == self._page_gen:
+            return
+        self._fetch_columns(tag, [name], lambda: [f() for f in self._cell_waiters.pop(tag, [])])
 
     # ---------------------------------------------------------- current column
     def set_current_column(self, name: str | None, source: str) -> None:
@@ -1719,6 +1771,9 @@ class PqxApp(App):
             if v is MISSING:  # loading (_fetch_detail_columns, below)
                 entries.append((name, Text(PLACEHOLDER, style=self.dim)))
                 continue
+            if v is UNAVAILABLE:
+                entries.append((name, Text.assemble((FAILED_MARK, "red"), (" couldn't load", self.dim))))
+                continue
             fmt = self.formatters.get(name) or F.CellFormatter(name, typ)
             full = F.format_value(F.shortest(v, typ), fmt.kind, raw=True, width=0)
             if len(full) > 300:  # keep one huge JSON/blob from burying every other column
@@ -1735,7 +1790,7 @@ class PqxApp(App):
         lst = self.query_one(DetailList)
         lst.set_entries(entries, min(22, max((len(n) for n, _ in entries), default=0)))
         lst.select(cur_col)
-        if self.page.missing:
+        if self.page.missing - self._cols_failed:
             self._debounced("detail-columns", DETAIL_FETCH_DELAY, self._fetch_detail_columns)
 
     def _fetch_detail_columns(self) -> None:
@@ -1747,7 +1802,9 @@ class PqxApp(App):
         if cur is not None and cur[1] == self._page_gen:
             return
         page = self.page
-        self._fetch_columns("detail", [n for n in page.columns if n in page.missing])
+        names = [n for n in page.columns if n in page.missing and n not in self._cols_failed]
+        if names:
+            self._fetch_columns("detail", names)
 
     # --------------------------------------------------------------- filtering
     def action_focus_filter(self) -> None:
