@@ -668,6 +668,19 @@ class GridTable(DataTable):
         self.update_dimensions_now()
         self.refresh()
 
+    def invalidate_columns(self, keys) -> None:
+        """The cells of columns ``keys`` changed, not any width: drop just those rendered cells
+        (and the lines, which are cheap to rebuild from the others), and redraw. Unlike
+        ``invalidate_cells`` this keeps every other cell's rendering cached."""
+        keys = set(keys)
+        cache = self._cell_render_cache
+        for k in [k for k in cache.keys() if k[1] in keys]:
+            cache.discard(k)
+        self._row_render_cache.clear()
+        self._row_renderable_cache.clear()
+        self._line_cache.clear()
+        self.refresh()
+
     def fit_columns(self, rows: list[int] | None = None, columns: list[int] | None = None) -> None:
         """Format the cells in ``rows`` × ``columns`` (default: all), growing columns to fit them."""
         if rows is None:
@@ -1465,8 +1478,12 @@ class PqxApp(App):
                 if isinstance(row, CellRow):
                     row.set_values(rows[r], keys)
             was_in_view = grid.cursor_cell_in_view()
+            growth = grid._growth
             self._fit_columns([i for i, _ in pairs])
-            grid.invalidate_cells()
+            if grid._growth != growth:
+                grid.invalidate_cells()  # widths changed: everything moves
+            else:
+                grid.invalidate_columns(keys)  # (the usual case, with reserved widths)
             grid.fit_visible()
             if was_in_view and not grid.cursor_cell_in_view():
                 grid._scroll_cursor_into_view()  # a column left of the cursor outgrew its reserve

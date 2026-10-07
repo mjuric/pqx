@@ -345,6 +345,7 @@ async def test_widths_do_not_jump_when_columns_arrive(lazy_path, lazy):
         app.ds.fetch_columns = fetch_columns
         await pilot.press("end")
         await pilot.pause(0.2)
+        assert PLACEHOLDER in g.render_line(3).text  # drawn while loading
         missing = set(app.page.missing)
         before = {c.key.value: c.content_width for c in g.ordered_columns}
         x_before = g.scroll_x
@@ -360,6 +361,10 @@ async def test_widths_do_not_jump_when_columns_arrive(lazy_path, lazy):
                 widest = max(text_width(app.formatters[name].plain(r[c], app.raw)) for r in page.rows)
                 assert after[name] >= widest
         assert g.scroll_x == x_before and g.cursor_column == NCOLS - 1 and g.cursor_cell_in_view()
+        await pilot.pause(0.1)
+        for y in range(2, 8):  # and redrawn with the values (no stale rendering of the placeholders)
+            line = g.render_line(y).text
+            assert PLACEHOLDER not in line and line.rstrip().endswith(str(truth(app.cols_shown[-1], y - 2)))
 
 
 async def test_raw_and_formats_on_a_lazy_page(lazy_path, lazy):
