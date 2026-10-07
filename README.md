@@ -47,6 +47,8 @@ without losing the current view.
 | `s` | sort by the cursor column (asc → desc → off); clicking a header does the same |
 | `=` | narrow the filter to rows equal to the cursor cell |
 | `d` / Enter | row detail panel |
+| `tab` / click | into the open detail panel |
+| `↑` `↓` · `enter` `esc` `tab` | detail panel: pick a column (the grid follows on the same row; the wheel only scrolls) · back to the grid on that column |
 | `c` · `-` · `p` | choose columns · hide column · pin columns |
 | Home / End | first / last column; `‹` `›` beside the header mark hidden columns (click to page) |
 | `f` · `y` · `i` | raw/smart formatting · copy cell · stats for column |

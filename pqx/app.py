@@ -37,7 +37,7 @@ from . import fmt as F
 from . import plots
 from .data import ColumnStats, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec, quote_ident
 from .screens import ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen, HelpScreen
-from .widgets import CursorList
+from .widgets import CursorList, DetailList
 
 _terminal.install()  # X10/urxvt mouse (GNU screen) + lenient input decoding; see _terminal.py
 
@@ -57,8 +57,8 @@ SQL_WORDS = ["and", "or", "not", "is", "null", "between", "in", "like", "ilike",
 
 KEYS = {
     "tab-data": [("/", "filter"), ("x", "clear filter"), ("1-5", "tabs"), ("?", "help"), ("q", "quit"),
-                 ("s", "sort"), ("=", "match cell"), ("d", "detail"), ("c", "columns"), ("g", "go to"),
-                 ("e", "export"), ("< > F", "format")],
+                 ("s", "sort"), ("=", "match cell"), ("d", "detail"), ("tab", "into detail"), ("c", "columns"),
+                 ("g", "go to"), ("e", "export"), ("< > F", "format")],
     "tab-schema": [("↑↓", "column"), ("enter", "stats"), ("/", "filter"), ("1-5", "tabs"), ("?", "help"),
                    ("q", "quit")],
     "tab-stats": [("↑↓", "column"), ("l", "log counts"), ("L", "log values"), ("[ ]", "bins"),
@@ -66,6 +66,8 @@ KEYS = {
     "tab-plot": [("enter/click", "pick"), ("tab", "next field"), ("← →", "change"), ("r", "rotate"), ("m", "sampling"), ("e", "export"),
                  ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
     "tab-meta": [("↑↓", "scroll"), ("tab", "next panel"), ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
+    "detail": [("↑↓", "column"), ("enter/esc/tab", "back to grid"), ("d", "close"), ("1-5", "tabs"),
+               ("?", "help"), ("q", "quit")],
     "dropdown": [("type", "to filter"), ("↑↓", "move"), ("enter/click", "pick"), ("esc", "close")],
     "filter": [("enter", "apply"), ("esc", "back"), ("ctrl+x", "clear"), ("↑↓", "history"), ("→", "complete"),
                ("select … from t", "full query")],
@@ -487,8 +489,8 @@ class PqxApp(App):
                             yield GridTable(id="grid", header_height=2, cursor_type="cell")
                             yield EdgeMarker(1, id="more-right", classes="edge")
                         yield Static(id="status")
-                    with VerticalScroll(id="detail", classes="panel"):
-                        yield Static(id="detail-body")
+                    with Vertical(id="detail", classes="panel"):
+                        yield DetailList(id="detail-list")
             with TabPane("Schema", id="tab-schema"):
                 with Vertical():
                     with Vertical(id="schema-panel", classes="panel tabbed"):
@@ -613,12 +615,17 @@ class PqxApp(App):
                 ctx = "dropdown"
             elif isinstance(self.focused, Input):
                 ctx = "filter"
+            elif isinstance(self.focused, DetailList):
+                ctx = "detail"
             else:
                 ctx = self.query_one(TabbedContent).active
         except NoMatches:  # another modal (help, export) is up
             return
         t = Text(no_wrap=True, overflow="ellipsis")
-        for i, (k, label) in enumerate(KEYS.get(ctx, [])):
+        keys = KEYS.get(ctx, [])
+        if ctx == "tab-data" and not self.screen_stack[0].query_one("#detail").display:
+            keys = [kl for kl in keys if kl != ("tab", "into detail")]  # Tab goes to the filter then
+        for i, (k, label) in enumerate(keys):
             if i:
                 t.append("   ")
             t.append(k, "bold")
@@ -895,20 +902,50 @@ class PqxApp(App):
     def action_toggle_detail(self) -> None:
         d = self.query_one("#detail")
         d.display = not d.display
+        if not d.display and self.query_one(TabbedContent).active == "tab-data":
+            self.query_one(GridTable).focus()
         self._update_detail()
+        self._render_keys()
+
+    def action_detail_to_grid(self, cancel: bool = False) -> None:
+        """Enter, Tab or Esc in the pane: back to the grid, on the selected column.
+        Esc also cancels running queries, as it does everywhere else."""
+        if cancel and self._busy:
+            self.action_escape()
+        name = self.query_one(DetailList).selected
+        if name:
+            self._move_grid_to_column(name)
+        self.query_one(GridTable).focus()
+
+    @on(OptionList.OptionHighlighted, "#detail-list")
+    def detail_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        # only the user's own moves in the pane drive the grid. The pane
+        # following the grid must not echo back, even if its event arrives
+        # after the pane got focus: by then it is stale or names the grid's
+        # own column.
+        lst = self.query_one(DetailList)
+        name = event.option.id
+        grid = self.query_one(GridTable)
+        on_grid = self.cols_shown[grid.cursor_column] if grid.cursor_column < len(self.cols_shown) else None
+        if self.focused is not lst or not name or event.option_index != lst.highlighted or name == on_grid:
+            return
+        self.set_current_column(name, "detail")
+        self._move_grid_to_column(name)
 
     def _update_detail(self) -> None:
         d = self.query_one("#detail")
-        if not d.display or self.page is None or not self.page.rows:
+        if not d.display or self.page is None:
+            return
+        if not self.page.rows:
+            d.border_title = self._dim_markup("no rows")
+            self.query_one(DetailList).set_entries([], 0)
             return
         grid = self.query_one(GridTable)
         r = min(grid.cursor_row, len(self.page.rows) - 1)
         row = self.page.rows[r]
         rn = self.page.row_numbers[r]
-        tbl = Table.grid(padding=(0, 2), expand=True)
-        tbl.add_column(no_wrap=True, max_width=22)
-        tbl.add_column(ratio=1)
         cur_col = self.page.columns[grid.cursor_column] if grid.cursor_column < len(self.page.columns) else None
+        entries = []
         for name, typ, v in zip(self.page.columns, self.page.types, row):
             fmt = self.formatters.get(name) or F.CellFormatter(name, typ)
             full = F.format_value(F.shortest(v, typ), fmt.kind, raw=True, width=0)
@@ -921,9 +958,11 @@ class PqxApp(App):
             extra = F.derived(name, fmt.kind, v)
             if extra:
                 cell.append("\n· " + extra, self.dim)
-            tbl.add_row(Text(name, style="bold reverse" if name == cur_col else "bold"), cell)
+            entries.append((name, cell))
         d.border_title = self._dim_markup(f"row {grid.abs_row:,}" + (f" · file row {rn:,}" if rn is not None else ""))
-        self.query_one("#detail-body", Static).update(tbl)
+        lst = self.query_one(DetailList)
+        lst.set_entries(entries, min(22, max((len(n) for n, _ in entries), default=0)))
+        lst.select(cur_col)
 
     # --------------------------------------------------------------- filtering
     def action_focus_filter(self) -> None:

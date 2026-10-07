@@ -1,8 +1,11 @@
 """Small shared widgets."""
 from __future__ import annotations
 
+from rich.styled import Styled
+from rich.table import Table
 from rich.text import Text
 from textual import on
+from textual.binding import Binding
 from textual.widgets import OptionList
 from textual.widgets.option_list import Option
 
@@ -41,3 +44,72 @@ class CursorList(OptionList):
         if k is not None and k < len(self._items):
             self.replace_option_prompt_at_index(k, self._prompt(k, True))
         self._hl = k
+
+
+class DetailList(CursorList):
+    """The Details pane: one entry per column of the current row.
+
+    Entries are ``name  value`` grids (the value may wrap and carry a derived
+    reading below it), all with the same name width so the values line up. The
+    selected entry is reversed whole while the list has focus and only by its
+    name otherwise, like the grid's own column cursor. The wheel just scrolls;
+    the app links the selection to the grid cursor."""
+
+    BINDINGS = [
+        Binding("enter,tab", "app.detail_to_grid", "Back to grid", show=False),
+        Binding("escape", "app.detail_to_grid(True)", "Back to grid", show=False),
+        Binding("d", "app.toggle_detail", "Detail", show=False),
+    ]
+
+    def __init__(self, **kw) -> None:
+        super().__init__(**kw)
+        self._items: list[tuple[str, Text]] = []
+        self._name_width = 0
+        self._hl: int | None = None
+
+    def set_entries(self, entries: list[tuple[str, Text]], name_width: int) -> None:
+        """Show ``(column, value)`` entries. When the columns are the same as
+        before, the prompts are replaced in place, which keeps the scroll
+        position and the selection; when nothing changed (the grid only moved
+        sideways), nothing is redrawn."""
+        def key(items):
+            return [(n, v.plain, str(v.style), v.spans) for n, v in items]
+        if key(entries) == key(self._items) and name_width == self._name_width:
+            return
+        same = [n for n, _ in entries] == [n for n, _ in self._items]
+        self._items = list(entries)
+        self._name_width = name_width
+        if same:
+            for k in range(len(entries)):
+                self.replace_option_prompt_at_index(k, self._prompt(k, k == self._hl))
+            return
+        self._hl = None
+        self.clear_options()
+        self.add_options([Option(self._prompt(k, False), id=n) for k, (n, _) in enumerate(entries)])
+
+    def select(self, name: str | None) -> None:
+        """Select the entry for column ``name`` (scrolling it into view if it moves)."""
+        k = next((k for k, (n, _) in enumerate(self._items) if n == name), None)
+        if k is not None and self.highlighted != k:
+            self.highlighted = k
+
+    @property
+    def selected(self) -> str | None:
+        k = self.highlighted
+        return self._items[k][0] if k is not None and k < len(self._items) else None
+
+    def _prompt(self, k: int, highlighted: bool, focused: bool | None = None) -> Table | Styled:
+        name, value = self._items[k]
+        whole = highlighted and (self.has_focus if focused is None else focused)
+        tbl = Table.grid(padding=(0, 2), expand=True)
+        tbl.add_column(width=self._name_width, no_wrap=True)
+        tbl.add_column(ratio=1, overflow="fold")  # long tokens (ids, blobs) break rather than lose their end
+        tbl.add_row(Text(name, style="bold reverse" if highlighted and not whole else "bold"), value)
+        return Styled(tbl, "reverse") if whole else tbl
+
+    def watch_has_focus(self, has_focus: bool) -> None:
+        super().watch_has_focus(has_focus)
+        # restyle the selection for the state being entered (on_focus runs too early)
+        k = self._hl
+        if k is not None and k < len(self._items):
+            self.replace_option_prompt_at_index(k, self._prompt(k, True, has_focus))
