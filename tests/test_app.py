@@ -738,15 +738,16 @@ async def test_linked_columns_hidden(demo_path):
         g = app.query_one(GridTable)
         st = app.query_one("#schema-table", DataTable)
         status = app.query_one("#status", Static)
-        g.move_cursor(column=names.index("mag"))
-        await _press(pilot, app, "minus")  # hide mag: the cursor lands on snr
-        assert app.current_column == "snr"
+        g.move_cursor(row=7, column=names.index("mag"))
+        await _press(pilot, app, "minus")  # hide mag: the cursor lands on snr, same row
+        assert app.current_column == "snr" and g.abs_row == 7
 
         await _press(pilot, app, "2")
         st.move_cursor(row=names.index("mag"))
         await _press(pilot, app, "1")
         assert app.cols_shown[g.cursor_column] == "snr" and app.current_column == "mag"
-        assert plain(status).startswith("! mag is hidden  ·  c to show")
+        s = plain(status)  # appended to the usual status
+        assert s.startswith("✓ 20,000 rows") and s.endswith("! mag is hidden · c to show")
         await _press(pilot, app, "2")  # nothing moved: Schema is still on mag
         assert st.cursor_row == names.index("mag") and app.current_column == "mag"
         assert "hidden" not in plain(status)
@@ -759,12 +760,58 @@ async def test_linked_columns_hidden(demo_path):
         st.move_cursor(row=names.index("mag"))
         await _press(pilot, app, "1")
         assert "mag is hidden" in plain(status)
-        await pilot.press("c")  # bringing it back lands on it
+        await pilot.press("c")  # bringing it back lands on it, same row
         assert isinstance(app.screen, ColumnPicker)
         await pilot.press("ctrl+a")
         await pilot.click("#apply")
         await settle(pilot, app)
         assert app.cols_shown[g.cursor_column] == "mag" and "hidden" not in plain(status)
+        assert g.abs_row == 7
+
+        # a filter clears the hint, and it never hides "No matching rows"
+        await _press(pilot, app, "minus")
+        await _press(pilot, app, "2")
+        st.move_cursor(row=names.index("mag"))
+        await _press(pilot, app, "1")
+        assert "mag is hidden" in plain(status)
+        await pilot.press("slash", *"mag > 99", "enter")
+        await settle(pilot, app)
+        assert app.total == 0 and plain(status).startswith("! No matching rows") and "hidden" not in plain(status)
+
+
+async def test_linked_columns_filters(demo_path):
+    """Applying a filter keeps the current column in the grid, and on Stats re-profiles it."""
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        names = app.ds.column_names
+        g = app.query_one(GridTable)
+        st = app.query_one("#schema-table", DataTable)
+        ol = app.query_one("#stats-cols", OptionList)
+        g.move_cursor(column=names.index("mag"))
+        await pilot.press("slash", *"mag > 18", "enter")  # from Data
+        await settle(pilot, app)
+        assert not app.view.is_trivial and names[g.cursor_column] == "mag" and app.current_column == "mag"
+
+        await _press(pilot, app, "2")
+        await pilot.press("slash", *"mag > 19", "enter")  # from Schema
+        await settle(pilot, app)
+        assert st.cursor_row == names.index("mag") and app.current_column == "mag"
+        await _press(pilot, app, "escape", "3")  # profiled under the new filter
+        assert app._stats_shown == "mag" and app._stats_rendered[0] is app.view
+
+        await pilot.press("slash", *"select ra, dec from t", "enter")  # on Stats, dropping mag
+        await settle(pilot, app)
+        assert app._stats_col == "ra" and ol.highlighted == 0 and app._stats_shown == "ra"
+        assert app._stats_rendered[0] is app.view and app.current_column == "mag"
+        await pilot.press("ctrl+x")  # cleared: back on mag
+        await settle(pilot, app)
+        await _press(pilot, app, "escape")  # out of the filter box
+        assert app.query_one(TabbedContent).active == "tab-stats"
+        assert app.view.is_trivial and ol.highlighted == names.index("mag") and app._stats_shown == "mag"
+        assert app._stats_rendered[0] is app.view
+        await _press(pilot, app, "1")
+        assert names[g.cursor_column] == "mag"
 
 
 async def test_linked_columns_sql_result(demo_path):
@@ -825,8 +872,9 @@ async def test_linked_columns_no_bounce(demo_path):
         assert app.current_column == "snr"
         seen = []
         orig = app.set_current_column
-        app.set_current_column = lambda name, source: (seen.append(name), orig(name, source))
+        app.set_current_column = lambda name, source: (seen.append((name, source)), orig(name, source))
         for key in ["1", "2", "3", "1", "2", "1", "3"]:
             await _press(pilot, app, key)
             assert app.current_column == "snr", key
-        assert set(seen) <= {"snr"}
+        # the grid and Schema were elsewhere: their syncs did report, with the same column
+        assert {s for _, s in seen} >= {"grid", "schema"} and {n for n, _ in seen} == {"snr"}
