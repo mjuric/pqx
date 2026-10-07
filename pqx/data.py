@@ -7,7 +7,7 @@ Access paths:
 
 * **Unfiltered, unsorted** windows are read straight from the row groups that
   hold them with pyarrow (see ``_fetch_direct``) when that is cheaper than
-  DuckDB: DuckDB re-reads the footer and sets up a scan of every row group on
+  DuckDB: DuckDB sets up a scan of every row group (from its cached footer) on
   each query, so its cost grows with the number of row groups in the file.
   Otherwise they seek with DuckDB's ``file_row_number`` filter, which skips
   rows inside a large row group faster than pyarrow can decode them.
@@ -28,7 +28,7 @@ import uuid
 import weakref
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import duckdb
 import pyarrow as pa
@@ -51,6 +51,10 @@ def quote_str(s: str) -> str:
 def is_sql_query(text: str) -> bool:
     """True when ``text`` is a full query rather than a WHERE expression."""
     return bool(_SQL_START.match(text or ""))
+
+
+class Stopped(Exception):
+    """A long metadata pass was stopped by its caller (see ``column_chunk_summary``)."""
 
 
 @dataclass
@@ -127,41 +131,79 @@ class ParquetDataset:
         self.path = os.path.abspath(os.path.expanduser(path))
         if not os.path.exists(self.path):
             raise FileNotFoundError(self.path)
-        self.pf = pq.ParquetFile(self.path)
-        self.meta = self.pf.metadata
-        self.arrow_schema: pa.Schema = self.pf.schema_arrow
-        self.num_rows: int = self.meta.num_rows
-        self.file_size = os.path.getsize(self.path)
-        self.columns = [self._column_info(f) for f in self.arrow_schema]
-        self._by_name = {c.name: c for c in self.columns}
         self._lock = threading.Lock()
         self._tls = threading.local()
         self._tagged: dict[str, duckdb.DuckDBPyConnection] = {}
         self._types_cache: dict[str, pa.DataType | None] | None = None
         self._types_done = threading.Event()
         self._types_thread: threading.Thread | None = None
+        self._schema_known = threading.Event()  # pyarrow has parsed the footer (or failed to)
+        self._ready = threading.Event()  # DuckDB's views exist (or failed to): see ``con``
+        self._setup_error: Exception | None = None
+        self._footer_lock = threading.Lock()
+        self._footer: tuple[list[dict], list[int]] | None = None
+        self._encodings: dict[str, set[str]] = {}
         self._io_errors = 0
         self._bad_rgs: set[int] = set()  # row groups pyarrow failed on in a way we couldn't pin down
-        self._wide_decimals = {f.name for f in self.arrow_schema
-                               if pa.types.is_decimal(f.type) and f.type.precision > 38}
-        # database-wide config, so every cursor shows timestamps in UTC rather than local time
-        self.con = duckdb.connect(":memory:", config={"TimeZone": "UTC"})
+        # Database-wide config: every cursor shows timestamps in UTC rather than local time, and the
+        # footer is parsed once rather than on every query (~1 s each for 2000 row groups x 300
+        # columns); DuckDB's cache checks the file's modification time.
+        self._con = duckdb.connect(":memory:", config={"TimeZone": "UTC", "parquet_metadata_cache": True})
         if threads:
-            self.con.execute(f"SET threads={int(threads)}")
+            self._con.execute(f"SET threads={int(threads)}")
+        # DuckDB parses the footer on a background thread (see _bind_types) while pyarrow parses it
+        # here: on huge footers each takes most of a second.
+        self._opened = False  # the schema below is complete: the setup thread may create the views
+        self._start_types()
+        try:
+            self.pf = pq.ParquetFile(self.path)
+            self.meta = self.pf.metadata
+            self.arrow_schema: pa.Schema = self.pf.schema_arrow
+            self.num_rows: int = self.meta.num_rows
+            self.file_size = os.path.getsize(self.path)
+            self.columns = [self._column_info(f) for f in self.arrow_schema]
+            self._by_name = {c.name: c for c in self.columns}
+            self._wide_decimals = {f.name for f in self.arrow_schema
+                                   if pa.types.is_decimal(f.type) and f.type.precision > 38}
+            # file_row_number collides if the file already has such a column; then
+            # fall back to OFFSET-based seeking everywhere.
+            self._has_rownum = "file_row_number" not in self._by_name
+            self._opened = True
+        except BaseException:
+            self._schema_known.set()
+            self._stop_types()  # it gives up at once (not _opened): nothing left running
+            raise
+        self._schema_known.set()
+
+    @property
+    def con(self) -> duckdb.DuckDBPyConnection:
+        """The DuckDB connection, once its views over the file exist: waits for
+        the background setup, and raises what that failed with, if it did."""
+        if not self._ready.is_set():
+            self._start_types()
+            self._ready.wait()
+        if self._setup_error is not None:
+            raise self._setup_error
+        return self._con
+
+    @property
+    def setup_error(self) -> Exception | None:
+        """Why DuckDB can't read the file (its views couldn't be created), once
+        that's known; ``None`` if it can, or while it's still being set up.
+        Every query raises this exception; the footer-based metadata still works."""
+        return self._setup_error if self._ready.is_set() else None
+
+    def _create_views(self) -> None:
         src = f"read_parquet({quote_str(self.path)}, file_row_number=true)"
-        # file_row_number collides if the file already has such a column; then
-        # fall back to OFFSET-based seeking everywhere.
-        self._has_rownum = "file_row_number" not in self._by_name
         if self._has_rownum:
-            self.con.execute(
+            self._con.execute(
                 f"CREATE VIEW __pqx_src AS SELECT * RENAME (file_row_number AS {ROWNUM}) FROM {src}"
             )
-            self.con.execute(f"CREATE VIEW {TABLE} AS SELECT * EXCLUDE ({ROWNUM}) FROM __pqx_src")
+            self._con.execute(f"CREATE VIEW {TABLE} AS SELECT * EXCLUDE ({ROWNUM}) FROM __pqx_src")
         else:
-            self.con.execute(
+            self._con.execute(
                 f"CREATE VIEW {TABLE} AS SELECT * FROM read_parquet({quote_str(self.path)})"
             )
-        self._start_types()  # DuckDB's result types, for direct reads (binding reads the footer)
 
     # ------------------------------------------------------------------ schema
     @staticmethod
@@ -218,54 +260,111 @@ class ParquetDataset:
                 _interrupt(c)
 
     # --------------------------------------------------------------- metadata
-    def column_chunk_summary(self) -> list[dict]:
-        """Per-column storage + statistics aggregated over all row groups."""
-        md = self.meta
-        out: dict[str, dict] = {}
-        paths = [md.schema.column(i).path for i in range(md.num_columns)]
-        for rg in range(md.num_row_groups):
-            g = md.row_group(rg)
-            for i in range(g.num_columns):
-                c = g.column(i)
-                d = out.setdefault(
-                    paths[i],
-                    dict(path=paths[i], physical=c.physical_type, compression=c.compression,
-                         encodings=set(), compressed=0, uncompressed=0, min=None, max=None,
-                         nulls=0, has_stats=True),
-                )
-                d["compressed"] += c.total_compressed_size
-                d["uncompressed"] += c.total_uncompressed_size
-                d["encodings"].update(c.encodings)
-                st = c.statistics
-                if st is None or not st.has_min_max:
-                    d["has_stats"] = d["has_stats"] and st is not None and st.has_null_count
-                else:
-                    try:
-                        d["min"] = st.min if d["min"] is None else min(d["min"], st.min)
-                        d["max"] = st.max if d["max"] is None else max(d["max"], st.max)
-                    except TypeError:
-                        pass
-                if st is not None and st.has_null_count:
-                    d["nulls"] += st.null_count
-        for i in range(md.num_columns):
-            sc = md.schema.column(i)
-            if sc.path in out:
-                out[sc.path]["logical"] = str(sc.logical_type) if sc.logical_type else ""
-        return list(out.values())
+    def column_chunk_summary(self, stop: Callable[[], bool] | None = None) -> list[dict]:
+        """Per-column storage + statistics aggregated over all row groups (leaf
+        columns, by path; encodings come from ``column_encodings``).
 
-    def row_groups(self) -> list[dict]:
-        if getattr(self, "_rg_cache", None) is not None:
-            return self._rg_cache
+        One pass over every column chunk in the footer, shared with
+        ``row_groups`` and computed once: ~2.5 s per million chunks, so call it
+        off the UI thread. ``stop()`` is checked every row group: if it says so,
+        this raises ``Stopped`` (and a later call starts over)."""
+        return self._footer_scan(stop)[0]
+
+    def row_groups(self, stop: Callable[[], bool] | None = None) -> list[dict]:
         rows = []
         start = 0
+        comp = self._footer_scan(stop)[1]
         for i in range(self.meta.num_row_groups):
             g = self.meta.row_group(i)
-            comp = sum(g.column(j).total_compressed_size for j in range(g.num_columns))
-            rows.append(dict(index=i, start=start, rows=g.num_rows, compressed=comp,
+            rows.append(dict(index=i, start=start, rows=g.num_rows, compressed=comp[i],
                              uncompressed=g.total_byte_size))
             start += g.num_rows
-        self._rg_cache = rows
         return rows
+
+    def column_encodings(self, path: str) -> set[str]:
+        """Encodings used by leaf column ``path`` in any row group (cheap: one column)."""
+        if path not in self._encodings:
+            md = self.meta
+            idx = [i for i in range(md.num_columns) if md.schema.column(i).path == path]
+            out: set[str] = set()
+            for rg in range(md.num_row_groups):
+                g = md.row_group(rg)
+                for i in idx:
+                    if i < g.num_columns:
+                        out.update(g.column(i).encodings)
+            self._encodings[path] = out
+        return self._encodings[path]
+
+    def _footer_scan(self, stop: Callable[[], bool] | None = None) -> tuple[list[dict], list[int]]:
+        """(``column_chunk_summary``, compressed bytes per row group), cached.
+
+        The per-chunk cost is pyarrow's Python objects, so this touches as few
+        as it can: plain booleans, ints and floats compare their statistics as
+        stored (``min_raw``, which is what ``min`` converts them to anyway) and
+        encodings are left to ``column_encodings``."""
+        with self._footer_lock:
+            if self._footer is None:
+                self._footer = self._scan_footer(stop)
+            return self._footer
+
+    def _scan_footer(self, stop: Callable[[], bool] | None = None) -> tuple[list[dict], list[int]]:
+        md = self.meta
+        n = md.num_columns
+        schema = [md.schema.column(i) for i in range(n)]
+        paths = [sc.path for sc in schema]
+        first: dict[str, int] = {}
+        slot = [first.setdefault(p, i) for i, p in enumerate(paths)]  # leaves sharing a path add up
+        raw = [sc.physical_type in ("BOOLEAN", "INT32", "INT64", "FLOAT", "DOUBLE")
+               and sc.logical_type.type == "NONE" and sc.converted_type == "NONE" for sc in schema]
+        comp, unc, nulls = [0] * n, [0] * n, [0] * n
+        lo: list[Any] = [None] * n
+        hi: list[Any] = [None] * n
+        has = [True] * n
+        info: dict[int, tuple] = {}  # slot -> (physical type, compression) of its first chunk
+        rg_comp = []
+        for rg in range(md.num_row_groups):
+            if stop is not None and stop():
+                raise Stopped("footer scan stopped")
+            g = md.row_group(rg)
+            total = 0
+            for i in range(g.num_columns):
+                c = g.column(i)
+                k = slot[i]
+                if k not in info:
+                    info[k] = (c.physical_type, c.compression)
+                size = c.total_compressed_size
+                total += size
+                comp[k] += size
+                unc[k] += c.total_uncompressed_size
+                st = c.statistics
+                if st is None:
+                    has[k] = False
+                    continue
+                if st.has_min_max:
+                    if raw[i]:
+                        a, b = st.min_raw, st.max_raw
+                    else:
+                        a, b = st.min, st.max
+                    try:
+                        m = lo[k]
+                        lo[k] = a if m is None else min(m, a)
+                        m = hi[k]
+                        hi[k] = b if m is None else max(m, b)
+                    except TypeError:
+                        pass
+                    if st.has_null_count:
+                        nulls[k] += st.null_count
+                elif st.has_null_count:
+                    nulls[k] += st.null_count
+                else:
+                    has[k] = False
+            rg_comp.append(total)
+        logical = {sc.path: str(sc.logical_type) if sc.logical_type else "" for sc in schema}
+        out = [dict(path=paths[k], physical=phys, compression=codec, compressed=comp[k],
+                    uncompressed=unc[k], min=lo[k], max=hi[k], nulls=nulls[k], has_stats=has[k],
+                    logical=logical[paths[k]])
+               for k, (phys, codec) in sorted(info.items())]
+        return out, rg_comp
 
     def key_value_metadata(self) -> dict[str, str]:
         kv = self.meta.metadata or {}
@@ -324,11 +423,14 @@ class ParquetDataset:
         n = self.num_rows
         if not sample or not self._has_rownum or sample >= n:
             return ""
-        rgs = self.row_groups()
-        k = max(1, min(slices, len(rgs)))
+        rows = [self.meta.row_group(i).num_rows for i in range(self.meta.num_row_groups)]
+        starts = [0]
+        for r in rows:
+            starts.append(starts[-1] + r)
+        k = max(1, min(slices, len(rows)))
         chunk = max(1, -(-sample // k))
-        picks = sorted({round(i * (len(rgs) - 1) / max(k - 1, 1)) for i in range(k)})
-        ranges = [(rgs[i]["start"], rgs[i]["start"] + min(chunk, rgs[i]["rows"])) for i in picks]
+        picks = sorted({round(i * (len(rows) - 1) / max(k - 1, 1)) for i in range(k)})
+        ranges = [(starts[i], starts[i] + min(chunk, rows[i])) for i in picks]
         return "(" + " OR ".join(f"({ROWNUM} >= {a} AND {ROWNUM} < {b})" for a, b in ranges) + ")"
 
     def validate(self, view: View) -> list[tuple[str, pa.DataType]]:
@@ -627,10 +729,12 @@ class ParquetDataset:
         """Arrow type of each column as DuckDB returns it, or ``None`` where the
         direct path can't reproduce it. Bound once on a background thread
         (started with the dataset); until that's done this returns ``None``
-        (fetches use DuckDB), or with ``wait`` blocks for it."""
+        (fetches use DuckDB), or with ``wait`` blocks for it. It also blocks
+        while DuckDB is still being set up: a DuckDB fetch would wait for that
+        anyway, and the types follow within milliseconds (the footer is cached)."""
         while not self._types_done.is_set():
             self._start_types()
-            if not wait:
+            if not wait and self._ready.is_set():
                 return None
             self._types_done.wait(0.1)
         return self._types_cache
@@ -644,17 +748,41 @@ class ParquetDataset:
             _BINDING.add(self)
 
     def _stop_types(self) -> None:
-        """Wait for the background bind (DuckDB aborts the process if a query is
-        still running on a daemon thread when Python exits). Binding can't be
-        interrupted (DuckDB checks only once it's bound), and it's one footer
-        parse: ~1 s for 2000 row groups x 300 columns."""
+        """Wait for the background setup and bind (DuckDB aborts the process if a
+        query is still running on a daemon thread when Python exits). Binding
+        can't be interrupted (DuckDB checks only once it's bound), and it's one
+        footer parse: ~1 s for 2000 row groups x 300 columns."""
         t = self._types_thread
         if t is not None and t is not threading.current_thread():
             t.join(30)
 
+    def _setup(self) -> None:
+        """Have DuckDB parse the footer (into its metadata cache) while pyarrow
+        parses it in ``__init__``, then create the views once the schema says
+        how. Sets ``_ready`` whatever happens; ``con`` raises a failure."""
+        try:
+            try:
+                self._con.execute(f"SELECT * FROM read_parquet({quote_str(self.path)}) LIMIT 0")
+            except Exception:  # noqa: BLE001 - creating the views says what's wrong
+                pass
+            self._schema_known.wait()
+            if not self._opened:  # __init__ failed and raises
+                raise RuntimeError("the dataset failed to open")
+            self._create_views()
+        except Exception as e:  # noqa: BLE001
+            self._setup_error = e
+        finally:
+            self._ready.set()
+
     def _bind_types(self) -> None:
         # Untagged: ds.interrupt() couldn't shorten it, only throw the result away.
-        cur = self.con.cursor()
+        if not self._ready.is_set():
+            self._setup()
+        if self._setup_error is not None:
+            self._types_cache = None
+            self._types_done.set()
+            return
+        cur = self._con.cursor()
         try:
             tbl = cur.execute(f"SELECT * FROM {TABLE} LIMIT 0").arrow()
             if isinstance(tbl, pa.RecordBatchReader):
@@ -712,10 +840,10 @@ class ParquetDataset:
 
         pyarrow decodes every row from the start of a row group up to the last
         one needed; DuckDB skips rows inside a row group faster, but each query
-        re-reads the footer and sets up every row group in the file. Both pay
+        sets up every row group in the file. Both pay
         about the same to decode the first page of each column (with a bounded
         read buffer), so that cancels out. Constants are from 300-column
-        synthetic files and real 184/53-column ones (see PR #15)."""
+        synthetic files and real 184/53-column ones (PR #15, refitted in #16)."""
         leaves = self._leaves()
         md = self.meta
         decoded = 0.0
@@ -731,7 +859,8 @@ class ParquetDataset:
                     decoded += c.total_uncompressed_size * frac
                     compressed += c.total_compressed_size
         pa_ms = _PA_NS_PER_BYTE * 1e-6 * decoded
-        duck_ms = (_DUCK_MS_BASE + md.num_row_groups * (_DUCK_MS_PER_RG + _DUCK_MS_PER_RG_COL * len(names))
+        duck_ms = (_DUCK_MS_BASE + _DUCK_MS_PER_COL * len(names)
+                   + md.num_row_groups * (_DUCK_MS_PER_RG + _DUCK_MS_PER_RG_COL * len(names))
                    + _DUCK_SKIP_RATIO * pa_ms)
         return pa_ms <= duck_ms, compressed <= _PRE_BUFFER_MAX
 
@@ -766,7 +895,8 @@ class ParquetDataset:
                     size = g.column(i).total_uncompressed_size
                     decoded += max(size * frac, min(size, _FIRST_PAGE_BYTES))
         pa_ms = _PA_NS_PER_BYTE * 1e-6 * decoded
-        duck_ms = (_DUCK_MS_BASE + md.num_row_groups * (_DUCK_MS_PER_RG + _DUCK_MS_PER_RG_COL * len(columns))
+        duck_ms = (_DUCK_MS_BASE + _DUCK_MS_PER_COL * len(columns)
+                   + md.num_row_groups * (_DUCK_MS_PER_RG + _DUCK_MS_PER_RG_COL * len(columns))
                    + _DUCK_SKIP_RATIO * pa_ms)
         return min(pa_ms, duck_ms)
 
@@ -1042,12 +1172,16 @@ def _runs(rows: list[int]) -> list[tuple[int, int]]:
     return out
 
 
-# Cost model for ``ParquetDataset._direct_estimate`` (milliseconds / bytes).
+# Cost model for ``ParquetDataset._direct_estimate`` (milliseconds / bytes). DuckDB's
+# constants are with its parquet_metadata_cache on (the footer parsed once): fitted to
+# 150-row windows of 1, 20 and all columns on 300-column files with 5-2000 row groups,
+# SSSource and mpc_orbits (median model/measured 1.0; 10-90%: 0.5-1.2).
 _PA_NS_PER_BYTE = 3.0        # pyarrow decode time per uncompressed byte
-_DUCK_SKIP_RATIO = 0.4       # DuckDB's cost to skip a byte, relative to pyarrow decoding it
-_DUCK_MS_BASE = 10.0         # DuckDB per-query overhead
-_DUCK_MS_PER_RG = 0.6        # ... per row group in the file (footer + scan setup)
-_DUCK_MS_PER_RG_COL = 0.002  # ... per row group and selected column
+_DUCK_SKIP_RATIO = 0.3       # DuckDB's cost to skip a byte, relative to pyarrow decoding it
+_DUCK_MS_BASE = 4.0          # DuckDB per-query overhead
+_DUCK_MS_PER_COL = 0.1       # ... per selected column
+_DUCK_MS_PER_RG = 0.16       # ... per row group in the file (scan setup)
+_DUCK_MS_PER_RG_COL = 0.001  # ... per row group and selected column
 _PRE_BUFFER_MAX = 32 << 20   # pre-buffer (coalesce reads) only when the chunks are this small
 _READ_BUFFER = 1 << 20       # otherwise read through a buffer this size
 _FIRST_PAGE_BYTES = 256 << 10  # window_cost: what decoding a column chunk's first page costs, in bytes

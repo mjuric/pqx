@@ -166,3 +166,54 @@ def test_helpers():
     assert parse_row_spec("10k", 100) == 99
     with pytest.raises(ValueError):
         parse_row_spec("abc", 10)
+
+
+def test_duckdb_setup_in_background(demo_path):
+    """DuckDB parses the footer and creates its views on a thread; queries wait for that."""
+    ds = ParquetDataset(demo_path)
+    assert ds.cursor().execute("SELECT current_setting('parquet_metadata_cache')").fetchone()[0] is True
+    assert ds.count(View(where="mag < 20")) > 0
+    assert ds._duck_types(wait=True) is not None
+
+
+def test_duckdb_setup_failure_is_reported_on_use(demo_path, monkeypatch):
+    def boom(self):
+        raise duckdb.IOException("IO Error: cannot read it")
+
+    monkeypatch.setattr(ParquetDataset, "_create_views", boom)
+    ds = ParquetDataset(demo_path)  # pyarrow reads it: opening works
+    assert ds._duck_types(wait=True) is None
+    with pytest.raises(duckdb.IOException, match="cannot read it"):
+        ds.count(View(where="mag < 20"))
+    with pytest.raises(duckdb.IOException):
+        ds.fetch(View(), 0, 10)
+
+
+def test_unreadable_file_raises(tmp_path):
+    p = tmp_path / "bad.parquet"
+    p.write_bytes(b"not a parquet file at all")
+    with pytest.raises(Exception):
+        ParquetDataset(str(p))
+
+
+def test_init_failure_after_footer_parse_stops_setup_thread(demo_path, monkeypatch):
+    """__init__ failing after pyarrow opened the file mustn't leave DuckDB's setup thread waiting (exit would stall)."""
+    import time
+
+    def boom(f):
+        raise ValueError("bad field metadata")
+
+    started = []
+    orig = ParquetDataset._start_types
+
+    def start(self):
+        orig(self)
+        started.append(self._types_thread)
+
+    monkeypatch.setattr(ParquetDataset, "_column_info", staticmethod(boom))
+    monkeypatch.setattr(ParquetDataset, "_start_types", start)
+    t0 = time.perf_counter()
+    with pytest.raises(ValueError, match="bad field metadata"):
+        ParquetDataset(demo_path)
+    assert time.perf_counter() - t0 < 5
+    assert started and not started[0].is_alive()
