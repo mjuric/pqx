@@ -47,8 +47,8 @@ from . import fmt as F
 from . import plots
 from .cells import (FAILED_MARK, MISSING, PLACEHOLDER, UNAVAILABLE, CellRow, ColumnCells, one_cell_per_char, RowCells, RowLayout, text_width,
                     widest_candidates)
-from .data import (ColumnStats, Page, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec,
-                   quote_ident)
+from .data import (ColumnStats, Page, ParquetDataset, Stopped, View, guess_sky_columns, is_sql_query,
+                   parse_row_spec, quote_ident)
 from .screens import ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen, HelpScreen
 from .widgets import CursorList, DetailList
 
@@ -2272,10 +2272,13 @@ class PqxApp(App):
             if worker.is_cancelled:  # quitting
                 return
             time.sleep(0.01)
+        stop = lambda: worker.is_cancelled  # noqa: E731 - quitting needn't wait for the whole pass
         try:
-            summ = self.ds.column_chunk_summary()
-            rgs = self.ds.row_groups()
+            summ = self.ds.column_chunk_summary(stop)
+            rgs = self.ds.row_groups(stop)
             rg_rows = self._rowgroup_rows(rgs)
+        except Stopped:
+            return
         except Exception as e:  # noqa: BLE001 - say so in both tabs; the rest of pqx works without it
             self.call_from_thread(self._footer_failed, e)
             return

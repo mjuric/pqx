@@ -28,7 +28,7 @@ import uuid
 import weakref
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import duckdb
 import pyarrow as pa
@@ -51,6 +51,10 @@ def quote_str(s: str) -> str:
 def is_sql_query(text: str) -> bool:
     """True when ``text`` is a full query rather than a WHERE expression."""
     return bool(_SQL_START.match(text or ""))
+
+
+class Stopped(Exception):
+    """A long metadata pass was stopped by its caller (see ``column_chunk_summary``)."""
 
 
 @dataclass
@@ -256,19 +260,20 @@ class ParquetDataset:
                 _interrupt(c)
 
     # --------------------------------------------------------------- metadata
-    def column_chunk_summary(self) -> list[dict]:
+    def column_chunk_summary(self, stop: Callable[[], bool] | None = None) -> list[dict]:
         """Per-column storage + statistics aggregated over all row groups (leaf
         columns, by path; encodings come from ``column_encodings``).
 
         One pass over every column chunk in the footer, shared with
         ``row_groups`` and computed once: ~2.5 s per million chunks, so call it
-        off the UI thread."""
-        return self._footer_scan()[0]
+        off the UI thread. ``stop()`` is checked every row group: if it says so,
+        this raises ``Stopped`` (and a later call starts over)."""
+        return self._footer_scan(stop)[0]
 
-    def row_groups(self) -> list[dict]:
+    def row_groups(self, stop: Callable[[], bool] | None = None) -> list[dict]:
         rows = []
         start = 0
-        comp = self._footer_scan()[1]
+        comp = self._footer_scan(stop)[1]
         for i in range(self.meta.num_row_groups):
             g = self.meta.row_group(i)
             rows.append(dict(index=i, start=start, rows=g.num_rows, compressed=comp[i],
@@ -290,7 +295,7 @@ class ParquetDataset:
             self._encodings[path] = out
         return self._encodings[path]
 
-    def _footer_scan(self) -> tuple[list[dict], list[int]]:
+    def _footer_scan(self, stop: Callable[[], bool] | None = None) -> tuple[list[dict], list[int]]:
         """(``column_chunk_summary``, compressed bytes per row group), cached.
 
         The per-chunk cost is pyarrow's Python objects, so this touches as few
@@ -299,10 +304,10 @@ class ParquetDataset:
         encodings are left to ``column_encodings``."""
         with self._footer_lock:
             if self._footer is None:
-                self._footer = self._scan_footer()
+                self._footer = self._scan_footer(stop)
             return self._footer
 
-    def _scan_footer(self) -> tuple[list[dict], list[int]]:
+    def _scan_footer(self, stop: Callable[[], bool] | None = None) -> tuple[list[dict], list[int]]:
         md = self.meta
         n = md.num_columns
         schema = [md.schema.column(i) for i in range(n)]
@@ -318,6 +323,8 @@ class ParquetDataset:
         info: dict[int, tuple] = {}  # slot -> (physical type, compression) of its first chunk
         rg_comp = []
         for rg in range(md.num_row_groups):
+            if stop is not None and stop():
+                raise Stopped("footer scan stopped")
             g = md.row_group(rg)
             total = 0
             for i in range(g.num_columns):

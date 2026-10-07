@@ -10,7 +10,7 @@ from textual.widgets import DataTable, Static, TabbedContent
 from textual.worker import WorkerState
 
 from pqx.app import ROWGROUP_BATCH, GridTable, PqxApp
-from pqx.data import ParquetDataset
+from pqx.data import ParquetDataset, Stopped
 from test_fetch import _zoo
 
 SIZE = (150, 42)
@@ -84,10 +84,10 @@ def test_summary_computed_once(demo_path, monkeypatch):
     orig = ParquetDataset._scan_footer
     gate = threading.Event()
 
-    def scan(self):
+    def scan(self, stop=None):
         calls.append(threading.current_thread().name)
         gate.wait(5)
-        return orig(self)
+        return orig(self, stop)
 
     monkeypatch.setattr(ParquetDataset, "_scan_footer", scan)
     ds = ParquetDataset(demo_path)
@@ -127,10 +127,10 @@ def _held_summary(monkeypatch):
     threads = []
     orig = ParquetDataset.column_chunk_summary
 
-    def summary(self):
+    def summary(self, stop=None):
         threads.append(threading.current_thread() is threading.main_thread())
         gate.wait(10)
-        return orig(self)
+        return orig(self, stop)
 
     monkeypatch.setattr(ParquetDataset, "column_chunk_summary", summary)
     return gate, threads
@@ -220,7 +220,7 @@ async def test_schema_built_late_on_first_column_and_sql_result(demo_path, monke
 
 
 async def test_footer_failure_is_shown(demo_path, monkeypatch):
-    def boom(self):
+    def boom(self, stop=None):
         raise ValueError("bad statistics")
 
     monkeypatch.setattr(ParquetDataset, "column_chunk_summary", boom)
@@ -273,3 +273,37 @@ async def test_zero_column_file(tmp_path):
     async with app.run_test(size=SIZE) as pilot:
         await settle(pilot, app)
         assert plain(app.query_one("#status", Static)).startswith("✗ DuckDB can't read this file")
+
+
+def test_footer_scan_stops_and_starts_over(demo_path):
+    ds = ParquetDataset(demo_path)
+    with pytest.raises(Stopped):
+        ds.column_chunk_summary(lambda: True)
+    assert ds._footer is None
+    assert len(ds.column_chunk_summary()) == len(ds.columns)
+
+
+async def test_quit_while_reading_footer(demo_path, monkeypatch):
+    """q while the footer pass runs: the pass stops at its next row group, and nothing is reported."""
+    orig = ParquetDataset._scan_footer
+    entered = threading.Event()
+    stopped = []
+
+    def scan(self, stop=None):
+        entered.set()
+        while not stop():  # a pass that lasts until it's told to stop
+            threading.Event().wait(0.01)
+        try:
+            return orig(self, stop)
+        except Exception as e:  # noqa: BLE001
+            stopped.append(type(e).__name__)
+            raise
+
+    monkeypatch.setattr(ParquetDataset, "_scan_footer", scan)
+    errors = []
+    app = PqxApp(demo_path)
+    app._footer_failed = lambda e: errors.append(e)
+    async with app.run_test(size=SIZE) as pilot:
+        await _until(pilot, entered.is_set)
+        await pilot.press("q")
+    assert stopped == ["Stopped"] and not errors
