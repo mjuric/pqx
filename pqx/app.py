@@ -57,8 +57,8 @@ SQL_WORDS = ["and", "or", "not", "is", "null", "between", "in", "like", "ilike",
 
 KEYS = {
     "tab-data": [("/", "filter"), ("x", "clear filter"), ("1-5", "tabs"), ("?", "help"), ("q", "quit"),
-                 ("s", "sort"), ("=", "match cell"), ("d", "detail"), ("c", "columns"), ("g", "go to"),
-                 ("e", "export"), ("< > F", "format")],
+                 ("s", "sort"), ("=", "match cell"), ("d", "detail"), ("tab", "into detail"), ("c", "columns"),
+                 ("g", "go to"), ("e", "export"), ("< > F", "format")],
     "tab-schema": [("↑↓", "column"), ("enter", "stats"), ("/", "filter"), ("1-5", "tabs"), ("?", "help"),
                    ("q", "quit")],
     "tab-stats": [("↑↓", "column"), ("l", "log counts"), ("L", "log values"), ("[ ]", "bins"),
@@ -66,6 +66,8 @@ KEYS = {
     "tab-plot": [("enter/click", "pick"), ("tab", "next field"), ("← →", "change"), ("r", "rotate"), ("m", "sampling"), ("e", "export"),
                  ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
     "tab-meta": [("↑↓", "scroll"), ("tab", "next panel"), ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
+    "detail": [("↑↓", "column"), ("enter/esc/tab", "back to grid"), ("d", "close"), ("1-5", "tabs"),
+               ("?", "help"), ("q", "quit")],
     "dropdown": [("type", "to filter"), ("↑↓", "move"), ("enter/click", "pick"), ("esc", "close")],
     "filter": [("enter", "apply"), ("esc", "back"), ("ctrl+x", "clear"), ("↑↓", "history"), ("→", "complete"),
                ("select … from t", "full query")],
@@ -612,6 +614,8 @@ class PqxApp(App):
                 ctx = "dropdown"
             elif isinstance(self.focused, Input):
                 ctx = "filter"
+            elif isinstance(self.focused, DetailList):
+                ctx = "detail"
             else:
                 ctx = self.query_one(TabbedContent).active
         except NoMatches:  # another modal (help, export) is up

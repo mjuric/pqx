@@ -647,6 +647,7 @@ async def test_detail_pane_focus_and_link(demo_path):
         await pilot.pause(0.05)
         assert app.focused is lst and lst.selected == app.cols_shown[2]
         assert app.query_one("#detail").has_focus_within
+        assert "back to grid" in plain(app.query_one("#keys"))
         await pilot.press("down", "down")  # the grid follows sideways, same row
         await pilot.pause(0.05)
         assert lst.selected == app.cols_shown[4]
