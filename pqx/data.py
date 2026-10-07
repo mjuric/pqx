@@ -235,6 +235,9 @@ class ParquetDataset:
         self._io_errors = 0
         self._bad_rgs: set[int] = set()  # row groups pyarrow failed on in a way we couldn't pin down
         self._rownum = ROWNUM  # the file row number's column name in __pqx_src (see below)
+        self._case_dups = False
+        self._sql_names: dict[str, str] = {}  # file column -> DuckDB's name for it, where they differ
+        self._file_names: dict[str, str] = {}  # and back
         # Database-wide config: every cursor shows timestamps in UTC rather than local time, and the
         # footer is parsed once rather than on every query (~1 s each for 2000 row groups x 300
         # columns); DuckDB's cache checks the file's modification time.
@@ -262,6 +265,10 @@ class ParquetDataset:
             # the row number's own name, too, must not be one of the file's
             while self._rownum.lower() in lower:
                 self._rownum += "_"
+            # Names that differ only in case (Name, name) are one name to DuckDB: it renames the
+            # later ones (name_1). Queries then refer to DuckDB's names (see _create_views, _qcol)
+            # and results are renamed back, so each column shows its own data.
+            self._case_dups = len(lower) != len(self.columns)
             self._opened = True
         except BaseException:
             self._schema_known.set()
@@ -298,6 +305,33 @@ class ParquetDataset:
             self._con.execute(
                 f"CREATE VIEW {TABLE} AS SELECT * FROM read_parquet({path_literal(self.path)})"
             )
+        if self._case_dups:
+            duck = [d[0] for d in self._con.execute(f"SELECT * FROM {TABLE} LIMIT 0").description]
+            names = self.column_names
+            if len(duck) != len(names):
+                raise RuntimeError(f"DuckDB reads {len(duck)} columns from this file, not {len(names)}")
+            self._sql_names = {n: d for n, d in zip(names, duck) if n != d}
+            self._file_names = {d: n for n, d in self._sql_names.items()}
+
+    def sql_name(self, name: str) -> str:
+        """What DuckDB calls the file's column ``name`` in ``t``: ``name`` itself, unless the file
+        has another column of the same name but for case (then e.g. ``name_1``)."""
+        if self._case_dups and not self._ready.is_set():  # the names are known once the views exist
+            self._start_types()
+            self._ready.wait()
+        return self._sql_names.get(name, name)
+
+    def _qcol(self, name: str, view: View | None = None) -> str:
+        """The file's column ``name`` (or, for a SQL ``view``, the result's) quoted for SQL."""
+        if view is not None and view.sql.strip():
+            return quote_ident(name)
+        return quote_ident(self.sql_name(name))
+
+    def _file_columns(self, tbl: pa.Table) -> pa.Table:
+        """``tbl`` (columns of ``t``) with DuckDB's renamed columns called by their names in the file."""
+        if not self._file_names:
+            return tbl
+        return tbl.rename_columns([self._file_names.get(n, n) for n in tbl.column_names])
 
     # ------------------------------------------------------------------ schema
     @staticmethod
@@ -468,7 +502,7 @@ class ParquetDataset:
     def _base_sql(self, view: View, columns: list[str] | None, with_rownum: bool) -> str:
         if view.sql.strip():
             return view.sql.strip().rstrip(";")
-        cols = ", ".join(quote_ident(c) for c in (columns or self.column_names))
+        cols = ", ".join(self._qcol(c) for c in (columns or self.column_names))
         if with_rownum and self._has_rownum:
             cols = f"{self._rownum}, {cols}"
             src = "__pqx_src"
@@ -478,7 +512,7 @@ class ParquetDataset:
         if view.where.strip():
             sql += f" WHERE ({view.where})"
         if view.order_by:
-            keys = [f"{quote_ident(c)} {'DESC' if d else 'ASC'} NULLS LAST" for c, d in view.order_by]
+            keys = [f"{self._qcol(c)} {'DESC' if d else 'ASC'} NULLS LAST" for c, d in view.order_by]
             if with_rownum and self._has_rownum:
                 keys.append(self._rownum)  # stable order
             sql += " ORDER BY " + ", ".join(keys)
@@ -500,7 +534,7 @@ class ParquetDataset:
             return base
         cond = self.sample_condition(sample)
         if cond:
-            cols = ", ".join(quote_ident(c) for c in (columns or self.column_names))
+            cols = ", ".join(self._qcol(c) for c in (columns or self.column_names))
             sql = f"SELECT {cols} FROM __pqx_src WHERE {cond}"
             if view.where.strip():
                 sql += f" AND ({view.where})"
@@ -536,6 +570,8 @@ class ParquetDataset:
         tbl = rel.arrow()
         if isinstance(tbl, pa.RecordBatchReader):
             tbl = tbl.read_all()
+        if not view.sql.strip():
+            tbl = self._file_columns(tbl)
         return [(f.name, f.type) for f in tbl.schema]
 
     def count(self, view: View) -> int:
@@ -561,7 +597,7 @@ class ParquetDataset:
         cur = self._handover(token, self.con.cursor())
         is_sql = bool(view.sql.strip())
         if view.is_trivial and self._has_rownum:
-            cols = ", ".join(quote_ident(c) for c in (columns or self.column_names))
+            cols = ", ".join(self._qcol(c) for c in (columns or self.column_names))
             sql = (f"SELECT {self._rownum}, {cols} FROM __pqx_src WHERE {self._rownum} >= {offset} "
                    f"AND {self._rownum} < {offset + limit} ORDER BY {self._rownum}")
         else:
@@ -580,7 +616,7 @@ class ParquetDataset:
         else:
             rn = [None] * tbl.num_rows
         if not is_sql:
-            tbl = self._fix_wide_decimals(tbl, rn)
+            tbl = self._fix_wide_decimals(self._file_columns(tbl), rn)
         return _page(offset, tbl, rn)
 
     def has_row_ids(self, view: View) -> bool:
@@ -655,7 +691,7 @@ class ParquetDataset:
         else:
             token = None
         cur = self._handover(token, self.con.cursor())
-        cols = ", ".join(quote_ident(c) for c in names)
+        cols = ", ".join(self._qcol(c) for c in names)
         uniq = sorted(set(rows))
         if self._has_rownum or not uniq:
             sql = f"SELECT {cols} FROM {TABLE} LIMIT 0"
@@ -671,7 +707,7 @@ class ParquetDataset:
         if uniq and uniq != rows:
             pos = {r: i for i, r in enumerate(uniq)}
             tbl = _take(tbl, [pos[r] for r in rows])
-        return _page(0, self._fix_wide_decimals(tbl, rows), rows)
+        return _page(0, self._fix_wide_decimals(self._file_columns(tbl), rows), rows)
 
     def _handover(self, token: _Cancel | None, c):
         """Register DuckDB cursor ``c`` in place of a direct read's ``token``.
@@ -881,6 +917,7 @@ class ParquetDataset:
             tbl = cur.execute(f"SELECT * FROM {TABLE} LIMIT 0").arrow()
             if isinstance(tbl, pa.RecordBatchReader):
                 tbl = tbl.read_all()
+            tbl = self._file_columns(tbl)  # (DuckDB renames a column whose name differs only in case)
             names = self.arrow_schema.names
             out: dict[str, pa.DataType | None] | None = None
             if len(set(names)) == len(names) and tbl.schema.names == names:
@@ -1014,7 +1051,7 @@ class ParquetDataset:
         if typ is None and info is not None:
             typ = info.arrow_type
         ci = ColumnInfo(name, typ if typ is not None else pa.string())
-        q = quote_ident(name)
+        q = self._qcol(name, view)
         rel = f"(SELECT {q} AS v FROM ({self.relation_sql(view, sample=sample)}))"
         cur = self.cursor()
         st = ColumnStats(name, sampled=bool(sample))
@@ -1063,7 +1100,7 @@ class ParquetDataset:
 
         With ``temporal`` the column is binned on epoch seconds; with ``log``
         on log10 of its positive values."""
-        q = quote_ident(name)
+        q = self._qcol(name, view)
         vexpr = f"CAST(epoch({q}) AS DOUBLE)" if temporal else f"CAST({q} AS DOUBLE)"
         if log:
             vexpr = f"log10(CASE WHEN {q} > 0 THEN CAST({q} AS DOUBLE) END)"
@@ -1100,7 +1137,7 @@ class ParquetDataset:
 
         nlon = int(round(360 / res_deg))
         nlat = int(round(180 / res_deg))
-        a, d = quote_ident(lon), quote_ident(lat)
+        a, d = self._qcol(lon, view), self._qcol(lat, view)
         rel = (f"(SELECT CAST({a} AS DOUBLE) AS a, CAST({d} AS DOUBLE) AS d FROM "
                f"({self.relation_sql(view, sample=sample)})) "
                f"WHERE isfinite(a) AND isfinite(d) AND d BETWEEN -90 AND 90")
@@ -1122,7 +1159,7 @@ class ParquetDataset:
         """2-D histogram of two numeric columns. Returns (grid[ny, nx], (x0,x1), (y0,y1))."""
         import numpy as np
 
-        qx, qy = quote_ident(x), quote_ident(y)
+        qx, qy = self._qcol(x, view), self._qcol(y, view)
         rel = (f"(SELECT CAST({qx} AS DOUBLE) AS x, CAST({qy} AS DOUBLE) AS y FROM "
                f"({self.relation_sql(view, sample=sample)})) WHERE isfinite(x) AND isfinite(y)")
         cur = self.cursor()
