@@ -57,6 +57,7 @@ SAMPLE_ROWS = 2_000_000       # rows used for stats/plots when sampling
 AUTO_SAMPLE_ROWS = 200_000_000        # sampling defaults on above this many rows…
 AUTO_SAMPLE_BYTES = 8 * 1024 ** 3     # …or this file size
 FOOTER_WAIT = 2.0                     # s: Schema/Metadata wait at most this long for the grid's first page
+ROWGROUP_BATCH = 250                  # rows added to Metadata's row-group table per event-loop turn
 WIDTH_SAMPLE_ROWS = 16        # rows spread through a window that size its non-numeric columns
 
 ACCENTS = ("blue", "cyan", "magenta", "green", "yellow")
@@ -1862,15 +1863,16 @@ class PqxApp(App):
         try:
             summ = self.ds.column_chunk_summary()
             rgs = self.ds.row_groups()
+            rg_rows = self._rowgroup_rows(rgs)
         except Exception as e:  # noqa: BLE001 - say so in both tabs; the rest of pqx works without it
             self.call_from_thread(self._footer_failed, e)
             return
-        self.call_from_thread(self._build_footer_tabs, summ, rgs)
+        self.call_from_thread(self._build_footer_tabs, summ, rgs, rg_rows)
 
     @_ui
-    def _build_footer_tabs(self, summ: list[dict], rgs: list[dict]) -> None:
+    def _build_footer_tabs(self, summ: list[dict], rgs: list[dict], rg_rows: list[tuple]) -> None:
         self._build_schema_tab(summ)
-        self._build_meta_footer(summ, rgs)
+        self._build_meta_footer(summ, rgs, rg_rows)
 
     @_ui
     def _footer_failed(self, e: Exception) -> None:
@@ -2019,18 +2021,33 @@ class PqxApp(App):
             ov.add_row(k, v)
         self.query_one("#meta-overview", Static).update(ov)
 
-    def _build_meta_footer(self, summ: list[dict], rgs: list[dict]) -> None:
-        md, d = self.ds.meta, self.dim
-        self._render_meta_overview(rgs)
-        t = self.query_one("#rowgroups", DataTable)
+    def _rowgroup_rows(self, rgs: list[dict]) -> list[tuple]:
+        """Cells of the Metadata tab's row-group table (the first 5000); no widgets, so any thread."""
+        d = self.dim
         cmax = max((r["compressed"] for r in rgs), default=1) or 1
+        rows = []
         for r in rgs[:5000]:
             n = round(10 * r["compressed"] / cmax)
             bar = Text.assemble("▰" * n, ("▱" * (10 - n), d))
-            t.add_row(Text(str(r["index"]), style=d, justify="right"), Text(f"{r['start']:,}", justify="right"),
-                      Text(f"{r['rows']:,}", justify="right"), Text(F.human_bytes(r["compressed"]), justify="right"),
-                      bar, Text(f"{r['uncompressed'] / r['compressed']:.2f}×" if r["compressed"] else "", style=d,
-                                justify="right"))
+            rows.append((Text(str(r["index"]), style=d, justify="right"), Text(f"{r['start']:,}", justify="right"),
+                         Text(f"{r['rows']:,}", justify="right"),
+                         Text(F.human_bytes(r["compressed"]), justify="right"),
+                         bar, Text(f"{r['uncompressed'] / r['compressed']:.2f}×" if r["compressed"] else "", style=d,
+                                   justify="right")))
+        return rows
+
+    @_ui
+    def _add_rowgroup_rows(self, rows: list[tuple]) -> None:
+        """Add ``rows`` to the row-group table a few hundred per event-loop turn: each
+        batch costs the DataTable a measuring pass, which shouldn't hold up the UI."""
+        self.query_one("#rowgroups", DataTable).add_rows(rows[:ROWGROUP_BATCH])
+        if len(rows) > ROWGROUP_BATCH:
+            self.set_timer(0.01, lambda: self._add_rowgroup_rows(rows[ROWGROUP_BATCH:]))
+
+    def _build_meta_footer(self, summ: list[dict], rgs: list[dict], rg_rows: list[tuple]) -> None:
+        md, d = self.ds.meta, self.dim
+        self._render_meta_overview(rgs)
+        self._add_rowgroup_rows(rg_rows)
         self.query_one("#meta-rg-panel").border_title = self._dim_markup(f"row groups  {len(rgs):,}")
         n_stats = sum(1 for s in summ if s["has_stats"])
         st = Text.assemble(("✓", "green"), " Footer read",

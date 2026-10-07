@@ -6,9 +6,10 @@
 
 For each file: wall and CPU (process time: all threads) from constructing the
 app to (1) the first page in the grid, (2) the Schema and Metadata tabs filled,
-(3) no work left; and the longest the event loop went unresponsive meanwhile
-(what a key press would have waited). Headless at 200x50 through Textual's
-pilot; run from the repo root where `import pqx` resolves to this checkout.
+(3) no work left; and the longest the event loop went unresponsive before and
+after the first page (what a key press would have waited). Headless at 200x50
+through Textual's pilot; run from the repo root where `import pqx` resolves to
+this checkout.
 """
 from __future__ import annotations
 
@@ -42,15 +43,15 @@ def _idle(app) -> bool:
 
 async def run(path: str) -> dict[str, float]:
     out: dict[str, float] = {}
-    stall = [0.0]
+    stalls: list[tuple[float, float]] = []  # (end, length) of each gap the event loop didn't run
     done = asyncio.Event()
 
-    async def watch_loop():  # longest gap between 10 ms sleeps: the event loop was busy
+    async def watch_loop():  # gaps between 10 ms sleeps: the event loop was busy
         last = time.perf_counter()
         while not done.is_set():
             await asyncio.sleep(0.01)
             now = time.perf_counter()
-            stall[0] = max(stall[0], now - last - 0.01)
+            stalls.append((now, now - last - 0.01))
             last = now
 
     w0, c0 = time.perf_counter(), time.process_time()
@@ -58,18 +59,21 @@ async def run(path: str) -> dict[str, float]:
     app = PqxApp(path)
     out["init wall"], out["init cpu"] = time.perf_counter() - w0, time.process_time() - c0
     async with app.run_test(size=(200, 50)) as pilot:
-        marks = {"grid": lambda: app.page is not None, "tabs": lambda: _tabs_ready(app), "idle": lambda: _idle(app)}
+        marks = {"grid": lambda: app.page is not None, "tabs": lambda: _tabs_ready(app),
+                 "idle": lambda: _tabs_ready(app) and _idle(app)}
+        t_grid = None
         while marks:
             for k, f in list(marks.items()):
                 if f():
                     out[f"{k} wall"], out[f"{k} cpu"] = time.perf_counter() - w0, time.process_time() - c0
                     del marks[k]
                     if k == "grid":
-                        out["stall to grid"] = stall[0]
+                        t_grid = time.perf_counter()
             await pilot.pause(0.01)
         done.set()
         await watcher
-        out["max stall"] = stall[0]
+        out["stall to grid"] = max((s for t, s in stalls if t <= t_grid), default=0)
+        out["stall after"] = max((s for t, s in stalls if t > t_grid), default=0)
     return out
 
 

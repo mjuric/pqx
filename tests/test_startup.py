@@ -2,12 +2,14 @@
 import math
 import threading
 
+import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from textual.widgets import DataTable, Static, TabbedContent
 from textual.worker import WorkerState
 
-from pqx.app import GridTable, PqxApp
+from pqx.app import ROWGROUP_BATCH, GridTable, PqxApp
 from pqx.data import ParquetDataset
 from test_fetch import _zoo
 
@@ -230,3 +232,16 @@ async def test_footer_failure_is_shown(demo_path, monkeypatch):
         await pilot.press("2")
         await settle(pilot, app)
         assert "bad statistics" in plain(app.query_one("#schema-desc", Static))
+
+
+async def test_rowgroup_table_filled_in_batches(tmp_path):
+    """Thousands of row groups go into Metadata's table a batch per event-loop turn, all of them in the end."""
+    p = tmp_path / "many.parquet"
+    pq.write_table(pa.table({"x": np.arange(700)}), p, row_group_size=1)
+    assert ROWGROUP_BATCH < 700
+    app = PqxApp(str(p))
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        t = app.query_one("#rowgroups", DataTable)
+        await _until(pilot, lambda: t.row_count == 700)
+        assert [str(t.get_row_at(i)[1]) for i in (0, 699)] == ["0", "699"]
