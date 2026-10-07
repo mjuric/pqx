@@ -921,6 +921,7 @@ class PqxApp(App):
         self._fetch_seq = 0
         self._inflight: dict[str, tuple[int, int, frozenset]] = {}  # tag -> (seq, page gen, columns)
         self._cols_failed: set[str] = set()  # columns that failed to load for the page on screen
+        self._cols_cancelled = False  # a fetch for the page on screen was cancelled (see cell_highlighted)
         self._cell_waiters: dict[str, list] = {}  # cell fetch tag -> actions waiting for that column
         self._chunk_stats: dict[tuple[int, int], tuple] = {}  # (row group, leaf) -> (min, max) or ()
         self.total: int | None = self.ds.num_rows if self.view.is_trivial else None
@@ -1455,6 +1456,8 @@ class PqxApp(App):
         current = gen == self._page_gen and page is self.page
         if latest and (got is None or not current):
             self._cell_waiters.pop(tag, None)  # the actions waiting on it are dropped with it
+        if latest and current and got is None and err is None:
+            self._cols_cancelled = True  # not retried by itself (Esc means stop), but on the next move
         if err is not None and current:
             self._cols_failed.update(names)
             self._mark_unavailable(page, names)
@@ -1656,7 +1659,9 @@ class PqxApp(App):
         self._hidden_hint = None
         self._render_status()
         self._update_detail()
-        self._ensure_columns()  # (columns left loading by a cancelled fetch: Esc)
+        if self._cols_cancelled:  # columns left loading by a cancelled fetch (Esc): load them now
+            self._cols_cancelled = False
+            self._ensure_columns()
 
     @on(DataTable.CellSelected, "#grid")
     def cell_selected(self) -> None:
