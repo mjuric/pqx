@@ -147,24 +147,26 @@ class ParquetDataset:
             self._con.execute(f"SET threads={int(threads)}")
         # DuckDB parses the footer on a background thread (see _bind_types) while pyarrow parses it
         # here: on huge footers each takes most of a second.
+        self._opened = False  # the schema below is complete: the setup thread may create the views
         self._start_types()
         try:
             self.pf = pq.ParquetFile(self.path)
+            self.meta = self.pf.metadata
+            self.arrow_schema: pa.Schema = self.pf.schema_arrow
+            self.num_rows: int = self.meta.num_rows
+            self.file_size = os.path.getsize(self.path)
+            self.columns = [self._column_info(f) for f in self.arrow_schema]
+            self._by_name = {c.name: c for c in self.columns}
+            self._wide_decimals = {f.name for f in self.arrow_schema
+                                   if pa.types.is_decimal(f.type) and f.type.precision > 38}
+            # file_row_number collides if the file already has such a column; then
+            # fall back to OFFSET-based seeking everywhere.
+            self._has_rownum = "file_row_number" not in self._by_name
+            self._opened = True
         except BaseException:
             self._schema_known.set()
-            self._stop_types()
+            self._stop_types()  # it gives up at once (not _opened): nothing left running
             raise
-        self.meta = self.pf.metadata
-        self.arrow_schema: pa.Schema = self.pf.schema_arrow
-        self.num_rows: int = self.meta.num_rows
-        self.file_size = os.path.getsize(self.path)
-        self.columns = [self._column_info(f) for f in self.arrow_schema]
-        self._by_name = {c.name: c for c in self.columns}
-        self._wide_decimals = {f.name for f in self.arrow_schema
-                               if pa.types.is_decimal(f.type) and f.type.precision > 38}
-        # file_row_number collides if the file already has such a column; then
-        # fall back to OFFSET-based seeking everywhere.
-        self._has_rownum = "file_row_number" not in self._by_name
         self._schema_known.set()
 
     @property
@@ -747,7 +749,7 @@ class ParquetDataset:
             except Exception:  # noqa: BLE001 - creating the views says what's wrong
                 pass
             self._schema_known.wait()
-            if not hasattr(self, "_has_rownum"):  # pyarrow couldn't open it: __init__ raises
+            if not self._opened:  # __init__ failed and raises
                 raise RuntimeError("the dataset failed to open")
             self._create_views()
         except Exception as e:  # noqa: BLE001

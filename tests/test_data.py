@@ -194,3 +194,26 @@ def test_unreadable_file_raises(tmp_path):
     p.write_bytes(b"not a parquet file at all")
     with pytest.raises(Exception):
         ParquetDataset(str(p))
+
+
+def test_init_failure_after_footer_parse_stops_setup_thread(demo_path, monkeypatch):
+    """__init__ failing after pyarrow opened the file mustn't leave DuckDB's setup thread waiting (exit would stall)."""
+    import time
+
+    def boom(f):
+        raise ValueError("bad field metadata")
+
+    started = []
+    orig = ParquetDataset._start_types
+
+    def start(self):
+        orig(self)
+        started.append(self._types_thread)
+
+    monkeypatch.setattr(ParquetDataset, "_column_info", staticmethod(boom))
+    monkeypatch.setattr(ParquetDataset, "_start_types", start)
+    t0 = time.perf_counter()
+    with pytest.raises(ValueError, match="bad field metadata"):
+        ParquetDataset(demo_path)
+    assert time.perf_counter() - t0 < 5
+    assert started and not started[0].is_alive()
