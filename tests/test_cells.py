@@ -76,6 +76,13 @@ def test_widest_candidates_find_the_widest_number():
                     total += 1
     assert exact / total > 0.98
     assert widest_candidates(["a", "abcd", None, "ab"], "str") == ["abcd", "ab", "a"]
+    assert widest_candidates(["abcd", "日本語"], "str", k=1) == ["日本語"]  # 6 cells wide, not 3
+    import datetime as dt
+    utc = dt.timezone.utc
+    ts = [dt.datetime(2026, 1, 1), dt.datetime(2026, 1, 1, 0, 0, 0, 5, tzinfo=utc), dt.datetime(2026, 1, 2)]
+    fm = F.CellFormatter("t", pa.timestamp("us", "UTC"))
+    best = max(ts, key=lambda v: text_width(fm(v)))
+    assert widest_candidates(ts, "time", k=1) == [best]
     assert widest_candidates([b"x"], "binary") is None  # not guessable: rows get sampled
     assert widest_candidates([None, float("nan")], "float") == []
 
