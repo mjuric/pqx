@@ -61,6 +61,12 @@ class DetailList(CursorList):
         Binding("d", "app.toggle_detail", "Detail", show=False),
     ]
 
+    def __init__(self, **kw) -> None:
+        super().__init__(**kw)
+        self._items: list[tuple[str, Text]] = []
+        self._name_width = 0
+        self._hl: int | None = None
+
     def set_entries(self, entries: list[tuple[str, Text]], name_width: int) -> None:
         """Show ``(column, value)`` entries. When the columns are the same as
         before, the prompts are replaced in place, which keeps the scroll
@@ -68,10 +74,9 @@ class DetailList(CursorList):
         sideways), nothing is redrawn."""
         def key(items):
             return [(n, v.plain, str(v.style), v.spans) for n, v in items]
-        old = getattr(self, "_items", [])
-        if key(entries) == key(old) and name_width == getattr(self, "_name_width", None):
+        if key(entries) == key(self._items) and name_width == self._name_width:
             return
-        same = [n for n, _ in entries] == [n for n, _ in old]
+        same = [n for n, _ in entries] == [n for n, _ in self._items]
         self._items = list(entries)
         self._name_width = name_width
         if same:
@@ -84,7 +89,7 @@ class DetailList(CursorList):
 
     def select(self, name: str | None) -> None:
         """Select the entry for column ``name`` (scrolling it into view if it moves)."""
-        k = next((k for k, (n, _) in enumerate(getattr(self, "_items", [])) if n == name), None)
+        k = next((k for k, (n, _) in enumerate(self._items) if n == name), None)
         if k is not None and self.highlighted != k:
             self.highlighted = k
 
@@ -93,22 +98,18 @@ class DetailList(CursorList):
         k = self.highlighted
         return self._items[k][0] if k is not None and k < len(self._items) else None
 
-    def _prompt(self, k: int, highlighted: bool) -> Table | Styled:
+    def _prompt(self, k: int, highlighted: bool, focused: bool | None = None) -> Table | Styled:
         name, value = self._items[k]
-        focused = highlighted and self.has_focus
+        whole = highlighted and (self.has_focus if focused is None else focused)
         tbl = Table.grid(padding=(0, 2), expand=True)
         tbl.add_column(width=self._name_width, no_wrap=True)
-        tbl.add_column(ratio=1)
-        tbl.add_row(Text(name, style="bold reverse" if highlighted and not focused else "bold"), value)
-        return Styled(tbl, "reverse") if focused else tbl
+        tbl.add_column(ratio=1, overflow="fold")  # long tokens (ids, blobs) break rather than lose their end
+        tbl.add_row(Text(name, style="bold reverse" if highlighted and not whole else "bold"), value)
+        return Styled(tbl, "reverse") if whole else tbl
 
-    def _repaint(self) -> None:
+    def watch_has_focus(self, has_focus: bool) -> None:
+        super().watch_has_focus(has_focus)
+        # restyle the selection for the state being entered (on_focus runs too early)
         k = self._hl
-        if k is not None and k < len(getattr(self, "_items", [])):
-            self.replace_option_prompt_at_index(k, self._prompt(k, True))
-
-    def on_focus(self) -> None:
-        self._repaint()
-
-    def on_blur(self) -> None:
-        self._repaint()
+        if k is not None and k < len(self._items):
+            self.replace_option_prompt_at_index(k, self._prompt(k, True, has_focus))
