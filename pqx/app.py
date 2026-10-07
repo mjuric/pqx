@@ -47,8 +47,8 @@ from . import fmt as F
 from . import plots
 from .cells import (FAILED_MARK, MISSING, PLACEHOLDER, UNAVAILABLE, CellRow, ColumnCells, one_cell_per_char, RowCells, RowLayout, text_width,
                     widest_candidates)
-from .data import (ColumnStats, Page, ParquetDataset, Stopped, View, guess_sky_columns, is_sql_query,
-                   parse_row_spec, sql_column_ref, sql_ident, sql_text_literal)
+from .data import (ColumnStats, Page, ParquetDataset, Stopped, View, guess_sky_columns, is_plain_ident, is_sql_query,
+                   parse_row_spec, quote_str, sql_column_ref, sql_ident, sql_text_literal)
 from .screens import ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen, HelpScreen
 from .widgets import CursorList, DetailList
 
@@ -113,6 +113,47 @@ def _ui(fn):
 
 def _epoch_label(v: float) -> str:
     return dt.datetime.fromtimestamp(v, dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+
+FILTER_EXAMPLE = "price > 100 and city = 'Paris'"   # when the file has nothing better to show
+PLACEHOLDER_STR_MAX = 20
+
+
+def _short_number(v) -> str | None:
+    """``v`` as a short SQL number literal for an example (None if it has none)."""
+    if isinstance(v, int):
+        return str(v) if len(str(v)) <= 12 else None
+    if not math.isfinite(v):
+        return None
+    s = f"{v:.3g}"
+    if "e" in s and 1 <= abs(v) < 1e12:
+        s = str(round(v))
+    return s
+
+
+def filter_placeholder(columns: list[str], types: list[pa.DataType], row: tuple | None) -> str:
+    """The filter box's hint, with an example drawn from the file's own first row: the first
+    numeric column with a plain name (``> its value``) and the first string column (``= its
+    value``), falling back to ``FILTER_EXAMPLE`` for whichever part has no candidate.
+
+    ``columns`` are names as SQL calls them in ``t``."""
+    num = text = None
+    for name, typ, v in zip(columns, types, row or ()):
+        if v is None or v is MISSING or not is_plain_ident(name):
+            continue
+        if num is None and (pa.types.is_integer(typ) or pa.types.is_floating(typ)) \
+                and isinstance(v, (int, float)) and not isinstance(v, bool):
+            lit = _short_number(v)
+            if lit is not None:
+                num = f"{name} > {lit}"
+        elif text is None and (pa.types.is_string(typ) or pa.types.is_large_string(typ)) and isinstance(v, str):
+            val = F.sanitize(v.strip())[:PLACEHOLDER_STR_MAX].strip()
+            if val:
+                text = f"{name} = {quote_str(val)}"
+        if num and text:
+            break
+    example = " and ".join(p for p in (num, text) if p) or FILTER_EXAMPLE
+    return f"SQL WHERE expression, e.g. {example} — or a full query: select … from t"
 
 
 def _with_placeholders(page: Page, columns: list[str], types: dict[str, pa.DataType]) -> Page:
@@ -920,6 +961,7 @@ class PqxApp(App):
         self.ds = ParquetDataset(path, threads=threads)
         self.view = View(where=where) if where and not is_sql_query(where) else View(sql=where if where else "")
         self._initial_filter = where
+        self._placeholder_set = False  # the filter box's hint is drawn from the first page (_apply_page)
         self.cols_shown: list[str] = self.ds.column_names
         self.result_schema: list[tuple[str, pa.DataType]] = [(c.name, c.arrow_type) for c in self.ds.columns]
         self.formatters: dict[str, F.CellFormatter] = {}
@@ -1000,8 +1042,7 @@ class PqxApp(App):
         with Horizontal(id="filterbox", classes="panel"):
             yield Label("›", id="filter-mode")
             yield Input(value=self._initial_filter,
-                        placeholder="SQL WHERE expression — mag < 21 and band = 'r' — or a full query: "
-                                    "select … from t",
+                        placeholder=filter_placeholder([], [], None),
                         id="filter",
                         suggester=ColumnSuggester(lambda: [self.ds.sql_name(c) for c in self.ds.column_names], SQL_WORDS))
         with TabbedContent(id="tabs", initial="tab-data"):
@@ -1409,12 +1450,22 @@ class PqxApp(App):
         if self.total is None and len(page.rows) < grid.window:
             self.total = page.offset + len(page.rows)  # hit the end: we now know the size
             grid.total = self.total
+        if not self._placeholder_set and page.rows and not self.view.sql.strip():
+            self._placeholder_set = True  # once, from the file's first page (not a query's)
+            self._set_filter_placeholder(page)
         self._render_status()
         self._update_detail()
         self.call_after_refresh(self._render_hscroll)
         self._ensure_columns()
         if self._keep is not None and self._keep[0] is self.view:
             self._keep_record(page)
+
+    def _set_filter_placeholder(self, page) -> None:
+        file_cols = set(self.ds.column_names)
+        cols = [(self.ds.sql_name(c), t, v) for c, t, v in zip(page.columns, page.types, page.rows[0])
+                if c in file_cols]
+        names, types, row = (list(x) for x in zip(*cols)) if cols else ([], [], [])
+        self.query_one("#filter", Input).placeholder = filter_placeholder(names, types, tuple(row))
 
     def _keep_record(self, page) -> None:
         """A page of a view with a kept record (``_keep``) is shown: the view's first page (at its
