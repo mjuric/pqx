@@ -13,6 +13,10 @@ of 150 x 300 values then allocates cells for what is drawn, not all 45,000.
 
 A column never narrows here: when a cell turns out wider than its column, the
 column grows (see :meth:`ColumnCells.fit`).
+
+A value of :data:`MISSING` is a column not fetched yet (the grid loads columns
+as they scroll into view): its cell shows a dim placeholder until the window's
+values arrive and replace the row's values.
 """
 from __future__ import annotations
 
@@ -27,7 +31,45 @@ from typing import Any, Callable
 from rich.cells import cell_len, get_character_cell_size
 from rich.text import Text
 
+from . import fmt as _fmt
 from .fmt import CellFormatter
+
+
+class _Missing:
+    """The value of a cell whose column isn't loaded yet (see :data:`MISSING`)."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "MISSING"
+
+
+class _Unavailable(_Missing):
+    """The value of a cell whose column failed to load (see :data:`UNAVAILABLE`)."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "UNAVAILABLE"
+
+
+#: Stands in for the values of a column that hasn't been fetched yet.
+MISSING = _Missing()
+#: Stands in for the values of a column that couldn't be fetched (for this window).
+UNAVAILABLE = _Unavailable()
+#: What a not-yet-loaded cell shows.
+PLACEHOLDER = "…"
+#: What a cell of a column that failed to load shows.
+FAILED_MARK = "✗"
+
+
+def placeholder(fmt: CellFormatter, failed: bool = False) -> Text:
+    """The dim placeholder of a not-yet-loaded cell (a red mark if its column failed to
+    load), aligned like the column's values."""
+    justify = "right" if fmt.right else "left"
+    if failed:
+        return Text(FAILED_MARK, style="red", justify=justify)
+    return Text(PLACEHOLDER, style=_fmt.DIM, justify=justify)
 
 
 class ColumnCells:
@@ -143,6 +185,10 @@ class Cell:
     def text(self) -> Text:
         col = self.col
         if self._gen != col.gen:
+            if isinstance(self.value, _Missing):  # not loaded (yet): nothing to fit the column to
+                self._text = placeholder(col.fmt, self.value is UNAVAILABLE)
+                self._gen = col.gen
+                return self._text
             t = col.fmt(self.value, col.raw)
             self._text = t
             self._gen = col.gen
@@ -198,6 +244,13 @@ class CellRow(dict):
         key = self.layout.keys[i]
         cell = dict.get(self, key)
         return self[key] if cell is None else cell
+
+    def set_values(self, values: tuple, keys) -> None:
+        """Take the row's new ``values``, which differ from the old ones only in the
+        columns ``keys`` (columns that were loaded since): their cells are made afresh."""
+        self.values = values
+        for k in keys:
+            self.pop(k, None)
 
 
 class RowCells(Sequence):
