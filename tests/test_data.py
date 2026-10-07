@@ -230,3 +230,17 @@ def test_init_failure_after_footer_parse_stops_setup_thread(demo_path, monkeypat
         ParquetDataset(demo_path)
     assert time.perf_counter() - t0 < 5
     assert started and not started[0].is_alive()
+
+
+@pytest.mark.parametrize("where, match", [("band = 'r'", lambda t: t.band == "r"),
+                                          ("detector = 7", lambda t: t.detector == 7),  # (sparse)
+                                          ("mag < 30", lambda t: t.mag < 30)])
+def test_fetch_around_matches_fetch(ds, truth, where, match):
+    v = View(where=where)
+    rows = list(truth.index[match(truth)])
+    for pos in sorted({min(p, len(rows) - 1) for p in (0, 3, 400, len(rows) // 2, len(rows) - 1)}):
+        fr = int(rows[pos])
+        for offset in (pos, max(0, pos - 150), max(0, pos - 299), max(0, pos - 999)):
+            got = ds.fetch_around(v, fr, pos, offset, 300, ["diaSourceId", "mag"])
+            exp = ds.fetch(v, offset, 300, ["diaSourceId", "mag"])
+            assert got.offset == offset and got.row_numbers == exp.row_numbers and got.rows == exp.rows

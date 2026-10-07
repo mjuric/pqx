@@ -604,7 +604,50 @@ class ParquetDataset:
             base = self._base_sql(view, columns, with_rownum=not is_sql)
             sel = ", ".join(quote_ident(c) for c in columns) if (is_sql and columns) else "*"
             sql = check_select(f"SELECT {sel} FROM ({base}) LIMIT {limit} OFFSET {offset}")
-        tbl = cur.execute(sql).arrow()
+        return self._to_page(view, cur.execute(sql), offset)
+
+    def can_fetch_around(self, view: View) -> bool:
+        """Whether ``fetch_around`` works for ``view``: a filtered, unsorted view of a file whose rows
+        DuckDB numbers (it keeps the file's order, so its rows near one are found by file row)."""
+        return not view.sql.strip() and not view.order_by and bool(view.where.strip()) and self._has_rownum
+
+    def fetch_around(self, view: View, file_row: int, pos: int, offset: int, limit: int,
+                     columns: list[str] | None = None) -> Page:
+        """``fetch(view, offset, limit, columns)`` for a window holding file row ``file_row``, the
+        view's row ``pos`` (``can_fetch_around`` views only). It finds the window's rows by file row
+        number near ``file_row`` rather than counting the view's rows from its start, so its cost
+        doesn't grow with ``pos``: rows after it are the first matches from it on; rows before it
+        are looked for in file-row ranges reaching further back until there are enough."""
+        offset, limit, pos = max(0, int(offset)), max(1, int(limit)), int(pos)
+        if not offset <= pos < offset + limit:  # (not a window holding the row)
+            return self.fetch(view, offset, limit, columns)
+        fr, rn, where = int(file_row), self._rownum, f"({view.where})"
+        cur = self.cursor()
+        after = cur.execute(check_select(
+            f"SELECT {rn} FROM __pqx_src WHERE {rn} >= {fr} AND {where} LIMIT {max(1, offset + limit - pos)}"
+        )).fetchall()
+        hi = max((r[0] for r in after), default=fr)
+        lo, k = fr, pos - offset  # k rows of the view before the record are wanted
+        span = max(4 * k, 1024)
+        while k > 0:
+            a = max(0, fr - span)
+            got = cur.execute(check_select(
+                f"SELECT {rn} FROM __pqx_src WHERE {rn} >= {a} AND {rn} < {fr} AND {where} "
+                f"ORDER BY {rn} DESC LIMIT {k}")).fetchall()
+            if len(got) >= k or a == 0:
+                lo = min((r[0] for r in got), default=fr)
+                offset = pos - len(got)
+                break
+            span *= 8
+        cols = ", ".join(self._qcol(c) for c in (columns or self.column_names))
+        sql = (f"SELECT {rn}, {cols} FROM __pqx_src WHERE {rn} >= {lo} AND {rn} <= {hi} AND {where} "
+               f"ORDER BY {rn}")
+        return self._to_page(view, cur.execute(check_select(sql)), offset)
+
+    def _to_page(self, view: View, result, offset: int) -> Page:
+        """A page of query ``result`` (its first column the file row number, if it has them)."""
+        is_sql = bool(view.sql.strip())
+        tbl = result.arrow()
         if isinstance(tbl, pa.RecordBatchReader):
             tbl = tbl.read_all()
         names = tbl.column_names
