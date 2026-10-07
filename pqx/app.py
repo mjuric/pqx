@@ -32,7 +32,6 @@ from textual.color import Color
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
 from textual.css.query import NoMatches
-from textual.markup import escape
 from textual.message import Message
 from textual.renderables.styled import Styled
 from textual.suggester import Suggester
@@ -166,14 +165,15 @@ class ColumnSuggester(Suggester):
 
     def __init__(self, columns: list[str], words: list[str] = ()):
         super().__init__(use_cache=False, case_sensitive=True)
-        self.columns = list(columns)
+        self.columns = columns  # a list, or a function giving one (called on first use)
         self.keywords = list(words)
         self._words: list[tuple[str, str]] | None = None  # (what matches, what goes in), made on first use
 
     @property
     def words(self) -> list[tuple[str, str]]:
         if self._words is None:
-            self._words = ([(c, sql_ident(c)) for c in self.columns if not F.has_controls(c)]
+            columns = self.columns() if callable(self.columns) else self.columns
+            self._words = ([(c, sql_ident(c)) for c in columns if not F.has_controls(c)]
                            + [(w, w) for w in self.keywords])
         return self._words
 
@@ -994,7 +994,7 @@ class PqxApp(App):
                         placeholder="SQL WHERE expression — mag < 21 and band = 'r' — or a full query: "
                                     "select … from t",
                         id="filter",
-                        suggester=ColumnSuggester(self.ds.column_names, SQL_WORDS))
+                        suggester=ColumnSuggester(lambda: [self.ds.sql_name(c) for c in self.ds.column_names], SQL_WORDS))
         with TabbedContent(id="tabs", initial="tab-data"):
             with TabPane("Data", id="tab-data"):
                 with Horizontal():
@@ -1044,7 +1044,7 @@ class PqxApp(App):
         self.query_one("#filterbox").border_title = self._dim_markup("filter")
         self._setup_formatters(self.result_schema)
         if self._config_error:
-            self.notify(f"Ignoring saved column formats: {escape(F.sanitize(self._config_error))}", title="! Config",
+            self.notify(f"Ignoring saved column formats: {F.sanitize(self._config_error)}", title="! Config", markup=False,
                         severity="warning", timeout=8)
         self.query_one("#detail").display = False
         grid = self.query_one(GridTable)
@@ -1506,8 +1506,8 @@ class PqxApp(App):
             self._cols_failed.update(names)
             self._mark_unavailable(page, names)
             self.notify(f"Couldn't load {len(names)} column{'s' if len(names) != 1 else ''}: "
-                        f"{escape(F.sanitize((str(err).splitlines() or [''])[0][:200]))}", title="✗ Columns",
-                        severity="error", timeout=6)
+                        f"{F.sanitize((str(err).splitlines() or [''])[0][:200])}", title="✗ Columns",
+                        severity="error", timeout=6, markup=False)
         if got is None or not current:
             return  # cancelled (Esc, a newer fetch, a new page) or superseded: nothing to merge
         self._merge_columns(page, got)
@@ -1733,7 +1733,8 @@ class PqxApp(App):
         if name is None:
             return
         if v is UNAVAILABLE:
-            self.notify(f"{escape(F.sanitize(name))} couldn't be loaded for these rows", severity="error", timeout=4)
+            self.notify(f"{F.sanitize(name)} couldn't be loaded for these rows", severity="error", timeout=4,
+                        markup=False)
             return
         if v is not MISSING:
             fn(name, v)
@@ -1989,7 +1990,7 @@ class PqxApp(App):
             return
         # The condition goes into the filter box: a keyword or odd name is quoted (plain ones read
         # better bare), and no control character of the name or value is put there as is (sql_*).
-        q = sql_column_ref(name)
+        q = sql_column_ref(self.ds.sql_name(name))  # (DuckDB's name, if it renamed it)
         if v is None:
             cond = f"{q} IS NULL"
         elif isinstance(v, bool):
@@ -2094,7 +2095,7 @@ class PqxApp(App):
         offset, row = grid.offset, grid.abs_row  # before the rebuild resets the cursor
         self._rebuild_columns()
         self.load_window(offset, row, col)
-        self.notify(f"Hid {escape(F.sanitize(name))} · c brings it back", timeout=2)
+        self.notify(f"Hid {F.sanitize(name)} · c brings it back", timeout=2, markup=False)
 
     def action_pin_columns(self) -> None:
         grid = self.query_one(GridTable)
@@ -2130,8 +2131,8 @@ class PqxApp(App):
             return
         new = F.step_override(fm.override, fm.kind, delta)
         if new is None:
-            self.notify(f"{escape(F.sanitize(fm.name))} has no digits to change · F sets a format spec",
-                        severity="warning", timeout=3)
+            self.notify(f"{F.sanitize(fm.name)} has no digits to change · F sets a format spec",
+                        severity="warning", timeout=3, markup=False)
             return
         self._set_format(fm, new)
 
@@ -2170,14 +2171,14 @@ class PqxApp(App):
         if (self._stats_rendered and self._stats_rendered[0] is self.view and self._stats_rendered[1] == fm.name
                 and not self._stats_stale):
             self._render_stats(*self._stats_rendered[1:])  # reformat what's shown; no need to re-profile
-        name, shown = escape(F.sanitize(fm.name)), escape(F.describe_override(value, fm.kind) or "automatic")
+        name, shown = F.sanitize(fm.name), F.sanitize(F.describe_override(value, fm.kind) or "automatic")
         try:
             config.save_format(fm.name, value)
         except (config.ConfigError, OSError) as e:
-            self.notify(f"{name}: {shown}, for this session only — not saved: {escape(F.sanitize(str(e)))}",
-                        severity="warning", timeout=6)
+            self.notify(f"{name}: {shown}, for this session only — not saved: {F.sanitize(str(e))}",
+                        severity="warning", timeout=6, markup=False)
             return
-        self.notify(f"✓ {name}: {shown}", timeout=2)
+        self.notify(f"✓ {name}: {shown}", timeout=2, markup=False)
 
     def action_copy_cell(self) -> None:
         self._with_cursor_value(self._copy_value)
@@ -2189,8 +2190,8 @@ class PqxApp(App):
         raw = F.format_value(F.shortest(v, typ), "float", raw=True, width=0, safe=False) if v is not None else ""
         s = F.sanitize(raw, keep_ws=True)
         self.copy_to_clipboard(s)
-        note = "  (control characters copied as ␛-style symbols)" if s != raw else ""
-        self.notify(f"✓ Copied {escape(F.sanitize(name))} = {escape(s[:60])}{note}", timeout=2 if not note else 5)
+        note = "  (control and invisible characters copied as visible symbols such as ␛)" if s != raw else ""
+        self.notify(f"✓ Copied {F.sanitize(name)} = {s[:60]}{note}", timeout=2 if not note else 5, markup=False)
 
     def action_goto(self) -> None:
         def done(spec):
@@ -2200,7 +2201,7 @@ class PqxApp(App):
                 total = self.total if self.total is not None else 1 << 62
                 target = parse_row_spec(spec, total)
             except ValueError:
-                self.notify(f"Not a row number: {escape(F.sanitize(spec))}", severity="error")
+                self.notify(f"Not a row number: {F.sanitize(spec)}", severity="error", markup=False)
                 return
             self._seek_to(target)
         self.push_screen(GotoScreen(self.total), done)
@@ -2284,7 +2285,7 @@ class PqxApp(App):
         size = F.human_bytes(os.path.getsize(opts["path"])) if os.path.exists(opts["path"]) else "?"
         # (notify is safe during teardown)
         self.call_from_thread(self.notify, f"✓ Wrote {F.human_count(n)} rows · {size} · {time.time() - t0:.1f} s"
-                                           f"\n→ {escape(F.sanitize(opts['path']))}", timeout=8)
+                                           f"\n→ {F.sanitize(opts['path'])}", timeout=8, markup=False)
 
     # ------------------------------------------------------------ schema tab
     # Schema and Metadata need a pass over every column chunk in the footer (sizes,
@@ -2456,6 +2457,8 @@ class PqxApp(App):
                 continue
             try:
                 parts.append(Text(S(k), style="cyan"))
+                if len(v) >= 4000:  # pretty-printed it would be longer still: cut, as below
+                    raise ValueError("too long to pretty-print")
                 js = JSON(v, indent=2, highlight=False)  # (its text keeps C1 controls and DEL as they are)
                 js.text = Text(S(js.text.plain, keep_ws=True))  # (no highlighting: no spans to keep)
                 parts.append(js)

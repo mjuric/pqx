@@ -8,7 +8,6 @@ from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import (Button, Checkbox, Input, Label, Markdown, OptionList, RadioButton, RadioSet,
                              SelectionList)
@@ -149,10 +148,10 @@ class FormatScreen(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog small"):
-            yield Label(f"[b]Format of[/b] [cyan]{escape(F.sanitize(self.column))}[/cyan]")
+            yield Label(Text.assemble(("Format of", "bold"), " ", (F.sanitize(self.column), "cyan")))  # (not markup)
             hint = ("%Y-%m-%d %H:%M" if self.kind == "time" else ".2f · .3e · ,d · .1% · 4 (digits)"
                     if F.default_digits(self.kind) is not None else ",d · x · >12")
-            yield Label(f"[dim]{escape(hint)} · empty = automatic[/dim]")
+            yield Label(Text(f"{hint} · empty = automatic", style="dim"))
             yield Input(value="" if self.current is None else str(self.current), placeholder="automatic",
                         id="format-input")
             yield Label("", id="format-error")
@@ -165,7 +164,7 @@ class FormatScreen(ModalScreen[str | None]):
         value = parse_override(event.value)
         err = value is not None and F.override_error(value, self.kind, self.sample)
         if err:
-            self.query_one("#format-error", Label).update(f"[red]✗[/red] {escape(F.sanitize(err))}")
+            self.query_one("#format-error", Label).update(Text.assemble(("✗", "red"), " ", F.sanitize(err)))
             return
         self.dismiss(event.value.strip())
 
@@ -245,7 +244,7 @@ class ExportScreen(ModalScreen[dict | None]):
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog", id="export-box"):
             yield Label("[b]Export current view[/b]")
-            yield Label(f"[dim]{escape(F.sanitize(self.summary))}[/dim]")  # (names a column, the filter)
+            yield Label(Text(F.sanitize(self.summary), style="dim"))  # (names a column, the filter: not markup)
             yield Input(value=self.default_path, id="export-path")
             with RadioSet(id="export-format"):
                 yield RadioButton("Parquet (zstd)", value=True, id="fmt-parquet")
@@ -281,7 +280,7 @@ class ExportScreen(ModalScreen[dict | None]):
             return
         full = os.path.abspath(os.path.expanduser(path))
         if os.path.exists(full) and not self.query_one("#export-overwrite", Checkbox).value:
-            self.notify(f"{escape(F.sanitize(path))} exists — tick 'Overwrite' to replace it", severity="warning")
+            self.notify(f"{F.sanitize(path)} exists — tick 'Overwrite' to replace it", severity="warning", markup=False)
             return
         self.dismiss(dict(path=full, fmt=self._fmt(),
                           visible_only=self.query_one("#export-visible", Checkbox).value))
