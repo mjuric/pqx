@@ -1,4 +1,5 @@
 """GridTable renders only the columns in view: guards for speed, Textual drift and look."""
+import hashlib
 import inspect
 
 import numpy as np
@@ -46,6 +47,27 @@ def test_textual_render_hooks_unchanged():
     t = DataTable()
     for cache in ("_row_render_cache", "_cell_render_cache", "_line_cache"):
         assert hasattr(t, cache)
+
+
+# Hashes of the DataTable code GridTable copies (_render_line_in_row, ordered_columns) or relies
+# on (how render_line / _render_line crop each line), as of Textual 8.2.8.
+UPSTREAM_SOURCE = {
+    "_render_line_in_row": "669cc46a7ca119d2",
+    "_render_line": "a32c6991165cea90",
+    "render_line": "dfc24fd4f26a530e",
+    "render_lines": "4e0ae4f0a9bd61c0",
+    "ordered_columns": "aa1124cb7bcaa0ce",
+}
+
+
+@pytest.mark.parametrize("name", UPSTREAM_SOURCE)
+def test_textual_render_source_unchanged(name):
+    obj = getattr(DataTable, name)
+    src = inspect.getsource(obj.fget if isinstance(obj, property) else obj)
+    assert hashlib.sha256(src.encode()).hexdigest()[:16] == UPSTREAM_SOURCE[name], (
+        f"Textual changed DataTable.{name}. Diff it against the version GridTable was written for "
+        f"(Textual 8.2.8), port any change into GridTable._render_line_in_row / ordered_columns / "
+        f"render_lines in pqx/app.py, run tests/test_render.py, then update this hash.")
 
 
 def _strips(g: GridTable) -> list:
@@ -171,6 +193,7 @@ async def test_render_work_scales_with_visible_columns(wide300_path):
         first, last, _, _ = g.column_window()
         in_view = last - first + 4  # plus a partly visible column on each side and the row labels
         lines = g.size.height
+        assert in_view < NCOLS // 4  # the fixture itself: most columns must be off screen
 
         g.move_cursor(column=last)
         await settle(pilot, app)
@@ -178,7 +201,7 @@ async def test_render_work_scales_with_visible_columns(wide300_path):
         await pilot.press("right")  # scrolls one column into view
         await settle(pilot, app)
         assert g.column_window()[0] > first
-        assert calls and len(calls) <= in_view * lines < NCOLS * 2
+        assert calls and len(calls) <= in_view * lines
         assert {c for _, c in calls} <= {-1} | set(range(first, last + 4))  # -1: the row labels
 
         calls.clear()
