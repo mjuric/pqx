@@ -139,4 +139,20 @@ def test_overrides():
     assert F.describe_override(4, "angle") == ".4f"
     assert F.describe_override(4, "flux") == "4 sig"
     assert F.describe_override(".2e", "flux") == ".2e"
-    assert F.check_spec(".2f", 1.5) is None and F.check_spec(",d", 1.5) and F.check_spec(",d", None) is None
+    assert F.override_error(".2f", "float", 1.5) is None and F.override_error(",d", "float", 1.5)
+    assert F.override_error(",d") is None  # no kind: fine if it suits some column
+    assert F.override_error(".2f", "time")  # strftime would echo it back literally
+    assert F.override_error("%Y-%m", "time") is None and F.override_error("%Y-%m") is None
+    assert F.override_error(4, "int") and F.override_error(4, "flux") is None
+    assert F.override_error(18, "flux") and F.override_error(".100000000f")  # would hang the grid
+    assert F.override_error(".2f", "bool")
+
+
+def test_override_edge_cases():
+    import decimal
+
+    assert F.format_value(decimal.Decimal("1.23456"), "float", override=3) == "1.23"
+    assert F.format_value(1.0, "float", override=10**8) == F.format_value(1.0, "float", override=F.MAX_DIGITS)
+    assert F.format_value(True, "bool", override=".2f") == "✓"  # specs don't apply to bools
+    assert len(F.format_value("x", "str", override="<200")) == 40  # still truncated to the cell width
+    assert F.format_value(dt.datetime(2026, 1, 2), "time", override="%Y-%m") == "2026-01"

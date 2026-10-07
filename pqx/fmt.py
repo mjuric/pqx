@@ -17,6 +17,7 @@ significant digits for the others) or a Python format spec such as ``.2e``.
 from __future__ import annotations
 
 import datetime as dt
+import decimal
 import math
 import re
 from typing import Any
@@ -99,7 +100,13 @@ def shortest(v: Any, typ: pa.DataType) -> Any:
 FIXED_DIGITS = {"mjd": 7, "angle": 6, "mag": 3}
 SIG_DIGITS = {"flux": 4, "err": 3, "float32": 7, "float": 9}
 MAX_DIGITS = 17
+#: Largest width or precision a format spec may ask for (a typo like .1000000f would hang the grid).
+MAX_SPEC_NUMBER = 64
 _SPEC_PRECISION = re.compile(r"\.(\d+)")
+_SPEC_NUMBER = re.compile(r"\d+")
+#: Kinds a format spec doesn't apply to: they keep their automatic rendering.
+NO_SPEC_KINDS = ("bool", "binary", "nested")
+_SAMPLES = {"int": 1, "str": "abc", "time": dt.datetime(2026, 1, 2, 3, 4, 5)}
 
 
 def default_digits(kind: str) -> int | None:
@@ -133,11 +140,34 @@ def describe_override(override: int | str | None, kind: str) -> str:
     return override
 
 
-def check_spec(spec: str, sample: Any) -> str | None:
-    """None if ``spec`` formats ``sample`` (any value if ``sample`` is None); otherwise the error message."""
-    for v in ([sample] if sample is not None else [1.5, 1]):
+def override_error(value: int | str, kind: str | None = None, sample: Any = None) -> str | None:
+    """Why ``value`` can't be a column's override, or None if it can.
+
+    ``kind`` and ``sample`` (a value from the column) narrow the check; without them
+    a spec only has to suit some column (a float, an int, a string or a timestamp)."""
+    if isinstance(value, int):
+        if kind is not None and default_digits(kind) is None:
+            return "a digit count applies only to float columns; use a format spec such as ,d"
+        if value > MAX_DIGITS:
+            return f"at most {MAX_DIGITS} digits"
+        return None
+    if any(int(n) > MAX_SPEC_NUMBER for n in _SPEC_NUMBER.findall(value)):
+        return f"widths and precisions are limited to {MAX_SPEC_NUMBER}"
+    if kind in NO_SPEC_KINDS:
+        return f"{kind} columns can't take a format spec"
+    if sample is not None:
+        samples = [sample]
+    elif kind is not None:
+        samples = [_SAMPLES.get(kind, 1.5)]
+    else:
+        samples = [1.5, *_SAMPLES.values()]
+    err = ""
+    for v in samples:
+        if isinstance(v, (dt.date, dt.time)) and "%" not in value:
+            err = "timestamps take strftime codes, e.g. %Y-%m-%d %H:%M"
+            continue
         try:
-            format(v, spec)
+            format(v, value)
             return None
         except (ValueError, TypeError) as e:
             err = str(e)
@@ -156,13 +186,19 @@ def format_value(v: Any, kind: str, *, raw: bool = False, width: int = 40,
             return "∞" if v > 0 else "-∞"
         if raw:
             return repr(v)
-    if isinstance(override, str) and not raw:
+    if isinstance(override, str) and not raw and kind not in NO_SPEC_KINDS:
         try:
-            return format(v, override)
+            s = format(v, override)
         except (ValueError, TypeError):
             pass  # a spec that doesn't fit this value: fall back to the automatic format
+        else:
+            if width and len(s) > width and kind not in ("int", "float", "float32", *FIXED_DIGITS, *SIG_DIGITS):
+                s = s[: width - 1] + "…"
+            return s
+    if isinstance(v, decimal.Decimal) and isinstance(override, int) and not raw and v.is_finite():
+        v = float(v)  # digits for a decimal column: render it like any other float
     if isinstance(v, float):
-        digits = override if isinstance(override, int) else None
+        digits = min(override, MAX_DIGITS) if isinstance(override, int) else None
         if kind in FIXED_DIGITS:
             return _fixed(v, FIXED_DIGITS[kind] if digits is None else digits)
         return _fmt_float(v, SIG_DIGITS.get(kind, 9) if digits is None else max(1, digits))

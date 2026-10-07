@@ -545,3 +545,43 @@ async def test_corrupt_formats_file(demo_path, config_home):
         await pilot.pause(0.1)
         assert app.formatters["ra"].override == 5  # applies for the session...
     assert p.read_text() == "columns: [oops\n"  # ...but never clobbers the file
+
+
+async def test_format_dialog_markup_and_kinds(demo_path, config_home):
+    from pqx import config
+
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        g.move_cursor(column=app.cols_shown.index("ra"))
+        await pilot.press("F")
+        inp = app.screen.query_one(Input)
+        for bad in ("[/b]", "²", "100000000"):  # markup in the error, unicode digit, absurd digit count
+            inp.value = bad
+            await pilot.press("enter")
+            await pilot.pause(0.05)
+            assert isinstance(app.screen, FormatScreen)
+        await pilot.press("escape")
+
+        g.move_cursor(column=app.cols_shown.index("detector"))  # int: digits don't apply, specs do
+        await pilot.press("F")
+        inp = app.screen.query_one(Input)
+        inp.value = "4"
+        await pilot.press("enter")
+        assert isinstance(app.screen, FormatScreen)
+        inp.value = ">5"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert config.load_formats() == {"detector": ">5"}
+
+        g.move_cursor(column=app.cols_shown.index("ingestTime"))
+        await pilot.press("F")
+        inp = app.screen.query_one(Input)
+        inp.value = ".2f"
+        await pilot.press("enter")
+        assert isinstance(app.screen, FormatScreen)
+        inp.value = "%Y-%m-%d"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert len(str(g.get_cell_at(g.cursor_coordinate))) == 10

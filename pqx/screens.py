@@ -7,6 +7,7 @@ from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import (Button, Checkbox, Input, Label, Markdown, OptionList, RadioButton, RadioSet,
                              SelectionList)
@@ -132,16 +133,19 @@ class FormatScreen(ModalScreen[str | None]):
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
-    def __init__(self, column: str, current: int | str | None, sample):
+    def __init__(self, column: str, kind: str, current: int | str | None, sample):
         super().__init__()
         self.column = column
+        self.kind = kind
         self.current = current
         self.sample = sample
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog small"):
-            yield Label(f"[b]Format of[/b] [cyan]{self.column}[/cyan]")
-            yield Label("[dim].2f · .3e · ,d · .1% · 4 (digits) · empty = automatic[/dim]")
+            yield Label(f"[b]Format of[/b] [cyan]{escape(self.column)}[/cyan]")
+            hint = ("%Y-%m-%d %H:%M" if self.kind == "time" else ".2f · .3e · ,d · .1% · 4 (digits)"
+                    if F.default_digits(self.kind) is not None else ",d · x · >12")
+            yield Label(f"[dim]{escape(hint)} · empty = automatic[/dim]")
             yield Input(value="" if self.current is None else str(self.current), placeholder="automatic",
                         id="format-input")
             yield Label("", id="format-error")
@@ -152,11 +156,10 @@ class FormatScreen(ModalScreen[str | None]):
     @on(Input.Submitted)
     def submitted(self, event: Input.Submitted) -> None:
         value = parse_override(event.value)
-        if isinstance(value, str):
-            err = F.check_spec(value, self.sample)
-            if err:
-                self.query_one("#format-error", Label).update(f"[red]✗[/red] {err}")
-                return
+        err = value is not None and F.override_error(value, self.kind, self.sample)
+        if err:
+            self.query_one("#format-error", Label).update(f"[red]✗[/red] {escape(err)}")
+            return
         self.dismiss(event.value.strip())
 
     def action_cancel(self) -> None:

@@ -7,7 +7,7 @@ import sys
 
 from . import __version__
 from .config import parse_override
-from .fmt import check_spec
+from .fmt import override_error
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -38,16 +38,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--format", dest="formats", action="append", default=[], metavar="COL=SPEC",
                    help="display format for a column this session: a Python spec (.3f, .2e, ,d) or a number "
                         "of digits; repeatable. Formats set in the grid (< > F) are saved to "
-                        "~/.config/pqx/formats.yaml")
+                        "$XDG_CONFIG_HOME/pqx/formats.yaml (default ~/.config/pqx/formats.yaml)")
     p.add_argument("--version", action="version", version=f"pqx {__version__}")
     a = p.parse_args(argv)
     formats = {}
     for item in a.formats:
         name, eq, spec = item.partition("=")
+        name = name.strip()
         if not eq or not name or not spec.strip():
             p.error(f"--format expects COL=SPEC, got {item!r}")
         formats[name] = parse_override(spec)
-        err = isinstance(formats[name], str) and check_spec(formats[name], None)
+        err = override_error(formats[name])
         if err:
             p.error(f"--format {item}: {err}")
 

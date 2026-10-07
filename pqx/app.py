@@ -24,6 +24,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
+from textual.markup import escape
 from textual.message import Message
 from textual.suggester import Suggester
 from textual.theme import Theme
@@ -447,6 +448,7 @@ class PqxApp(App):
         self._last_error = ""
         self._stats_stale = True
         self._stats_shown: str | None = None
+        self._stats_rendered: tuple | None = None  # last _render_stats arguments, to reformat in place
         self._count_secs: float | None = None
         # look: accent (focus) colour, how secondary text is dimmed, unfocused border colour
         self.accent = (accent or os.environ.get("PQX_ACCENT") or "blue").lower()
@@ -523,7 +525,7 @@ class PqxApp(App):
         self.query_one("#filterbox").border_title = self._dim_markup("filter")
         self._setup_formatters(self.result_schema)
         if self._config_error:
-            self.notify(f"Ignoring saved column formats: {self._config_error}", title="! Config",
+            self.notify(f"Ignoring saved column formats: {escape(self._config_error)}", title="! Config",
                         severity="warning", timeout=8)
         self.query_one("#detail").display = False
         grid = self.query_one(GridTable)
@@ -1108,7 +1110,7 @@ class PqxApp(App):
         col = min(grid.cursor_column, len(self.cols_shown) - 1)
         self._rebuild_columns()
         self.load_window(grid.offset, grid.abs_row, col)
-        self.notify(f"Hid {name} · c brings it back", timeout=2)
+        self.notify(f"Hid {escape(name)} · c brings it back", timeout=2)
 
     def action_pin_columns(self) -> None:
         grid = self.query_one(GridTable)
@@ -1127,7 +1129,9 @@ class PqxApp(App):
             return None
         name = self.cols_shown[grid.cursor_column]
         if name not in self.formatters:
-            self.formatters[name] = F.CellFormatter(name, dict(self.result_schema).get(name, pa.string()))
+            unit = self.ds.column(name).unit if name in self.ds._by_name else ""
+            self.formatters[name] = F.CellFormatter(name, dict(self.result_schema).get(name, pa.string()), unit,
+                                                    self.col_formats.get(name))
         return self.formatters[name]
 
     def action_step_digits(self, delta: int) -> None:
@@ -1136,7 +1140,8 @@ class PqxApp(App):
             return
         new = F.step_override(fm.override, fm.kind, delta)
         if new is None:
-            self.notify(f"{fm.name} has no digits to change · F sets a format spec", severity="warning", timeout=3)
+            self.notify(f"{escape(fm.name)} has no digits to change · F sets a format spec",
+                        severity="warning", timeout=3)
             return
         self._set_format(fm, new)
 
@@ -1149,7 +1154,7 @@ class PqxApp(App):
         def done(text):
             if text is not None:
                 self._set_format(fm, config.parse_override(text))
-        self.push_screen(FormatScreen(fm.name, fm.override, sample), done)
+        self.push_screen(FormatScreen(fm.name, fm.kind, fm.override, sample), done)
 
     def _set_format(self, fm: F.CellFormatter, value: int | str | None) -> None:
         """Apply a column's format override (None = automatic), redraw, and remember it."""
@@ -1165,16 +1170,16 @@ class PqxApp(App):
             col.content_width = max(line.cell_len for line in col.label.split())  # let it shrink to fit
         if self.page is not None:
             self._apply_page(self.page, grid.abs_row, grid.cursor_column)
-        if self._stats_shown == fm.name:
-            self._stats_stale = True
-        shown = F.describe_override(value, fm.kind) or "automatic"
+        if self._stats_rendered and self._stats_rendered[0] == fm.name and not self._stats_stale:
+            self._render_stats(*self._stats_rendered)  # reformat what's shown; no need to re-profile
+        name, shown = escape(fm.name), escape(F.describe_override(value, fm.kind) or "automatic")
         try:
             config.save_format(fm.name, value)
         except (config.ConfigError, OSError) as e:
-            self.notify(f"{fm.name}: {shown}, for this session only — not saved: {e}",
+            self.notify(f"{name}: {shown}, for this session only — not saved: {escape(str(e))}",
                         severity="warning", timeout=6)
             return
-        self.notify(f"✓ {fm.name}: {shown}", timeout=2)
+        self.notify(f"✓ {name}: {shown}", timeout=2)
 
     def action_copy_cell(self) -> None:
         name, v = self._cursor_value()
@@ -1183,7 +1188,7 @@ class PqxApp(App):
         typ = dict(self.result_schema).get(name, pa.null())
         s = F.format_value(F.shortest(v, typ), "float", raw=True, width=0) if v is not None else ""
         self.copy_to_clipboard(s)
-        self.notify(f"✓ Copied {name} = {s[:60]}", timeout=2)
+        self.notify(f"✓ Copied {escape(name)} = {escape(s[:60])}", timeout=2)
 
     def action_goto(self) -> None:
         def done(spec):
@@ -1193,7 +1198,7 @@ class PqxApp(App):
                 total = self.total if self.total is not None else 1 << 62
                 target = parse_row_spec(spec, total)
             except ValueError:
-                self.notify(f"Not a row number: {spec}", severity="error")
+                self.notify(f"Not a row number: {escape(spec)}", severity="error")
                 return
             self._seek_to(target)
         self.push_screen(GotoScreen(self.total), done)
@@ -1519,6 +1524,7 @@ class PqxApp(App):
 
     @_ui
     def _render_stats(self, name: str, typ: pa.DataType, st: ColumnStats, hist, elapsed: float) -> None:
+        self._stats_rendered = (name, typ, st, hist, elapsed)
         self._stats_stale = False
         self._stats_shown = name
         d = self.dim
