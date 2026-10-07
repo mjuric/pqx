@@ -250,7 +250,7 @@ class ParquetDataset:
         columns, by path; encodings come from ``column_encodings``).
 
         One pass over every column chunk in the footer, shared with
-        ``row_groups`` and computed once: ~1 s per million chunks, so call it
+        ``row_groups`` and computed once: ~2.5 s per million chunks, so call it
         off the UI thread."""
         return self._footer_scan()[0]
 
