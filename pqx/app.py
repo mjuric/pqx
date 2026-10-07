@@ -232,6 +232,10 @@ class GridTable(DataTable):
     cell_columns: list[ColumnCells] = []
     _widen_pending: bool = False
 
+    def clear(self, columns: bool = False):
+        self.cell_columns = []
+        return super().clear(columns)
+
     def column_cells(self, formatters: list[F.CellFormatter], raw: bool) -> list[ColumnCells]:
         """Fresh per-column cell state for the current columns, wired to widen them."""
         return [ColumnCells(fm, raw, col, self._widened) for fm, col in zip(formatters, self.ordered_columns)]

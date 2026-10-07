@@ -7,7 +7,7 @@ from rich.text import Text
 
 from pqx import fmt as F
 from pqx.app import GridTable, PqxApp
-from pqx.cells import Cell, ColumnCells, text_width, widest_candidates
+from pqx.cells import Cell, CellRow, ColumnCells, text_width, widest_candidates
 
 from test_app import SIZE, settle
 
@@ -39,6 +39,16 @@ def test_cell_formats_once_and_again_after_invalidate():
     cc.invalidate(raw=False)
     assert str(c) == "0.333333333"
     assert cc.column.content_width == len(repr(1.0 / 3))  # columns never narrow by themselves
+
+
+def test_cell_row_makes_cells_on_first_read():
+    ccs = [ColumnCells(F.CellFormatter(n, t), False) for n, t in (("a", pa.int64()), ("b", pa.string()))]
+    row = CellRow((7,), (["a", "b"], ccs))  # a short row reads as NULLs, as DataTable's add_row pads it
+    assert len(row) == 0
+    assert str(row["b"]) == F.NULL and len(row) == 2  # one read makes the whole row
+    assert row["a"].value == 7 and row["a"] is row["a"]
+    with pytest.raises(KeyError):
+        row["c"]
 
 
 def test_widest_candidates_find_the_widest_number():
@@ -80,13 +90,13 @@ def wide_path(tmp_path):
 
 async def test_window_load_formats_only_what_is_drawn(wide_path, monkeypatch):
     calls = [0]
-    orig = F.CellFormatter.__call__
+    orig = F.format_value
 
-    def counting(self, v, raw=False):
+    def counting(*a, **kw):
         calls[0] += 1
-        return orig(self, v, raw)
+        return orig(*a, **kw)
 
-    monkeypatch.setattr(F.CellFormatter, "__call__", counting)
+    monkeypatch.setattr(F, "format_value", counting)
     app = PqxApp(wide_path)
     async with app.run_test(size=SIZE) as pilot:
         await settle(pilot, app)
@@ -97,7 +107,7 @@ async def test_window_load_formats_only_what_is_drawn(wide_path, monkeypatch):
         # what's drawn (at most every column of the rows on screen) plus a dozen or so candidates per column
         budget = (h + 16) * ncols
         assert budget < cells / 2
-        assert calls[0] <= budget
+        assert 0 < calls[0] <= budget
 
         for key in ("ctrl+end", "f", "f", "pagedown"):
             calls[0] = 0
