@@ -269,3 +269,169 @@ async def test_copy_stats_format_from_pane(demo_path, config_home):
         await settle(pilot, app)
         assert app.query_one(TabbedContent).active == "tab-stats"
         assert app.current_column == "dec" and app._stats_col == "dec"
+
+
+def hold_find_row(app):
+    """Make each find_row wait for its own Event (returned in ``holds``, in call order)."""
+    real = app.ds.find_row
+    holds = []
+
+    def find_row(view, file_row):
+        ev = threading.Event()
+        holds.append(ev)
+        ev.wait(10)
+        return real(view, file_row)
+    app.ds.find_row = find_row
+    return holds
+
+
+async def wait_until(pilot, cond, n=300):
+    for _ in range(n):
+        if cond():
+            return
+        await pilot.pause(0.02)
+    raise AssertionError("condition never met")
+
+
+async def test_keys_while_the_record_is_on_its_way_act_on_it(demo_path, demo):
+    """= on band, ↓ to detector, = before the lookup lands: the second = is the record's detector
+    (not that of the row the cursor waits on), and Details shows the record meanwhile."""
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        holds = hold_find_row(app)
+        g, lst = await into_pane(pilot, app, 15_000, "band")
+        band, det = demo.band[15_000], int(demo.detector[15_000])
+        await pilot.press("equals_sign")
+        await wait_until(pilot, lambda: holds and app.page.offset == 0 and app.view.where)
+        d = app.query_one("#detail")
+        assert g.abs_row == 0 and app.page.row_numbers[0] != 15_000
+        assert "finding record" in str(d.border_title) and "15,000" in str(d.border_title)
+        items = dict((n, v.plain) for n, v in lst._items)
+        assert items["band"] == band and items["detector"] == str(det)  # the record's, not row 0's
+        while lst.selected != "detector":
+            await pilot.press("down")
+        await pilot.press("equals_sign", "y")
+        await pilot.pause(0.1)
+        assert app.view.where == f"band = '{band}'" and not app.clipboard  # waiting for the record
+        holds[0].set()
+        await wait_until(pilot, lambda: len(holds) > 1 or app.view.where.endswith(f"detector = {det}"))
+        for h in holds:
+            h.set()
+        await settle(pilot, app)
+        assert app.view.where == f"band = '{band}' and detector = {det}"
+        assert app.clipboard == str(det)
+        assert record(app) == 15_000 and app.focused is lst and lst.selected == "detector"
+        assert "finding" not in str(d.border_title)
+
+
+async def test_keys_waiting_for_the_record_are_dropped_when_the_user_moves(demo_path):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        holds = hold_find_row(app)
+        g, lst = await into_pane(pilot, app, 15_000, "band")
+        await pilot.press("equals_sign")
+        await wait_until(pilot, lambda: holds and app.page.offset == 0 and app.view.where)
+        await pilot.press("y", "enter", "down")  # y waits; back to the grid and down a row
+        await pilot.pause(0.1)
+        assert app._keep is None and g.abs_row == 1 and not app.clipboard
+        assert "y not applied: the cursor moved" in str(list(app._notifications)[-1].message)
+        holds[0].set()
+        await settle(pilot, app)
+        assert g.abs_row == 1 and not app.clipboard
+        assert "finding" not in str(app.query_one("#detail").border_title)
+
+
+async def test_a_jump_before_the_first_page_drops_the_kept_record(demo_path):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        await pilot.press("g", *"15000", "enter")
+        await settle(pilot, app)
+        g.move_cursor(column=app.cols_shown.index("band"))
+        real, release, held = app.ds.fetch, threading.Event(), []
+
+        def fetch(view, offset, limit, columns=None):
+            if view.where and not held:  # the filtered view's first page hangs (only it)
+                held.append(offset)
+                release.wait(10)
+            return real(view, offset, limit, columns)
+        app.ds.fetch = fetch
+        await pilot.press("equals_sign")
+        await wait_until(pilot, lambda: app._keep is not None)
+        await pilot.press("g", *"100", "enter")
+        await settle(pilot, app)
+        assert app._keep is None and g.abs_row == 100
+        release.set()  # the first page comes too late: superseded
+        await settle(pilot, app)
+        assert app._keep is None and g.abs_row == 100
+
+
+async def test_a_stale_lookup_leaves_the_newer_ones_busy_flag(demo_path):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        holds = hold_find_row(app)
+        g = app.query_one(GridTable)
+        await pilot.press("g", *"15000", "enter")
+        await settle(pilot, app)
+        g.move_cursor(column=app.cols_shown.index("band"))
+        await pilot.press("equals_sign")
+        await wait_until(pilot, lambda: len(holds) == 1)
+        app.apply_filter("detector < 150", 15_000)  # another view keeping the same record
+        await wait_until(pilot, lambda: len(holds) == 2)
+        holds[0].set()  # the first lookup ends while the second runs
+        await pilot.pause(0.2)
+        assert "locate" in app._busy
+        holds[1].set()
+        await settle(pilot, app)
+        assert record(app) == 15_000 and app.view.where == "detector < 150"
+
+
+async def test_detail_key_line_fits_80_columns(demo_path):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=(80, 30)) as pilot:
+        await settle(pilot, app)
+        await pilot.press("d", "tab")
+        await pilot.pause(0.1)
+        keys = app.query_one("#keys")
+        line = "".join(seg.text for seg in keys.render_line(0)).rstrip()
+        assert "q quit" in line and "= match" in line and "esc grid" in line  # (d close, if room)
+
+
+async def test_record_page_found_by_file_row_and_not_yanked_after_a_move(demo_path):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        real, release, calls = app.ds.fetch_around, threading.Event(), []
+
+        def fetch_around(*a, **kw):
+            calls.append(a[1:3])
+            release.wait(10)
+            return real(*a, **kw)
+        app.ds.fetch_around = fetch_around
+        await pilot.press("g", *"15000", "enter")
+        await settle(pilot, app)
+        g.move_cursor(column=app.cols_shown.index("band"))
+        await pilot.press("equals_sign")
+        await wait_until(pilot, lambda: calls)
+        assert calls[0][0] == 15_000 and app._keep_phase == "seeking"  # the record's page, by file row
+        await pilot.press("down")
+        await pilot.pause(0.05)
+        assert app._keep is None
+        release.set()
+        await settle(pilot, app)
+        assert g.abs_row == 1  # the record's page came too late: not shown
+
+        app.ds.fetch_around = real
+        g.move_cursor(row=0)
+        await pilot.press("x")
+        await settle(pilot, app)
+        await pilot.press("g", *"15000", "enter")
+        await settle(pilot, app)
+        await pilot.press("equals_sign")
+        await settle(pilot, app)
+        assert record(app) == 15_000 and app._keep is None
