@@ -260,3 +260,60 @@ async def test_render_work_scales_with_visible_columns(wide300_path):
         await settle(pilot, app)
         assert calls and len(calls) <= 2 * in_view  # the two rows the cursor touched
         assert {r for r, _ in calls} <= {g.cursor_row - 1, g.cursor_row}
+
+
+@pytest.fixture(scope="module")
+def styled_path(tmp_path_factory):
+    """Cells of every look: dim NULL/NaN/∞, bold ✓ and dim · booleans, left/right/center
+    justification, empty and wide (CJK) strings, long text cut by its column, timestamps, blobs."""
+    n = 200
+    rng = np.random.default_rng(2)
+    x = rng.normal(size=n)
+    x[::7] = np.nan
+    x[3] = np.inf
+    strs = [None if i % 5 == 0 else ("" if i % 5 == 1 else ("日本語" if i % 5 == 2 else "w" * (i % 30)))
+            for i in range(n)]
+    tbl = pa.table({
+        "id": np.arange(n),
+        "x": pa.array([None if i % 11 == 0 else v for i, v in enumerate(x)]),
+        "flag": pa.array([None if i % 4 == 0 else i % 3 == 0 for i in range(n)]),
+        "s": pa.array(strs),
+        "day": pa.array(np.datetime64("2026-01-01") + (np.arange(n) * 3_600_123).astype("timedelta64[ms]")),
+        "blob": pa.array([bytes([i % 256]) * (i % 20) for i in range(n)], type=pa.binary()),
+        "tags": pa.array([["a", "b"][: i % 3] for i in range(n)], type=pa.list_(pa.string())),
+        **{f"c{i}": rng.normal(scale=10.0 ** i, size=n) for i in range(12)},
+    })
+    p = tmp_path_factory.mktemp("data") / "styled.parquet"
+    pq.write_table(tbl, p)
+    return str(p)
+
+
+async def test_render_matches_datatable_styled_cells(styled_path):
+    """GridTable._render_cell's fast path for one-line Text cells must draw exactly what
+    DataTable's Rich rendering does, for every cell look, cursor, hover and pinned style."""
+    app = PqxApp(styled_path)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        await _check_look(pilot, app, g, "start")
+        assert g._fast_cell_styles, "the fast path wasn't used"
+        for col in range(1, 7):
+            g.move_cursor(row=col + 3, column=col)
+            await settle(pilot, app)
+            await _check_look(pilot, app, g, f"cursor on column {col}")
+        g._set_hover_cursor(True)
+        g.hover_coordinate = Coordinate(5, 2)
+        await _check_look(pilot, app, g, "hover")
+        g._set_hover_cursor(False)
+        g.move_cursor(column=3)
+        await pilot.press("p")  # pin id..s: fixed-cell styles, and the cursor on a pinned cell
+        await settle(pilot, app)
+        await _check_look(pilot, app, g, "pinned")
+        await pilot.press("f")
+        await settle(pilot, app)
+        await _check_look(pilot, app, g, "raw")
+        await pilot.press("end", "pagedown")
+        await settle(pilot, app)
+        await _check_look(pilot, app, g, "pinned, scrolled")
+        g.blur()
+        await _check_look(pilot, app, g, "blurred")

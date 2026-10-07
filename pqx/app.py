@@ -18,7 +18,9 @@ from itertools import accumulate
 
 import duckdb
 import pyarrow as pa
+from rich.cells import cell_len
 from rich.console import Group
+from rich.padding import Padding
 from rich.segment import Segment
 from rich.style import Style
 from rich.table import Table
@@ -32,6 +34,7 @@ from textual.coordinate import Coordinate
 from textual.css.query import NoMatches
 from textual.markup import escape
 from textual.message import Message
+from textual.renderables.styled import Styled
 from textual.suggester import Suggester
 from textual.theme import Theme
 from textual.widgets import DataTable, Input, Label, OptionList, Static, TabbedContent, TabPane
@@ -195,6 +198,7 @@ class GridTable(DataTable):
         self._widths_gen = 0  # bumped whenever any of those change
         #: per column, in column order: what its cells share (see pqx.cells); set by set_rows
         self.cell_columns: list[ColumnCells] = []
+        self._fast_cell_styles: dict = {}  # see _cell_styles
 
     @property
     def ordered_columns(self) -> list:
@@ -435,6 +439,73 @@ class GridTable(DataTable):
                     label = default_cell_formatter(meta.label, wrap=meta.height != 1, height=meta.height)
                 return RowRenderables(label, RowCells(row))
         return super()._compute_row_renderables(row_index)
+
+    def _render_cell(self, row_index: int, column_index: int, base_style: Style, width: int,
+                     cursor: bool = False, hover: bool = False):
+        """DataTable's, with a fast path for the usual window cell: one line of plain Text
+        (no markup spans, every character one cell wide). Its segments — padding, the
+        justified and cropped text, padding — are built directly, with the styles Rich
+        gives them (learnt once per style combination from a one-character sample, see
+        _cell_styles); anything else goes through Rich as before."""
+        if row_index < 0 or column_index < 0 or self.cell_padding < 1 or self.render_all_columns:
+            return super()._render_cell(row_index, column_index, base_style, width, cursor, hover)
+        row_key = self._row_locations.get_key(row_index)
+        column_key = self._column_locations.get_key(column_index)
+        cache_key = (row_key, column_key, base_style, cursor, hover, self._show_hover_cursor, self._update_count,
+                     self._pseudo_class_state)
+        lines = self._cell_render_cache.get(cache_key)
+        if lines is not None:
+            return lines
+        row, meta = self._data.get(row_key), self.rows.get(row_key)
+        text = row.cell_at(column_index).text if isinstance(row, CellRow) and meta and meta.height == 1 else None
+        pad = self.cell_padding
+        inner = width - 2 * pad
+        s = text.plain if text is not None else ""
+        if (not s or inner < 1 or text._spans or text.justify not in ("left", "right", "center")
+                or text.overflow not in (None, "fold") or "\n" in s or cell_len(s) != len(s)):
+            return super()._render_cell(row_index, column_index, base_style, width, cursor, hover)
+        fixed = row_index < self.fixed_rows or column_index < self.fixed_columns
+        component, post = self._get_styles_to_render_cell(
+            False, False, fixed, hover, cursor, self.show_cursor, self._show_hover_cursor,
+            self.cursor_foreground_priority == "css", self.cursor_background_priority == "css")
+        styles = self._cell_styles(base_style, component, post, text.style)
+        if styles is None:
+            return super()._render_cell(row_index, column_index, base_style, width, cursor, hover)
+        n = len(s)
+        if n >= inner:
+            body = s[:inner]
+        elif text.justify == "right":
+            body = " " * (inner - n) + s
+        elif text.justify == "left":
+            body = s + " " * (inner - n)
+        else:
+            left = (inner - n) // 2
+            body = " " * left + s + " " * (inner - n - left)
+        where = Style.from_meta({"row": row_index, "column": column_index})
+        pad_style, body_style = styles[0] + where, styles[1] + where
+        edge = Segment(" " * pad, pad_style)
+        lines = [[edge, Segment(body, body_style), edge]]
+        self._cell_render_cache[cache_key] = lines
+        return lines
+
+    def _cell_styles(self, base_style: Style, component: Style, post: Style, text_style) -> tuple | None:
+        """The (padding, text) styles Rich gives a one-line Text cell, without the cell's
+        row/column meta: learnt by rendering a one-character sample the way DataTable
+        renders a cell. None if the sample doesn't come out as padding, text, padding."""
+        key = (base_style, component, post, text_style, self.cell_padding)
+        cache = self._fast_cell_styles
+        if key not in cache:
+            pad = self.cell_padding
+            sample = Text("x", style=text_style, justify="left")
+            options = self.app.console_options.update_dimensions(2 * pad + 1, 1).update(no_wrap=True)
+            lines = self.app.console.render_lines(
+                Styled(Padding(sample, (0, pad)), pre_style=base_style + component, post_style=post), options)
+            segs = lines[0] if len(lines) == 1 else []
+            ok = [seg.text for seg in segs] == [" " * pad, "x", " " * pad] and segs[0].style == segs[2].style
+            if len(cache) > 256:
+                cache.clear()
+            cache[key] = (segs[0].style, segs[1].style) if ok else None
+        return cache[key]
 
     def update_cell(self, *a, **kw):
         # set_rows' CellRows hold Cells made from the window's values: a plain value put in
