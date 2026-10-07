@@ -37,7 +37,7 @@ from . import fmt as F
 from . import plots
 from .data import ColumnStats, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec, quote_ident
 from .screens import ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen, HelpScreen
-from .widgets import CursorList
+from .widgets import CursorList, DetailList
 
 _terminal.install()  # X10/urxvt mouse (GNU screen) + lenient input decoding; see _terminal.py
 
@@ -486,8 +486,8 @@ class PqxApp(App):
                             yield GridTable(id="grid", header_height=2, cursor_type="cell")
                             yield EdgeMarker(1, id="more-right", classes="edge")
                         yield Static(id="status")
-                    with VerticalScroll(id="detail", classes="panel"):
-                        yield Static(id="detail-body")
+                    with Vertical(id="detail", classes="panel"):
+                        yield DetailList(id="detail-list")
             with TabPane("Schema", id="tab-schema"):
                 with Vertical():
                     with Vertical(id="schema-panel", classes="panel tabbed"):
@@ -884,7 +884,30 @@ class PqxApp(App):
     def action_toggle_detail(self) -> None:
         d = self.query_one("#detail")
         d.display = not d.display
+        if not d.display and self.query_one(TabbedContent).active == "tab-data":
+            self.query_one(GridTable).focus()
         self._update_detail()
+
+    def action_detail_to_grid(self, cancel: bool = False) -> None:
+        """Enter, Tab or Esc in the pane: back to the grid, on the selected column.
+        Esc also cancels running queries, as it does everywhere else."""
+        if cancel and self._busy:
+            self.action_escape()
+        name = self.query_one(DetailList).selected
+        if name:
+            self._move_grid_to_column(name)
+        self.query_one(GridTable).focus()
+
+    @on(OptionList.OptionHighlighted, "#detail-list")
+    def detail_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        # only the user's own moves in the pane drive the grid; the pane
+        # following the grid (it isn't focused then) must not echo back
+        lst = self.query_one(DetailList)
+        name = event.option.id
+        if self.focused is not lst or not name:
+            return
+        self.set_current_column(name, "detail")
+        self._move_grid_to_column(name)
 
     def _update_detail(self) -> None:
         d = self.query_one("#detail")
@@ -894,10 +917,8 @@ class PqxApp(App):
         r = min(grid.cursor_row, len(self.page.rows) - 1)
         row = self.page.rows[r]
         rn = self.page.row_numbers[r]
-        tbl = Table.grid(padding=(0, 2), expand=True)
-        tbl.add_column(no_wrap=True, max_width=22)
-        tbl.add_column(ratio=1)
         cur_col = self.page.columns[grid.cursor_column] if grid.cursor_column < len(self.page.columns) else None
+        entries = []
         for name, typ, v in zip(self.page.columns, self.page.types, row):
             fmt = self.formatters.get(name) or F.CellFormatter(name, typ)
             full = F.format_value(F.shortest(v, typ), fmt.kind, raw=True, width=0)
@@ -910,9 +931,11 @@ class PqxApp(App):
             extra = F.derived(name, fmt.kind, v)
             if extra:
                 cell.append("\n· " + extra, self.dim)
-            tbl.add_row(Text(name, style="bold reverse" if name == cur_col else "bold"), cell)
+            entries.append((name, cell))
         d.border_title = self._dim_markup(f"row {grid.abs_row:,}" + (f" · file row {rn:,}" if rn is not None else ""))
-        self.query_one("#detail-body", Static).update(tbl)
+        lst = self.query_one(DetailList)
+        lst.set_entries(entries, min(22, max((len(n) for n, _ in entries), default=0)))
+        lst.select(cur_col)
 
     # --------------------------------------------------------------- filtering
     def action_focus_filter(self) -> None:

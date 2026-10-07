@@ -159,6 +159,10 @@ DataTable:blur > .datatable--cursor {
     margin-left: 1;
 }
 
+#detail-list {
+    height: 1fr;
+}
+
 /* ---- schema */
 #schema-panel {
     height: 1fr;
