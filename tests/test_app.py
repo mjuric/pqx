@@ -1001,3 +1001,118 @@ async def test_detail_pane_rows_and_views(demo_path):
         await pilot.press("tab", "down")
         await pilot.pause(0.05)
         assert app.current_column == col
+
+
+@pytest.fixture(scope="module")
+def tall_detail_path(tmp_path_factory):
+    """150 integer columns whose values say their row and column, and a note
+    that wraps on odd rows: a Details pane far longer than the screen."""
+    import numpy as np
+    import pyarrow as pa
+
+    n = 50
+    ints = [(f"c{j:03d}", np.arange(n) * 1000 + j) for j in range(150)]
+    note = ("note", [("odd " * 40 if i % 2 else "even") + f"#{i}" for i in range(n)])
+    p = tmp_path_factory.mktemp("data") / "tall.parquet"
+    pq.write_table(pa.table(dict(ints[:60] + [note] + ints[60:])), p)
+    return str(p)
+
+
+def detail_text(lst):
+    """The pane as drawn: {entry index: its lines' text, joined}."""
+    out = {}
+    for y in range(lst.scrollable_content_region.height):
+        line = lst.scroll_offset.y + y
+        if line < len(lst._lines):
+            out.setdefault(lst._lines[line][0], []).append(lst.render_line(y).text)
+    return {k: " ".join(v) for k, v in out.items()}
+
+
+async def test_detail_pane_renders_only_what_is_in_view(tall_detail_path):
+    from pqx.widgets import DetailList
+
+    app = PqxApp(tall_detail_path)
+    async with app.run_test(size=(150, 30)) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        lst = app.query_one(DetailList)
+        g.move_cursor(row=2, column=0)
+        await pilot.press("d")
+        await pilot.pause(0.1)
+        assert lst.option_count == 151 and lst.selected == "c000"
+        built = []
+        orig = lst._grid
+        lst._grid = lambda name, *a: (built.append(name), orig(name, *a))[1]
+
+        await pilot.press("down")  # a new row: only the entries in view are built
+        await pilot.pause(0.1)
+        assert g.cursor_row == 3
+        in_view = lst.scrollable_content_region.height
+        assert 0 < len(built) <= in_view + 1, built  # (+1: the selection, built whole)
+        shown = detail_text(lst)
+        assert shown[5].split()[:2] == ["c005", "3005"]
+
+        # entries that were out of view show the new row when scrolled to, at the right heights
+        note = [o.id for o in lst.options].index("note")
+        assert lst._heights[note] > 1  # the odd row's long note wraps
+        for k in (150, note):
+            lst.scroll_to(y=lst._index_to_line[k], animate=False)
+            await pilot.pause(0.05)
+            shown = detail_text(lst)
+            assert k in shown
+            for i, text in shown.items():
+                name = lst.options[i].id
+                if name == "note":
+                    assert "".join(text.split()).endswith("#3") and text.count("odd") == 40
+                else:
+                    assert text.split()[:2] == [name, str(3000 + int(name[1:]))]
+        assert len(built) < 151
+
+        y0 = lst.scroll_y
+        await pilot.press("up")  # an even row: the note is one line again; the pane stays put
+        await pilot.pause(0.1)
+        assert lst._heights[note] == 1 and lst.scroll_y == y0
+        for i, text in detail_text(lst).items():
+            name = lst.options[i].id
+            assert text.split()[:2] == ([name, "even#2"] if name == "note" else [name, str(2000 + int(name[1:]))])
+
+
+def test_detail_entry_layout_matches_rich_grid():
+    """EntryGrid lays an entry out as Rich's Table.grid does, cell for cell,
+    and a lazy entry's quick one-line height agrees with the rendering."""
+    import random
+
+    from rich.console import Console
+    from rich.segment import Segment
+    from rich.text import Text
+
+    from pqx.widgets import EntryGrid, _LazyEntry
+
+    console = Console(width=200)
+    rnd = random.Random(5)
+    chars = "abcxyz0123456789.-e+ 日本é\t"
+
+    def rand(n):
+        return "".join(rnd.choice(chars) for _ in range(n))
+
+    def lines(renderable, width, base):
+        segs = console.render(Styled(renderable, base) if base else renderable,
+                              console.options.update_width(width).update(highlight=False))
+        return [list(Segment.simplify(ln)) for ln in Segment.split_and_crop_lines(segs, width, pad=False)]
+
+    quick = 0
+    for _ in range(1500):
+        width, nw = rnd.randint(1, 70), rnd.randint(0, 23)
+        name = Text(rand(rnd.randint(1, 30)).replace("\t", "_"), style=rnd.choice(["bold", "bold reverse"]))
+        value = Text(rand(rnd.choice([0, 1, 5, 10, 30, 80])), style=rnd.choice(["", "dim"]))
+        if rnd.random() < .5:
+            value.append("  " + rand(3), "dim")
+        if rnd.random() < .3:
+            value.append("\n· " + rand(rnd.randint(1, 60)), "dim")
+        base = rnd.choice([None, "reverse", "on blue"])
+        grid = EntryGrid(name, value, nw)
+        assert lines(grid, width, base) == lines(grid.table(), width, base), (width, nw, name, value)
+        if _LazyEntry.one_line(value, nw, width):  # the quick answer
+            assert len(lines(grid.table(), width, None)) == 1, (width, nw, value)
+            quick += 1
+    assert quick > 100

@@ -1,11 +1,15 @@
 """Small shared widgets."""
 from __future__ import annotations
 
+from rich.cells import cell_len
+from rich.segment import Segment
+from rich.style import Style
 from rich.styled import Styled
 from rich.table import Table
 from rich.text import Text
 from textual import on
 from textual.binding import Binding
+from textual.visual import RichVisual, Visual
 from textual.widgets import OptionList
 from textual.widgets.option_list import Option
 
@@ -46,6 +50,86 @@ class CursorList(OptionList):
         self._hl = k
 
 
+class EntryGrid:
+    """A ``name  value`` Details entry, laid out as the Rich grid
+    ``Table.grid(padding=(0, 2), expand=True)`` with a fixed-width, no-wrap name
+    column and a folding value column would lay it out, but without Table's
+    measuring and padding passes (several times cheaper; a wide file draws
+    dozens of these per row change). Too narrow for that layout, it is the
+    Table itself."""
+
+    def __init__(self, name: Text, value: Text, name_width: int) -> None:
+        self.name = name
+        self.value = value
+        self.name_width = name_width
+
+    def table(self) -> Table:
+        tbl = Table.grid(padding=(0, 2), expand=True)
+        tbl.add_column(width=self.name_width, no_wrap=True)
+        tbl.add_column(ratio=1, overflow="fold")  # long tokens (ids, blobs) break rather than lose their end
+        tbl.add_row(self.name, self.value)
+        return tbl
+
+    def __rich_console__(self, console, options):
+        nw = self.name_width
+        vw = options.max_width - nw - 2
+        if nw < 1 or vw < 1:
+            yield self.table()
+            return
+        cell = options.update(justify="left", height=None, highlight=False)
+        names = console.render_lines(self.name, cell.update(width=nw, no_wrap=True, overflow="ellipsis"))
+        values = console.render_lines(self.value, cell.update(width=vw, no_wrap=False, overflow="fold"))
+        null = Style()  # what the grid pads with
+        gap, blank_name, blank_value = Segment("  ", null), Segment(" " * nw, null), Segment(" " * vw, null)
+        nl = Segment.line()
+        for i in range(max(len(names), len(values))):
+            yield from names[i] if i < len(names) else (blank_name,)
+            yield gap
+            yield from values[i] if i < len(values) else (blank_value,)
+            yield nl
+
+
+class _LazyEntry(Visual):
+    """A Details entry that builds its grid only when it is drawn.
+
+    A wide file has hundreds of entries but only a screenful is ever on view;
+    OptionList asks every entry for its height on each change, and only the
+    visible ones for their lines. A one-line value that fits the value column
+    is one line high without building anything; anything else (wrapping, a
+    derived reading, tabs) is measured by rendering the grid, so heights match
+    the rendering exactly."""
+
+    def __init__(self, lst: DetailList, name: str, value: Text, name_width: int) -> None:
+        self._list = lst
+        self._name = name
+        self._value = value
+        self._name_width = name_width
+        self._visual: RichVisual | None = None
+
+    def _rich(self) -> RichVisual:
+        if self._visual is None:
+            self._visual = RichVisual(self._list, self._list._grid(self._name, self._value, False))
+        return self._visual
+
+    @staticmethod
+    def one_line(value: Text, name_width: int, width: int) -> bool:
+        """Whether ``value`` surely fits on the entry's first line (no newline, tab or control character)."""
+        plain = value.plain
+        vw = width - name_width - 2
+        return name_width >= 1 and vw >= 1 and plain.isprintable() and cell_len(plain) <= vw
+
+    def get_height(self, rules, width: int) -> int:
+        if self.one_line(self._value, self._name_width, width):
+            return 1
+        return self._rich().get_height(rules, width)
+
+    def get_optimal_width(self, rules, container_width: int) -> int:
+        return self._rich().get_optimal_width(rules, container_width)
+
+    def render_strips(self, width, height, style, options):
+        return self._rich().render_strips(width, height, style, options)
+
+
 class DetailList(CursorList):
     """The Details pane: one entry per column of the current row.
 
@@ -80,8 +164,10 @@ class DetailList(CursorList):
         self._items = list(entries)
         self._name_width = name_width
         if same:
-            for k in range(len(entries)):
-                self.replace_option_prompt_at_index(k, self._prompt(k, k == self._hl))
+            # replace_option_prompt_at_index for each, but clearing the caches once, not per entry
+            for k, option in enumerate(self.options):
+                option._set_prompt(self._prompt(k, k == self._hl))
+            self._clear_caches()
             return
         self._hl = None
         self.clear_options()
@@ -98,14 +184,16 @@ class DetailList(CursorList):
         k = self.highlighted
         return self._items[k][0] if k is not None and k < len(self._items) else None
 
-    def _prompt(self, k: int, highlighted: bool, focused: bool | None = None) -> Table | Styled:
+    def _prompt(self, k: int, highlighted: bool, focused: bool | None = None) -> EntryGrid | Styled | _LazyEntry:
         name, value = self._items[k]
-        whole = highlighted and (self.has_focus if focused is None else focused)
-        tbl = Table.grid(padding=(0, 2), expand=True)
-        tbl.add_column(width=self._name_width, no_wrap=True)
-        tbl.add_column(ratio=1, overflow="fold")  # long tokens (ids, blobs) break rather than lose their end
-        tbl.add_row(Text(name, style="bold reverse" if highlighted and not whole else "bold"), value)
-        return Styled(tbl, "reverse") if whole else tbl
+        if not highlighted:  # built when drawn: a row change costs what's in view, not every column
+            return _LazyEntry(self, name, value, self._name_width)
+        whole = self.has_focus if focused is None else focused
+        grid = self._grid(name, value, not whole)
+        return Styled(grid, "reverse") if whole else grid
+
+    def _grid(self, name: str, value: Text, name_reversed: bool) -> EntryGrid:
+        return EntryGrid(Text(name, style="bold reverse" if name_reversed else "bold"), value, self._name_width)
 
     def watch_has_focus(self, has_focus: bool) -> None:
         super().watch_has_focus(has_focus)
