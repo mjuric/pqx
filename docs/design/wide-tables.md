@@ -1,6 +1,7 @@
 # Fast rendering of wide tables
 
-Status: approved 2026-10-06 · integration branch `wide-tables`
+Status: approved 2026-10-06 · built 2026-10-07 (PRs #12–#17 into `wide-tables`, #11 into `master`).
+See [As built](#as-built) for what was implemented and the results.
 
 ## Problem
 
@@ -148,3 +149,169 @@ replaces.
   benchmark), sends fixes back, merges, and re-runs the suite and benchmark after
   each merge.
 - **Release:** the user approves merging into `master`.
+
+## As built
+
+### Results
+
+`bench/grid_bench.py`, 300 float columns × 5000 rows, CPU ms per operation (the
+16-column file is unchanged within noise):
+
+| operation | before | after | target |
+|---|---|---|---|
+| startup | 2197 | 550 | ≤ 1000 |
+| ↓ | 42 | 11 | ≤ 25 |
+| → | 582 | 26 | ≤ 50 |
+| PgDn | 1567 | 60 | ≤ 100 |
+| Ctrl+End | 2827 | 153 | ≤ 400 |
+| Ctrl+Home | 1874 | 95 | ≤ 400 |
+| End / Home | 979 / 1014 | 46 / 49 | ≤ 100 |
+| `f` | 1774 | 57 | ≤ 150 |
+| ↓ with Details | 137 | 36 | ≤ 50 |
+
+Real and large files (wall time, `bench/startup_bench.py` and ad-hoc timing):
+
+- SSSource (8M × 184, 1M-row row groups): grid usable in ~0.36 s; a page in
+  the middle of a row group 359 → 65 ms; jump to a far window ~920 → ~380 ms.
+- 2000 row groups × 300 columns: grid usable 10.4 → 1.2 s, Schema/Metadata
+  filled at ~3.4 s with no UI stall over ~100 ms. **Misses the 1 s target**: the
+  rest is DuckDB's own footer parse, needed for the result types; avoiding it
+  would mean predicting DuckDB's types without asking it.
+- Small row groups: a new window 250 ms–2 s → ~11 ms.
+
+Trade-offs: End on a fresh SSSource page costs ~+125 ms (far columns load on
+demand); the Details pane on a fresh mid-file SSSource page shows `…` for ~1 s
+while the page's other columns load; startup CPU on small files is ~60 ms
+higher (threads running in parallel), wall time is not.
+
+### A. Rendering (`GridTable` in `pqx/app.py`)
+
+`GridTable` keeps Textual's `DataTable` and overrides private methods:
+
+- `_render_line_in_row` bisects cached column start/end positions
+  (`_column_geometry`) for the columns overlapping the crop span
+  `[scroll_x + fixed_width, scroll_x + width)`, renders only those and stands in
+  one blank `Segment` of exact width on each side, so `_render_line`'s crop is
+  unchanged. Row labels and pinned columns always render; tables under three
+  screens wide render whole so their lines stay cached while scrolling sideways.
+- Its row-line cache key holds the cursor/hover only for the rows they touch,
+  plus the visible column range, a widths generation and the widget width: a ↓
+  re-renders two rows. Cell, row and line LRU caches are grown to a large
+  terminal's worth.
+- `render_lines` recomputes the geometry each frame and clears the caches when
+  any width changed (DataTable re-measures on idle without bumping
+  `_update_count`). `ordered_columns` is memoized.
+- `_render_cell` has a fast path for one-line plain `Text` (no spans, one
+  terminal cell per character): pad/body/pad segments are built directly, with
+  styles learnt once per style combination from a one-character Rich render
+  (`_cell_styles`). Anything else goes through Rich.
+- Guards: `tests/test_render.py` pins a SHA-256 of each overridden upstream
+  method (`UPSTREAM_SOURCE`); `GridTable.render_all_columns = True` restores the
+  upstream path and tests compare output line by line against it (cursor, hover,
+  pinning, header, focus/blur); `_render_cell` call counts must scale with
+  visible columns. `textual>=8.2,<9` is pinned: each Textual major needs a
+  deliberate port.
+
+### B. Cells formatted on first draw (`pqx/cells.py`)
+
+- `ColumnCells`: per column, the formatter, raw flag, a generation `gen` and
+  DataTable's `Column`. `Cell(value, col)` formats in `.text` on first access,
+  caches against `col.gen`, and calls `col.fit(width)`, which only grows
+  `content_width`. `__rich__`/`__str__` delegate to `.text`.
+- `CellRow(dict)` is what DataTable stores per row; `__missing__` makes a `Cell`
+  on first read. `RowCells` is a lazy positional view handed to DataTable by the
+  `_compute_row_renderables` override.
+- `GridTable.set_rows()` replaces `add_row`: bulk insert into DataTable's
+  `_row_locations`/`_data`/`rows`, no measuring.
+- `f`, `<`, `>`, `F` call `ColumnCells.invalidate()` (`gen += 1`): every cell of
+  the column re-formats when next drawn; no cell objects are touched.
+- Widths: `_fit_columns` fits each column up front to `widest_candidates` (the
+  values likely to format widest) or a sample of rows. `fit_visible()` runs on
+  every scroll and formats the cells about to be drawn before the draw,
+  re-measuring if any column grew and scrolling the cursor back into view if
+  that pushed it off screen — so a number is never shown cut off.
+
+### C. Details pane (`pqx/widgets.py`)
+
+Entries are `_LazyEntry` Visuals: a one-line value that fits reports height 1
+without building anything; others are measured by rendering. `EntryGrid` lays
+out `name  value` as `Table.grid(padding=(0, 2), expand=True)` would, without
+Table's measuring passes (falls back to a `Table` when too narrow).
+
+### D. Window fetch (`ParquetDataset.fetch` in `pqx/data.py`)
+
+- Trivial views try `_fetch_direct` → `_read_rows`: `_rg_starts()` + `bisect`
+  map the window to row groups and local ranges; `_read_rg` opens a fresh
+  `pq.ParquetFile` with the parsed footer (< 1 ms, nothing shared between
+  threads) and streams `iter_batches(row_groups=[rg], columns=…,
+  use_threads=False)`, skipping to the window and stopping when it has enough.
+  A 1 MB `buffer_size` bounds reads; small chunks use `pre_buffer`.
+- Identical results: a background thread binds DuckDB's Arrow types once
+  (`_bind_types`); pyarrow's result is cast to them only where `_castable` says
+  it's lossless. A column pyarrow can't read or cast goes to DuckDB from then on
+  (`_exclude_unreadable`); failing row groups go to `_bad_rgs`. INT96 is read as
+  µs, like DuckDB. `_fix_wide_decimals` re-reads decimals wider than 38 digits
+  directly, since DuckDB 1.5 misreads them.
+- Cost model `_direct_estimate`: pyarrow ≈ uncompressed bytes up to the last
+  needed row × `_PA_NS_PER_BYTE`; DuckDB ≈ base + per column + per row group in
+  the file (scan setup) + skipping at `_DUCK_SKIP_RATIO` of pyarrow's decode.
+  Fitted on synthetic and real files, refitted in #16 with DuckDB's metadata
+  cache on.
+- Cancellation: direct reads register a `_Cancel` token under the caller's tag
+  (checked between batches); `_handover` swaps it for a DuckDB cursor atomically
+  and raises if the read was superseded, so a stale fetch can't outlive a newer
+  one.
+- New API: `fetch_columns(file_rows, columns)` (contiguous rows read as a range,
+  scattered via `take`), `has_row_ids(view)`, `window_cost(offset, limit,
+  columns)`.
+
+### E. Lazy columns (`pqx/app.py`)
+
+- `Page.missing` lists unfetched columns; their values are `MISSING` (dim `…`)
+  or, after a failed fetch, `UNAVAILABLE` (red `✗`).
+- `load_window` bumps `_page_gen`, cancels every column fetch (tags don't
+  interrupt each other), and, if the view has row ids, fetches only
+  `grid.columns_near(target)` (pinned + one screen each side). **Deviation:**
+  plain views go lazy only if `window_cost` says that saves ≥
+  `LAZY_MIN_SAVING_MS` (20 ms); always-lazy made small files slower. Filtered
+  and sorted views are always lazy.
+- `_apply_page` drops a page whose `gen` isn't current. `_ensure_columns` (on
+  `HScroll`, page apply, fetch completion, pinning, page failure) fetches the
+  missing columns within two screens when any within one is missing, under tag
+  `cols`; `_inflight[tag] = (seq, gen, names)` tracks fetches, and columns the
+  Details fetch will bring are skipped.
+- `_columns_done` merges only if the result is its tag's latest, `gen` is
+  current and `page is self.page`, and fills only columns still missing.
+  `CellRow.set_values` drops just those cells; if no width changed,
+  `GridTable.invalidate_columns` discards just their cached renderings (column
+  key is element 1 of the cell-cache key, pinned by a test).
+- Failures: an Esc-cancelled fetch sets `_cols_cancelled` and the next cursor
+  move retries; a failed fetch marks the columns `UNAVAILABLE` until the next
+  page; `_page_failed` restarts the fetches of the page still on screen.
+- `_reserve_widths` sizes missing columns from the page's row-group min/max
+  statistics (formatted) or a typical width for the kind.
+- Details fetches all of a page's missing columns once (debounced, tag
+  `detail`). `y`, `=`, `F` go through `_with_cursor_value`: a per-column
+  `cell:<name>` fetch with queued actions (`_cell_waiters`).
+- Views without row ids (SQL results; filtered/sorted views of files with their
+  own `file_row_number`) fetch every column.
+
+### F. Startup (`pqx/data.py`, `pqx/app.py`)
+
+- `ParquetDataset.__init__` starts the `pqx-types` thread first: DuckDB parses
+  the footer into its cache (`parquet_metadata_cache` in the connect config)
+  while pyarrow parses it on the main thread; `_schema_known` then lets it
+  create the views and bind types. `ds.con` is a property that waits on
+  `_ready` and re-raises a setup error; `__init__` sets the event and joins the
+  thread on any failure.
+- `ds.setup_error`: a file DuckDB can't read opens with a clear status line and
+  no queries; the pyarrow-based Schema/Metadata tabs still work.
+  **Behaviour change**: it used to exit with "cannot open".
+- One cached footer pass (`_footer_scan`) serves `column_chunk_summary()` and
+  `row_groups()`, comparing `min_raw`/`max_raw` for plain bool/int/float and
+  leaving encodings to `column_encodings`; `stop()` is checked per row group and
+  raises `Stopped` without caching.
+- Schema/Metadata start as "Reading …". The `read_footer` thread worker waits
+  for the first page and one refresh, runs the pass (`stop=worker.is_cancelled`,
+  so quitting is immediate), builds the row-group cells, and the UI adds them
+  250 rows per event-loop turn.
