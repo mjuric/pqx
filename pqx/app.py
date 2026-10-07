@@ -187,8 +187,8 @@ class GridTable(DataTable):
         self._row_render_cache.grow(4_000)
         self._line_cache.grow(4_000)
         self._geometry: tuple | None = None  # per-frame column positions; see _column_geometry
-        self._widths: tuple[int, ...] = ()
-        self._widths_gen = 0  # bumped whenever a column's render width changes
+        self._widths: tuple = ()  # (column render widths, row label width, row labels shown)
+        self._widths_gen = 0  # bumped whenever any of those change
 
     @property
     def ordered_columns(self) -> list:
@@ -201,6 +201,12 @@ class GridTable(DataTable):
 
     def render_lines(self, crop):
         self._geometry = None  # widths, scroll and size may all have changed since the last frame
+        gen = self._widths_gen
+        self._column_geometry()
+        if gen != self._widths_gen:
+            # DataTable re-measures columns on idle without bumping _update_count, and its cell
+            # and line caches don't key on width: drop them before this frame serves a stale line.
+            self._clear_caches()
         return super().render_lines(crop)
 
     def _column_geometry(self) -> tuple:
@@ -209,8 +215,9 @@ class GridTable(DataTable):
         if self._geometry is None:
             cols = self.ordered_columns
             widths = tuple(c.get_render_width(self) for c in cols)
-            if widths != self._widths:
-                self._widths = widths
+            sig = (widths, self._row_label_column_width, self._labelled_row_exists)
+            if sig != self._widths:
+                self._widths = sig
                 self._widths_gen += 1
             starts = list(accumulate(widths, initial=0))
             fixed = min(self.fixed_columns, len(cols))

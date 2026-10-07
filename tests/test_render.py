@@ -126,6 +126,33 @@ async def test_render_matches_datatable(wide300_path):
         await _check_look(pilot, app, g, "blurred")
 
 
+def _frame(g: GridTable) -> list:
+    """The grid's lines as a real frame draws them: through every cache but the per-refresh one."""
+    g._styles_cache.clear()
+    w, h = g.size
+    return [[(s.text, s.style) for s in strip] for strip in g.render_lines(Region(0, 0, w, h))]
+
+
+async def test_render_after_remeasure(wide300_path):
+    """DataTable re-measures column and row-label widths on idle without invalidating its caches:
+    a frame drawn before that must not leave lines at the old widths behind."""
+    app = PqxApp(wide300_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        g.move_cursor(column=1)  # a float column: < and > change its digits
+        await settle(pilot, app)
+        reloads = {"page": lambda: app._apply_page(app.page, g.abs_row, g.cursor_column),
+                   "raw": app.action_toggle_raw, "digits": lambda: app.action_step_digits(1)}
+        for what, reload in reloads.items():
+            reload()
+            assert g._require_update_dimensions, what  # not re-measured yet
+            _frame(g)  # drawn now, with the row labels' width still 0
+            await settle(pilot, app)
+            assert not g._require_update_dimensions, what
+            assert _frame(g) == _reference(g), what
+
+
 async def test_render_work_scales_with_visible_columns(wide300_path):
     """One → or ↓ must render (in cells) a screenful at most, not every column of every line."""
     app = PqxApp(wide300_path)
