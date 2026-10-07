@@ -16,6 +16,7 @@ dependencies = [
   "pyarrow>=14",
   "numpy>=1.23",
   "pytz",
+  "pyyaml>=5.1",
 ]
 
 [project.optional-dependencies]

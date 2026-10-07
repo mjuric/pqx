@@ -5,9 +5,10 @@ import pyarrow.parquet as pq
 import pytest
 from textual.worker import WorkerState
 from textual.widgets import DataTable, Input, OptionList, Static, TabbedContent
+from textual.widgets.data_table import ColumnKey
 
 from pqx.app import GridTable, PlotControls, PqxApp
-from pqx.screens import ColumnPicker, ExportScreen, GotoScreen, HelpScreen
+from pqx.screens import ColumnPicker, ExportScreen, FormatScreen, GotoScreen, HelpScreen
 
 SIZE = (150, 42)
 
@@ -469,3 +470,78 @@ async def test_ctrl_keys_tabs_and_clear(demo_path):
         await pilot.press("ctrl+x")
         await pilot.pause(0.1)
         assert inp.value == "" and app.view.is_trivial
+
+
+async def test_column_formats(demo_path, config_home):
+    from pqx import config
+
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        g.move_cursor(column=app.cols_shown.index("ra"))
+        ra = app.page.rows[g.cursor_row][g.cursor_column]
+
+        def cell():
+            return str(g.get_cell_at(g.cursor_coordinate))
+
+        assert cell() == f"{ra:.6f}"
+        await pilot.press("less_than_sign", "less_than_sign")
+        await pilot.pause(0.1)
+        assert cell() == f"{ra:.4f}"
+        assert config.load_formats() == {"ra": 4}
+        assert ".4f" in g.columns[ColumnKey("ra")].label.plain
+
+        await pilot.press("F")
+        assert isinstance(app.screen, FormatScreen)
+        inp = app.screen.query_one(Input)
+        assert inp.value == "4"
+        inp.value = ",d"  # doesn't fit a float: rejected in the dialog
+        await pilot.press("enter")
+        assert isinstance(app.screen, FormatScreen)
+        inp.value = ".2e"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert cell() == f"{ra:.2e}"
+        await pilot.press("greater_than_sign")
+        await pilot.pause(0.1)
+        assert cell() == f"{ra:.3e}" and config.load_formats() == {"ra": ".3e"}
+
+        g.move_cursor(column=app.cols_shown.index("band"))
+        await pilot.press("greater_than_sign")  # nothing to step on a string column
+        assert config.load_formats() == {"ra": ".3e"}
+
+    # remembered by the next session; --format wins for that session only
+    app = PqxApp(demo_path, formats={"dec": 2})
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        row = app.page.rows[0]
+        ra_i, dec_i = app.cols_shown.index("ra"), app.cols_shown.index("dec")
+        assert str(g.get_cell_at((0, ra_i))) == f"{row[ra_i]:.3e}"
+        assert str(g.get_cell_at((0, dec_i))) == f"{row[dec_i]:.2f}"
+        g.move_cursor(column=ra_i)
+        await pilot.press("F")
+        app.screen.query_one(Input).value = ""  # empty: back to automatic
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert str(g.get_cell_at((0, ra_i))) == f"{row[ra_i]:.6f}"
+        assert config.load_formats() == {}
+
+
+async def test_corrupt_formats_file(demo_path, config_home):
+    from pqx import config
+
+    p = config.formats_path()
+    p.parent.mkdir(parents=True)
+    p.write_text("columns: [oops\n")
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        assert app._config_error and app.col_formats == {}
+        g = app.query_one(GridTable)
+        g.move_cursor(column=app.cols_shown.index("ra"))
+        await pilot.press("less_than_sign")
+        await pilot.pause(0.1)
+        assert app.formatters["ra"].override == 5  # applies for the session...
+    assert p.read_text() == "columns: [oops\n"  # ...but never clobbers the file

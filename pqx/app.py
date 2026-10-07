@@ -28,12 +28,14 @@ from textual.message import Message
 from textual.suggester import Suggester
 from textual.theme import Theme
 from textual.widgets import DataTable, Input, Label, OptionList, Static, TabbedContent, TabPane
+from textual.widgets.data_table import ColumnKey
 
 from . import _terminal
+from . import config
 from . import fmt as F
 from . import plots
 from .data import ColumnStats, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec, quote_ident
-from .screens import ColumnPicker, ExportScreen, FieldDropdown, GotoScreen, HelpScreen
+from .screens import ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen, HelpScreen
 from .widgets import CursorList
 
 _terminal.install()  # X10/urxvt mouse (GNU screen) + lenient input decoding; see _terminal.py
@@ -55,7 +57,7 @@ SQL_WORDS = ["and", "or", "not", "is", "null", "between", "in", "like", "ilike",
 KEYS = {
     "tab-data": [("/", "filter"), ("x", "clear filter"), ("1-5", "tabs"), ("?", "help"), ("q", "quit"),
                  ("s", "sort"), ("=", "match cell"), ("d", "detail"), ("c", "columns"), ("g", "go to"),
-                 ("e", "export")],
+                 ("e", "export"), ("< > F", "format")],
     "tab-schema": [("↑↓", "column"), ("enter", "stats"), ("/", "filter"), ("1-5", "tabs"), ("?", "help"),
                    ("q", "quit")],
     "tab-stats": [("↑↓", "column"), ("l", "log counts"), ("L", "log values"), ("[ ]", "bins"),
@@ -148,6 +150,9 @@ class GridTable(DataTable):
         Binding("p", "app.pin_columns", "Pin", show=False),
         Binding("g", "app.goto", "Go to"),
         Binding("f", "app.toggle_raw", "Raw/smart", show=False),
+        Binding("less_than_sign", "app.step_digits(-1)", "Fewer digits", show=False),
+        Binding("greater_than_sign", "app.step_digits(1)", "More digits", show=False),
+        Binding("F", "app.set_format", "Format", show=False),
         Binding("y", "app.copy_cell", "Copy", show=False),
         Binding("i", "app.inspect_column", "Col stats", show=False),
     ]
@@ -410,7 +415,8 @@ class PqxApp(App):
 
     def __init__(self, path: str, *, where: str = "", theme: str | None = None,
                  sample: bool | None = None, threads: int | None = None,
-                 accent: str | None = None, dim: str | None = None, border: str | None = None):
+                 accent: str | None = None, dim: str | None = None, border: str | None = None,
+                 formats: dict[str, int | str] | None = None):
         super().__init__()
         self.ds = ParquetDataset(path, threads=threads)
         self.view = View(where=where) if where and not is_sql_query(where) else View(sql=where if where else "")
@@ -418,6 +424,13 @@ class PqxApp(App):
         self.cols_shown: list[str] = self.ds.column_names
         self.result_schema: list[tuple[str, pa.DataType]] = [(c.name, c.arrow_type) for c in self.ds.columns]
         self.formatters: dict[str, F.CellFormatter] = {}
+        # per-column overrides: saved ones (config.formats_path()), then this session's --format on top
+        self._config_error = ""
+        try:
+            self.col_formats: dict[str, int | str] = config.load_formats()
+        except config.ConfigError as e:
+            self.col_formats, self._config_error = {}, str(e)
+        self.col_formats.update(formats or {})
         self.raw = False
         self.page = None
         self.total: int | None = self.ds.num_rows if self.view.is_trivial else None
@@ -509,6 +522,9 @@ class PqxApp(App):
         self._render_tab_titles("tab-data")
         self.query_one("#filterbox").border_title = self._dim_markup("filter")
         self._setup_formatters(self.result_schema)
+        if self._config_error:
+            self.notify(f"Ignoring saved column formats: {self._config_error}", title="! Config",
+                        severity="warning", timeout=8)
         self.query_one("#detail").display = False
         grid = self.query_one(GridTable)
         grid.window = max(150, min(1000, 40_000 // max(1, len(self.cols_shown))))
@@ -710,24 +726,26 @@ class PqxApp(App):
             unit = ""
             if name in self.ds._by_name:
                 unit = self.ds.column(name).unit
-            self.formatters[name] = F.CellFormatter(name, typ, unit)
+            self.formatters[name] = F.CellFormatter(name, typ, unit, self.col_formats.get(name))
 
     def _rebuild_columns(self) -> None:
         grid = self.query_one(GridTable)
         grid.clear(columns=True)
-        types = dict(self.result_schema)
-        order = {c: d for c, d in self.view.order_by}
         for name in self.cols_shown:
-            typ = types.get(name, pa.string())
-            unit = self.ds.column(name).unit if name in self.ds._by_name else ""
-            arrow = ""
-            if name in order:
-                arrow = " ↓" if order[name] else " ↑"
-            fm = self.formatters.get(name) or F.CellFormatter(name, typ)
-            label = Text.assemble((name, "bold"), (arrow, "bold"), "\n",
-                                  (F.short_type(typ) + (f"·{unit}" if unit else ""), self.dim),
-                                  justify="right" if fm.right else "left")
-            grid.add_column(label, key=name)
+            grid.add_column(self._column_label(name), key=name)
+
+    def _column_label(self, name: str) -> Text:
+        """Two-line header: name and sort arrow; type, unit and any format override."""
+        typ = dict(self.result_schema).get(name, pa.string())
+        unit = self.ds.column(name).unit if name in self.ds._by_name else ""
+        order = dict(self.view.order_by)
+        arrow = (" ↓" if order[name] else " ↑") if name in order else ""
+        fm = self.formatters.get(name) or F.CellFormatter(name, typ)
+        override = F.describe_override(fm.override, fm.kind)
+        return Text.assemble((name, "bold"), (arrow, "bold"), "\n",
+                             (F.short_type(typ) + (f"·{unit}" if unit else ""), self.dim),
+                             (f"·{override}" if override else "", self.dim),
+                             justify="right" if fm.right else "left")
 
     @work(thread=True, exclusive=True, group="page")
     def load_window(self, offset: int, cursor_abs: int, column: int | None = None) -> None:
@@ -1102,6 +1120,61 @@ class PqxApp(App):
         grid = self.query_one(GridTable)
         if self.page is not None:
             self._apply_page(self.page, grid.abs_row, grid.cursor_column)
+
+    def _cursor_formatter(self) -> F.CellFormatter | None:
+        grid = self.query_one(GridTable)
+        if not self.cols_shown or grid.cursor_column >= len(self.cols_shown):
+            return None
+        name = self.cols_shown[grid.cursor_column]
+        if name not in self.formatters:
+            self.formatters[name] = F.CellFormatter(name, dict(self.result_schema).get(name, pa.string()))
+        return self.formatters[name]
+
+    def action_step_digits(self, delta: int) -> None:
+        fm = self._cursor_formatter()
+        if fm is None:
+            return
+        new = F.step_override(fm.override, fm.kind, delta)
+        if new is None:
+            self.notify(f"{fm.name} has no digits to change · F sets a format spec", severity="warning", timeout=3)
+            return
+        self._set_format(fm, new)
+
+    def action_set_format(self) -> None:
+        fm = self._cursor_formatter()
+        if fm is None:
+            return
+        _, sample = self._cursor_value()
+
+        def done(text):
+            if text is not None:
+                self._set_format(fm, config.parse_override(text))
+        self.push_screen(FormatScreen(fm.name, fm.override, sample), done)
+
+    def _set_format(self, fm: F.CellFormatter, value: int | str | None) -> None:
+        """Apply a column's format override (None = automatic), redraw, and remember it."""
+        fm.override = value
+        if value is None:
+            self.col_formats.pop(fm.name, None)
+        else:
+            self.col_formats[fm.name] = value
+        grid = self.query_one(GridTable)
+        col = grid.columns.get(ColumnKey(fm.name))
+        if col is not None:
+            col.label = self._column_label(fm.name)
+            col.content_width = max(line.cell_len for line in col.label.split())  # let it shrink to fit
+        if self.page is not None:
+            self._apply_page(self.page, grid.abs_row, grid.cursor_column)
+        if self._stats_shown == fm.name:
+            self._stats_stale = True
+        shown = F.describe_override(value, fm.kind) or "automatic"
+        try:
+            config.save_format(fm.name, value)
+        except (config.ConfigError, OSError) as e:
+            self.notify(f"{fm.name}: {shown}, for this session only — not saved: {e}",
+                        severity="warning", timeout=6)
+            return
+        self.notify(f"✓ {fm.name}: {shown}", timeout=2)
 
     def action_copy_cell(self) -> None:
         name, v = self._cursor_value()

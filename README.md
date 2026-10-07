@@ -50,6 +50,7 @@ without losing the current view.
 | `c` · `-` · `p` | choose columns · hide column · pin columns |
 | Home / End | first / last column; `‹` `›` beside the header mark hidden columns (click to page) |
 | `f` · `y` · `i` | raw/smart formatting · copy cell · stats for column |
+| `<` `>` · `F` | one digit fewer / more for the cursor column · set its format (`.2f`, `.3e`, `,d`, or a digit count; empty resets) |
 | `1`–`5` · `Ctrl+←` `Ctrl+→` | go to a tab · previous / next tab. The strip in the panel border reads `1 Data ─ 2 Schema ─ … ^← ^→`; names underline under the mouse and switch on click |
 | `e` | export the current view (filter + sort + visible columns) to Parquet/CSV/JSON |
 | `m` | toggle sampling for stats and plots |
@@ -59,6 +60,28 @@ without losing the current view.
 | `r` | Plot: rotate the sky-map centre between RA 0° and 180° |
 | Esc | cancel running queries / leave the filter bar |
 | `?` · `q` | help · quit |
+
+## Column formats
+
+Values get an automatic format from the column's name, type and unit (see the
+**Data** tab above). Any column can be overridden in the grid. `<` and `>` drop
+or add one digit: decimals for MJD, angle and magnitude columns, significant
+digits for other floats. `F` takes a Python format spec instead (`.2f`, `.3e`,
+`,d`, `.1%`), and an empty entry returns the column to automatic. An overridden
+column shows its format in the header, after the type and unit. Overrides change
+the grid and stats only; the detail panel and `y` keep full precision.
+
+Overrides are remembered by column name, for every file, in
+`~/.config/pqx/formats.yaml` (or `$XDG_CONFIG_HOME/pqx/formats.yaml`), which
+is easy to edit by hand:
+
+```yaml
+columns:
+  ra: .4f        # a format spec
+  psfFlux: 3     # 3 significant digits
+```
+
+`--format COL=SPEC` (repeatable) sets a format for one session without saving it.
 
 ## Look
 

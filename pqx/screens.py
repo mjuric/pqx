@@ -1,4 +1,4 @@
-"""Modal dialogs: help, go-to-row, column picker, export."""
+"""Modal dialogs: help, go-to-row, column format, column picker, export."""
 from __future__ import annotations
 
 import os
@@ -11,6 +11,9 @@ from textual.screen import ModalScreen
 from textual.widgets import (Button, Checkbox, Input, Label, Markdown, OptionList, RadioButton, RadioSet,
                              SelectionList)
 from textual.widgets.selection_list import Selection
+
+from . import fmt as F
+from .config import parse_override
 
 HELP = """\
 # pqx — Parquet explorer
@@ -47,8 +50,14 @@ The filter applies everywhere: grid, stats, plots and export.
 | **p** | pin columns up to the cursor (stay visible when scrolling right) |
 | Home / End | first / last column. **‹ ›** beside the header mean more columns that way (click to page); the panel's bottom edge reads e.g. *‹ 11 · columns 12–21 of 64 · 43 ›* |
 | **f** | toggle smart / raw number formatting |
+| **<** / **>** | one digit fewer / more for the cursor column (decimals for MJD, angles and magnitudes, significant digits otherwise) |
+| **F** | set the cursor column's format: a Python spec (`.2f`, `.3e`, `,d`) or a number of digits; empty resets it |
 | **y** | copy cell value to the clipboard |
 | **i** | open statistics for the cursor column |
+
+Column formats set with **<**, **>** and **F** are remembered by column name
+for every file, in `~/.config/pqx/formats.yaml` (under `$XDG_CONFIG_HOME` if set).
+They change only the grid and stats; the detail panel and **y** keep full precision.
 
 ## Everywhere
 
@@ -113,6 +122,42 @@ class GotoScreen(ModalScreen[str | None]):
     @on(Input.Submitted)
     def submitted(self, event: Input.Submitted) -> None:
         self.dismiss(event.value.strip() or None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class FormatScreen(ModalScreen[str | None]):
+    """Ask for a column's format. Dismisses with the text entered ("" resets), or None on Esc."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, column: str, current: int | str | None, sample):
+        super().__init__()
+        self.column = column
+        self.current = current
+        self.sample = sample
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog small"):
+            yield Label(f"[b]Format of[/b] [cyan]{self.column}[/cyan]")
+            yield Label("[dim].2f · .3e · ,d · .1% · 4 (digits) · empty = automatic[/dim]")
+            yield Input(value="" if self.current is None else str(self.current), placeholder="automatic",
+                        id="format-input")
+            yield Label("", id="format-error")
+
+    def on_mount(self) -> None:
+        self.query_one(Input).focus()
+
+    @on(Input.Submitted)
+    def submitted(self, event: Input.Submitted) -> None:
+        value = parse_override(event.value)
+        if isinstance(value, str):
+            err = F.check_spec(value, self.sample)
+            if err:
+                self.query_one("#format-error", Label).update(f"[red]✗[/red] {err}")
+                return
+        self.dismiss(event.value.strip())
 
     def action_cancel(self) -> None:
         self.dismiss(None)
