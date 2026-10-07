@@ -1,6 +1,8 @@
 """Small shared widgets."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from rich.cells import cell_len
 from rich.segment import Segment
 from rich.style import Style
@@ -12,6 +14,9 @@ from textual.binding import Binding
 from textual.visual import RichVisual, Visual
 from textual.widgets import OptionList
 from textual.widgets.option_list import Option
+
+if TYPE_CHECKING:
+    from typing_extensions import Self
 
 
 class CursorList(OptionList):
@@ -108,18 +113,20 @@ class _LazyEntry(Visual):
 
     def _rich(self) -> RichVisual:
         if self._visual is None:
-            self._visual = RichVisual(self._list, self._list._grid(self._name, self._value, False))
+            self._visual = RichVisual(self._list, self._list._grid(self._name, self._value, False, self._name_width))
         return self._visual
 
     @staticmethod
-    def one_line(value: Text, name_width: int, width: int) -> bool:
-        """Whether ``value`` surely fits on the entry's first line (no newline, tab or control character)."""
+    def one_line(name: str, value: Text, name_width: int, width: int) -> bool:
+        """Whether the entry is surely one line: a value that fits the value column,
+        and no newline, tab or control character in it or the name."""
         plain = value.plain
         vw = width - name_width - 2
-        return name_width >= 1 and vw >= 1 and plain.isprintable() and cell_len(plain) <= vw
+        return (name_width >= 1 and vw >= 1 and plain.isprintable() and name.isprintable()
+                and cell_len(plain) <= vw)
 
     def get_height(self, rules, width: int) -> int:
-        if self.one_line(self._value, self._name_width, width):
+        if self.one_line(self._name, self._value, self._name_width, width):
             return 1
         return self._rich().get_height(rules, width)
 
@@ -150,6 +157,7 @@ class DetailList(CursorList):
         self._items: list[tuple[str, Text]] = []
         self._name_width = 0
         self._hl: int | None = None
+        self._measured_width = 0
 
     def set_entries(self, entries: list[tuple[str, Text]], name_width: int) -> None:
         """Show ``(column, value)`` entries. When the columns are the same as
@@ -173,11 +181,22 @@ class DetailList(CursorList):
         self.clear_options()
         self.add_options([Option(self._prompt(k, False), id=n) for k, (n, _) in enumerate(entries)])
 
-    def replace_option_prompt_at_index(self, index: int, prompt) -> DetailList:
+    def _update_lines(self) -> None:
+        # OptionList measures entries at the width it first sees and doesn't
+        # measure again when only a scrollbar coming or going narrows it (no
+        # resize): start over whenever the width isn't the one measured at.
+        width = self.scrollable_content_region.width
+        if width != self._measured_width:
+            self._measured_width = width
+            self._option_render_cache.clear()
+            self._line_cache.clear()
+        super()._update_lines()
+
+    def replace_option_prompt_at_index(self, index: int, prompt) -> Self:
         """OptionList's, but when the entry keeps its height (a moving selection
         restyles two entries) only that entry is redrawn, not all in view."""
         option = self.get_option_at_index(index)
-        height = self._line_cache.heights.get(index)
+        height = self._heights.get(index)
         option._set_prompt(prompt)
         region = self.scrollable_content_region
         if height is None or not region:
@@ -189,8 +208,8 @@ class DetailList(CursorList):
             self._clear_caches()
             return self
         cache = self._option_render_cache
-        for key in [key for key in cache.keys() if key[0] is option]:
-            cache.discard(key)
+        for cache_key in [k for k in cache.keys() if k[0] is option]:
+            cache.discard(cache_key)
         self.refresh()
         return self
 
@@ -210,11 +229,11 @@ class DetailList(CursorList):
         if not highlighted:  # built when drawn: a row change costs what's in view, not every column
             return _LazyEntry(self, name, value, self._name_width)
         whole = self.has_focus if focused is None else focused
-        grid = self._grid(name, value, not whole)
+        grid = self._grid(name, value, not whole, self._name_width)
         return Styled(grid, "reverse") if whole else grid
 
-    def _grid(self, name: str, value: Text, name_reversed: bool) -> EntryGrid:
-        return EntryGrid(Text(name, style="bold reverse" if name_reversed else "bold"), value, self._name_width)
+    def _grid(self, name: str, value: Text, name_reversed: bool, name_width: int) -> EntryGrid:
+        return EntryGrid(Text(name, style="bold reverse" if name_reversed else "bold"), value, name_width)
 
     def watch_has_focus(self, has_focus: bool) -> None:
         super().watch_has_focus(has_focus)

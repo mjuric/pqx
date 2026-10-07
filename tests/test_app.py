@@ -1138,7 +1138,42 @@ def test_detail_entry_layout_matches_rich_grid():
         base = rnd.choice([None, "reverse", "on blue"])
         grid = EntryGrid(name, value, nw)
         assert lines(grid, width, base) == lines(grid.table(), width, base), (width, nw, name, value)
-        if _LazyEntry.one_line(value, nw, width):  # the quick answer
+        if _LazyEntry.one_line(name.plain, value, nw, width):  # the quick answer
             assert len(lines(grid.table(), width, None)) == 1, (width, nw, value)
             quick += 1
     assert quick > 100
+    assert not _LazyEntry.one_line("two\nlines", Text("1.5"), 10, 40)  # a name can break the line too
+
+
+async def test_detail_pane_heights_follow_its_width_and_prompts(demo_path):
+    """Entries are measured again when a scrollbar coming or going narrows or
+    widens the pane, and when a prompt is replaced by one of another height."""
+    from rich.text import Text
+
+    from pqx.widgets import DetailList
+
+    app = PqxApp(demo_path)
+    async with app.run_test(size=(150, 30)) as pilot:
+        await settle(pilot, app)
+        lst = app.query_one(DetailList)
+        await pilot.press("d")
+        await pilot.pause(0.1)
+        lst.set_entries([("a", Text("1"))], 4)  # short: no scrollbar
+        await pilot.pause(0.1)
+        assert not lst.show_vertical_scrollbar
+        width = lst.scrollable_content_region.width
+        long = "x" * (width - 4 - 2)  # just fits the value column without a scrollbar
+        lst.set_entries([(f"c{i}", Text(long if i == 3 else str(i))) for i in range(60)], 4)
+        lst.select("c0")  # (not the long one: a new selection of another height re-measured everything)
+        await pilot.pause(0.1)
+        assert lst.show_vertical_scrollbar and lst.scrollable_content_region.width == width - 1
+        assert lst._heights[3] == 2  # one column narrower: the long value wraps
+        assert lst.virtual_size.height == 61
+        top = lst._index_to_line[3] - lst.scroll_offset.y
+        drawn = "".join(lst.render_line(top + i).text for i in range(2))
+        assert "".join(drawn.split()) == "c3" + long  # nothing of it lost
+
+        lst.replace_option_prompt_at_index(0, Text("1\n2\n3"))  # the selection, a new height
+        await pilot.pause(0.05)
+        assert lst._heights[0] == 3 and lst.virtual_size.height == 63
+
