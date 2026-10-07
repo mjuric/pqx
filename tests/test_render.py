@@ -318,3 +318,18 @@ async def test_render_matches_datatable_styled_cells(styled_path):
         await _check_look(pilot, app, g, "pinned, scrolled")
         g.blur()
         await _check_look(pilot, app, g, "blurred")
+
+
+@pytest.mark.parametrize("size,keys", [(SIZE, ["end", "p"]), ((80, 24), ["end", "left", "left", "p"])])
+async def test_pin_while_scrolled_right(wide300_path, size, keys):
+    """Pinning far right puts the scrollable part's left edge past the table's end: no crash,
+    and still drawn like DataTable."""
+    app = PqxApp(wide300_path)
+    async with app.run_test(size=size) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        for k in keys:
+            await pilot.press(k)
+            await settle(pilot, app)
+        assert g.fixed_columns > 200
+        await _check_look(pilot, app, g, "pinned far right")

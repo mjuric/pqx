@@ -293,8 +293,8 @@ class GridTable(DataTable):
 
         row_style = self._get_row_style(row_index, base_style)
         scrollable_row = []
-        if lo:
-            scrollable_row.append([Segment(" " * starts[lo])])  # columns left of the view
+        if lo:  # columns left of the view (all of them, when pinned ones push x1 past the end)
+            scrollable_row.append([Segment(" " * (starts[lo] if lo < len(cols) else ends[-1]))])
         for column_index in range(lo, hi):
             loc = Coordinate(row_index, column_index)
             scrollable_row.append(render_cell(
