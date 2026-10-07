@@ -213,3 +213,67 @@ async def test_raw_toggle_and_format_change_redraw(demo_path):
         need = max(max(text_width(F.CellFormatter("ra", pa.float64(), "", 0)(r[ra_i])) for r in app.page.rows),
                    max(t.cell_len for t in header.split()))
         assert narrow == need
+
+
+async def test_pinning_fits_the_columns_it_brings_into_view(tmp_path):
+    n = 1000
+    blobs = [b""] * n
+    blobs[503] = bytes(range(40))
+    data = {"id": np.arange(n), "blob": pa.array(blobs, type=pa.binary())}
+    for i in range(20):
+        data[f"c{i}"] = np.random.default_rng(i).normal(size=n)
+    p = tmp_path / "pin.parquet"
+    pq.write_table(pa.table(data), p)
+    need = len(F.format_value(blobs[503], "binary"))
+    app = PqxApp(str(p))
+    async with app.run_test(size=(80, 30)) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        g.move_cursor(column=1)
+        await settle(pilot, app)
+        g.scroll_to(x=60, y=495, animate=False)  # the blob column off to the left, row 503 on screen
+        await settle(pilot, app)
+        assert g.ordered_columns[1].content_width < need
+        drawn = []
+        orig = g.render_lines
+
+        def spy(crop):
+            drawn.append(g.ordered_columns[1].content_width)
+            return orig(crop)
+
+        g.render_lines = spy
+        await pilot.press("p")  # pins id and blob: blob comes into view without a scroll
+        await settle(pilot, app)
+        assert g.fixed_columns == 2 and drawn and min(drawn) == need
+
+
+def _cursor_in_view(g) -> bool:
+    r = g._get_cell_region(g.cursor_coordinate)
+    left = g._get_fixed_offset()[3]
+    return g.scroll_x + left <= r.x and r.right <= g.scroll_x + g.scrollable_content_region.width
+
+
+async def test_cursor_stays_in_view_at_the_far_right(demo_path):
+    """Rebuilding columns or re-formatting (which widens columns left of the cursor)
+    must leave the cursor cell fully on screen."""
+    from pqx.screens import ColumnPicker
+
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        for what in ("s", "minus", "c", "filter", "f", "f", "greater_than_sign", "less_than_sign"):
+            await pilot.press("end")
+            await settle(pilot, app)
+            assert g.scroll_x > 0 and _cursor_in_view(g)
+            if what == "c":
+                await pilot.press("c")
+                assert isinstance(app.screen, ColumnPicker)
+                await pilot.press("ctrl+a")
+                await pilot.click("#apply")
+            elif what == "filter":
+                await pilot.press("slash", *"mag < 30", "enter")
+            else:
+                await pilot.press(what)
+            await settle(pilot, app)
+            assert _cursor_in_view(g), what

@@ -193,6 +193,8 @@ class GridTable(DataTable):
         self._geometry: tuple | None = None  # per-frame column positions; see _column_geometry
         self._widths: tuple = ()  # (column render widths, row label width, row labels shown)
         self._widths_gen = 0  # bumped whenever any of those change
+        #: per column, in column order: what its cells share (see pqx.cells); set by set_rows
+        self.cell_columns: list[ColumnCells] = []
 
     @property
     def ordered_columns(self) -> list:
@@ -375,9 +377,14 @@ class GridTable(DataTable):
         return max(1, self.scrollable_content_region.height - self.header_height - 1)
 
     # ------------------------------------------------------- lazy cells
-    #: per column, in column order: what its cells share (see pqx.cells); set by set_rows
-    cell_columns: list[ColumnCells] = []
-    _widen_pending: bool = False
+    # Cells format on first draw (pqx.cells) and widen their column if they don't fit.
+    # Growth found while fitting cells for a draw (fit_visible, or a caller's sizing()
+    # block) is drawn by that same draw; growth found anywhere else (a renderer
+    # formatting a cell nobody fitted) schedules one relayout for the batch.
+    _sizing: bool = False  # inside sizing(): growth needn't schedule a relayout
+    _growth: int = 0  # how many times a column has widened (fit_visible compares before/after)
+    _relayout_pending: bool = False
+    FIT_PASSES = 4  # fit_visible: widening a column can bring others into view; this many rounds at most
 
     def clear(self, columns: bool = False):
         self.cell_columns = []
@@ -439,33 +446,24 @@ class GridTable(DataTable):
         self._update_dimensions(new_rows)
 
     def _widened(self) -> None:
-        """A cell outgrew its column: redraw with the new widths, once per batch of growth."""
-        if self._sizing:
-            self._grew = True
-        elif not self._widen_pending:
-            self._widen_pending = True
+        """A cell outgrew its column (ColumnCells.on_grow)."""
+        self._growth += 1
+        if not self._sizing and not self._relayout_pending:
+            self._relayout_pending = True
             self.call_later(self._relayout)
 
     def _relayout(self) -> None:
-        self._widen_pending = False
+        self._relayout_pending = False
         self.invalidate_cells()
-
-    _sizing: bool = False
-    _grew: bool = False
 
     @contextmanager
     def sizing(self):
-        """Columns widened inside this block are drawn by the caller's own redraw: no extra one.
-
-        Yields a function telling whether any column grew in the block."""
-        outer, outer_grew = self._sizing, self._grew
-        self._sizing, self._grew = True, False
-        grew = [False]
+        """Columns widened inside this block are drawn by the caller's own redraw: no extra one."""
+        outer, self._sizing = self._sizing, True
         try:
-            yield lambda: grew[0]
+            yield
         finally:
-            grew[0] = self._grew
-            self._sizing, self._grew = outer, outer_grew or self._grew
+            self._sizing = outer
 
     def visible_cells(self) -> tuple[range, list[int]]:
         """Rows and columns (indices) on screen at the current scroll position, partly visible ones included."""
@@ -494,15 +492,32 @@ class GridTable(DataTable):
         before the draw: a number is never shown cut off, even for a frame."""
         if not self.cell_columns or not self.row_count or self._sizing:
             return
-        for _ in range(4):  # a column that grows can bring others into view
-            with self.sizing() as grew:
+        for _ in range(self.FIT_PASSES):
+            before = self._growth
+            with self.sizing():
                 rows, cols = self.visible_cells()
                 self.fit_columns(rows, cols)
-            if not grew():
+            if self._growth == before:
                 return
             self._update_count += 1  # every DataTable render cache is keyed on it
             self.update_dimensions_now()
             self.refresh()
+
+    def scroll_cursor_fitted(self) -> None:
+        """Scroll the cursor cell into view, with the cells on screen fitted.
+
+        Fitting can widen the cursor's column, or columns left of it, after the
+        scroll: scroll again until nothing moves."""
+        for _ in range(self.FIT_PASSES):
+            self.fit_visible()
+            before = self.scroll_offset
+            self._scroll_cursor_into_view()
+            if self.scroll_offset == before:
+                return
+
+    def watch_fixed_columns(self) -> None:
+        super().watch_fixed_columns()
+        self.fit_visible()  # pinning brings columns into view without scrolling
 
     def invalidate_cells(self) -> None:
         """Cells' text or column widths changed: drop rendered cells and lines, re-measure, redraw."""
@@ -1107,9 +1122,11 @@ class PqxApp(App):
         if page.rows:
             r = max(0, min(len(page.rows) - 1, cursor_abs - page.offset))
             with grid.sizing():  # fit what's on screen once, where the scrolling ends
+                grid.scroll_x = scroll_x  # first: the cursor must end up in view, wherever this was
                 grid.move_cursor(row=r, column=min(col, max(0, len(self.cols_shown) - 1)), animate=False)
-                grid.scroll_x = scroll_x
-        grid.fit_visible()
+            grid.scroll_cursor_fitted()
+        else:
+            grid.fit_visible()
         if self.total is None and len(page.rows) < grid.window:
             self.total = page.offset + len(page.rows)  # hit the end: we now know the size
             grid.total = self.total
@@ -1536,7 +1553,7 @@ class PqxApp(App):
             cc.invalidate(self.raw)
         self._fit_columns()
         grid.invalidate_cells()
-        grid.fit_visible()
+        grid.scroll_cursor_fitted()  # columns left of the cursor may have widened
         self._render_status()
 
     def _cursor_formatter(self) -> F.CellFormatter | None:
@@ -1591,7 +1608,7 @@ class PqxApp(App):
                 with grid.sizing():
                     grid.fit_columns(columns=[i])
         grid.invalidate_cells()
-        grid.fit_visible()
+        grid.scroll_cursor_fitted()
         if (self._stats_rendered and self._stats_rendered[0] is self.view and self._stats_rendered[1] == fm.name
                 and not self._stats_stale):
             self._render_stats(*self._stats_rendered[1:])  # reformat what's shown; no need to re-profile
