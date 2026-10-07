@@ -7,7 +7,7 @@ import sys
 
 from . import __version__
 from .config import parse_override
-from .fmt import override_error
+from .fmt import override_error, sanitize
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -50,17 +50,17 @@ def main(argv: list[str] | None = None) -> int:
         formats[name] = parse_override(spec)
         err = override_error(formats[name])
         if err:
-            p.error(f"--format {item}: {err}")
+            p.error(f"--format {sanitize(item)}: {sanitize(err)}")
 
     if not os.path.exists(a.path):
-        print(f"pqx: {a.path}: no such file", file=sys.stderr)
+        print(f"pqx: {sanitize(a.path)}: no such file", file=sys.stderr)
         return 2
     try:
         from .app import PqxApp
         app = PqxApp(a.path, where=a.where, theme=a.theme, sample=a.sample, threads=a.threads,
                      accent=a.accent, dim=a.dim, border=a.border, formats=formats)
     except Exception as e:  # noqa: BLE001 — surface unreadable files cleanly
-        print(f"pqx: cannot open {a.path}: {e}", file=sys.stderr)
+        print(f"pqx: cannot open {sanitize(a.path)}: {sanitize(str(e))}", file=sys.stderr)  # (both may hold the file's name)
         return 1
     app.run()
     return 0

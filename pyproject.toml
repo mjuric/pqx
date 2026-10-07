@@ -13,7 +13,7 @@ requires-python = ">=3.10"
 dependencies = [
   "textual>=8.2,<9",  # GridTable overrides a private DataTable renderer (see docs/design/wide-tables.md)
   "duckdb>=1.1",
-  "pyarrow>=14",
+  "pyarrow>=15",  # (14.0.0 and older: CVE-2023-47248, arbitrary code execution reading IPC/Parquet)
   "numpy>=1.23",
   "pytz",
   "pyyaml>=5.1",
