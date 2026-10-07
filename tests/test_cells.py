@@ -358,7 +358,7 @@ async def test_cursor_in_view_when_its_column_widens_on_screen(late_blob_path):
         frames = _spy_frames(g)
         # the cursor off screen to the right, set without DataTable's own scrolling
         g.set_reactive(GridTable.cursor_coordinate, Coordinate(5, len(g.columns) - 1))
-        g.scroll_cursor_fitted()  # scrolling to it draws its long cells: it grows, so it must scroll again
+        g.scroll_cursor_fitted()  # scrolling to it draws its long cells: it grows, so the view must follow
         assert blob.content_width > short and _cursor_in_view(g)
         await settle(pilot, app)
         assert _cursor_in_view(g) and all(frames)

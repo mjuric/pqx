@@ -609,19 +609,12 @@ class GridTable(DataTable):
                 and region.right <= self.scroll_x + self.scrollable_content_region.width)
 
     def scroll_cursor_fitted(self) -> None:
-        """Scroll the cursor cell into view, with the cells on screen fitted.
-
-        Fitting can widen the cursor's column, or columns left of it, after the
-        scroll: scroll again until nothing moves."""
-        if not self.row_count:
-            self.fit_visible()
-            return
-        for _ in range(self.FIT_PASSES):
-            self.fit_visible()
-            before = self.scroll_offset
-            self._scroll_cursor_into_view()  # the scroll's own fitting may widen columns again
-            if self.scroll_offset == before:
-                return
+        """Fit the cells on screen, then scroll the cursor cell into view (for after a
+        re-format, which can widen columns left of the cursor). The scroll's own fitting
+        keeps it in view if its column then widens (see fit_visible)."""
+        self.fit_visible()
+        if self.row_count:
+            self._scroll_cursor_into_view()
 
     def watch_fixed_columns(self) -> None:
         super().watch_fixed_columns()
