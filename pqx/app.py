@@ -39,6 +39,7 @@ from textual.theme import Theme
 from textual.widgets import DataTable, Input, Label, OptionList, Static, TabbedContent, TabPane
 from textual.widgets._data_table import RowRenderables, default_cell_formatter
 from textual.widgets.data_table import ColumnKey, Row, RowKey
+from textual.worker import get_current_worker
 
 from . import _terminal
 from . import config
@@ -55,6 +56,7 @@ SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SAMPLE_ROWS = 2_000_000       # rows used for stats/plots when sampling
 AUTO_SAMPLE_ROWS = 200_000_000        # sampling defaults on above this many rows…
 AUTO_SAMPLE_BYTES = 8 * 1024 ** 3     # …or this file size
+FOOTER_WAIT = 2.0                     # s: Schema/Metadata wait at most this long for the grid's first page
 WIDTH_SAMPLE_ROWS = 16        # rows spread through a window that size its non-numeric columns
 
 ACCENTS = ("blue", "cyan", "magenta", "green", "yellow")
@@ -958,8 +960,8 @@ class PqxApp(App):
         grid = self.query_one(GridTable)
         grid.window = max(150, min(1000, 40_000 // max(1, len(self.cols_shown))))
         grid.total = self.total
-        self._build_schema_tab()
-        self._build_meta_tab()
+        self._init_schema_tab()
+        self._init_meta_tab()
         self._build_stats_list()
         self._init_plot_controls()
         self.set_interval(0.1, self._tick)
@@ -968,6 +970,7 @@ class PqxApp(App):
         else:
             self._rebuild_columns()
             self.load_window(0, 0)
+        self.read_footer()  # after the first page's fetch: Schema and Metadata fill in when it's done
         grid.focus()
         self._render_keys()
 
@@ -1826,9 +1829,12 @@ class PqxApp(App):
                                            f"\n→ {opts['path']}", timeout=8)
 
     # ------------------------------------------------------------ schema tab
-    def _build_schema_tab(self) -> None:
+    # Schema and Metadata need a pass over every column chunk in the footer (sizes,
+    # statistics): seconds for thousands of row groups x hundreds of columns. So
+    # they're set up empty with the grid, read_footer does the pass on a thread,
+    # and they fill in when it's done.
+    def _init_schema_tab(self) -> None:
         t = self.query_one("#schema-table", DataTable)
-        d = self.dim
         # A missing unit is a dim "–", never a blank: blank unit cells next to the
         # right-aligned null counts made those read as units. The null share has its
         # own column so the counts stay narrow and line up under their header.
@@ -1836,8 +1842,48 @@ class PqxApp(App):
                 ("null %", True), ("min", True), ("max", True), ("size", True), ("ratio", True)]
         for label, right in cols:
             t.add_column(Text(label, style="bold", justify="right" if right else "left"), key=label)
-        summ = {s["path"]: s for s in self.ds.column_chunk_summary()}
-        self._schema_info = {}
+        self._schema_info: dict[str, tuple] = {}
+        self._schema_skip = 0  # highlights to take as the table being built, not as the user moving
+        md = self.ds.meta
+        self.query_one("#schema-desc", Static).update(Text.assemble(
+            "Reading sizes and statistics from the footer …",
+            (f"   {md.num_row_groups:,} row groups × {md.num_columns:,} columns", self.dim)))
+
+    @work(thread=True, exclusive=True, group="footer")
+    def read_footer(self) -> None:
+        # The pass is Python (it holds the GIL) and converting timestamp statistics imports pandas
+        # (~0.3 s): let the grid's first page in first, unless that's taking a while.
+        worker = get_current_worker()
+        deadline = time.monotonic() + FOOTER_WAIT
+        while self.page is None and time.monotonic() < deadline:
+            if worker.is_cancelled:  # quitting
+                return
+            time.sleep(0.01)
+        try:
+            summ = self.ds.column_chunk_summary()
+            rgs = self.ds.row_groups()
+        except Exception as e:  # noqa: BLE001 - say so in both tabs; the rest of pqx works without it
+            self.call_from_thread(self._footer_failed, e)
+            return
+        self.call_from_thread(self._build_footer_tabs, summ, rgs)
+
+    @_ui
+    def _build_footer_tabs(self, summ: list[dict], rgs: list[dict]) -> None:
+        self._build_schema_tab(summ)
+        self._build_meta_footer(summ, rgs)
+
+    @_ui
+    def _footer_failed(self, e: Exception) -> None:
+        msg = Text.assemble(("✗", "red"), " Couldn't read the footer's statistics", (f"   {e}", self.dim))
+        self.query_one("#schema-desc", Static).update(msg)
+        self.query_one("#meta-status", Static).update(msg)
+
+    def _build_schema_tab(self, summ_list: list[dict]) -> None:
+        t = self.query_one("#schema-table", DataTable)
+        d = self.dim
+        summ = {s["path"]: s for s in summ_list}
+        info = {}
+        rows = []
         for i, c in enumerate(self.ds.columns):
             s = summ.get(c.name)
             fm = F.CellFormatter(c.name, c.arrow_type, c.unit)
@@ -1846,15 +1892,14 @@ class PqxApp(App):
                 size = sum(v["compressed"] for v in leaves)
                 usize = sum(v["uncompressed"] for v in leaves)
                 mn = mx = nulls = None
-                enc, comp = "", (leaves[0]["compression"] if leaves else "")
+                comp = leaves[0]["compression"] if leaves else ""
             else:
                 size, usize = s["compressed"], s["uncompressed"]
                 mn, mx = s["min"], s["max"]
                 nulls = s["nulls"] if s["has_stats"] else None
-                enc = ", ".join(sorted(e.replace("RLE_DICTIONARY", "dict").lower() for e in s["encodings"]))
                 comp = s["compression"]
             ratio = f"{usize / size:.1f}×" if size else ""
-            self._schema_info[c.name] = (i, size, ratio, str(comp).lower(), enc)
+            info[c.name] = (i, size, ratio, str(comp).lower(), s is not None)
             if nulls is None:
                 null_n, null_p = Text("–", style=d, justify="right"), Text("")
             elif nulls:
@@ -1868,17 +1913,40 @@ class PqxApp(App):
                       fm(mn) if mn is not None else Text("–", style=d, justify="right"),
                       fm(mx) if mx is not None else Text("–", style=d, justify="right"),
                       Text(F.human_bytes(size), justify="right"), Text(ratio, style=d, justify="right")]
-            t.add_row(*cells, key=c.name)
+            rows.append((cells, c.name))
+        self._schema_info = info
+        # adding the first row highlights it: that's not the user moving
+        self._schema_skip = int(bool(rows) and t.show_cursor and t.cursor_type != "none")
+        for cells, key in rows:
+            t.add_row(*cells, key=key)
+        if self._tab_is("tab-schema"):  # built while shown: go to the current column now
+            self._sync_schema()
+
+    def _sync_schema(self) -> None:
+        """Put the Schema cursor on the current column (its highlight event updates the description)."""
+        t = self.query_one("#schema-table", DataTable)
+        # SQL-result columns may not be in the file: then Schema keeps its own cursor
+        if self.current_column in self._schema_info:
+            row = t.get_row_index(self.current_column)
+            if t.cursor_row != row:
+                t.move_cursor(row=row, animate=False)
 
     @on(DataTable.RowHighlighted, "#schema-table")
     def schema_row(self, event: DataTable.RowHighlighted) -> None:
         name = str(event.row_key.value) if event.row_key else None
-        if name is None or name not in self.ds._by_name:
+        building = self._schema_skip > 0
+        if building:
+            self._schema_skip -= 1
+        if name is None or name not in self._schema_info:
             return
-        if self._tab_is("tab-schema"):  # not the highlight the table gets when it's built
+        if self._tab_is("tab-schema") and not building:
             self.set_current_column(name, "schema")
         c = self.ds.column(name)
-        i, size, ratio, comp, enc = self._schema_info[name]
+        i, size, ratio, comp, leaf = self._schema_info[name]
+        enc = ""
+        if leaf:
+            enc = ", ".join(sorted(e.replace("RLE_DICTIONARY", "dict").lower()
+                                   for e in self.ds.column_encodings(name)))
         d = self.dim
         t = Text.assemble((c.name, "bold cyan"), f"   {c.arrow_type}", (f"   [{c.unit}]" if c.unit else ""),
                           (f"   {'nullable' if c.nullable else 'not null'}  ·  {F.human_bytes(size)}"
@@ -1894,48 +1962,16 @@ class PqxApp(App):
         self._show_stats_for(str(event.row_key.value))
 
     # ---------------------------------------------------------- metadata tab
-    def _build_meta_tab(self) -> None:
+    def _init_meta_tab(self) -> None:
         ds, md, d = self.ds, self.ds.meta, self.dim
-        rgs = ds.row_groups()
-        avg_rg = (sum(r["rows"] for r in rgs) / len(rgs)) if rgs else 0
-        comp = sum(r["compressed"] for r in rgs)
-        unc = sum(r["uncompressed"] for r in rgs)
-        ov = Table.grid(padding=(0, 2))
-        ov.add_column(style=d, no_wrap=True)
-        ov.add_column()
-        rows = [
-            ("path", Text.assemble((os.path.basename(ds.path), "cyan"), (f"   {os.path.dirname(ds.path)}/", d))),
-            ("file size", Text.assemble(F.human_bytes(ds.file_size), (f"   {ds.file_size:,} bytes", d))),
-            ("rows", Text(f"{ds.num_rows:,}")),
-            ("columns", Text.assemble(f"{len(ds.columns)}", (f"   {md.num_columns} leaf", d))),
-            ("row groups", Text.assemble(f"{md.num_row_groups:,}", (f"   ~{avg_rg:,.0f} rows each", d))),
-            ("data", Text.assemble(F.human_bytes(comp), (f"   compressed  ·  {F.human_bytes(unc)} raw"
-                                                         + (f"  ·  {unc / comp:.2f}×" if comp else ""), d))),
-            ("format", Text(str(md.format_version))),
-            ("created by", Text(str(md.created_by or "?"))),
-            ("footer", Text(F.human_bytes(md.serialized_size))),
-        ]
-        for k, v in rows:
-            ov.add_row(k, v)
-        self.query_one("#meta-overview", Static).update(ov)
+        self._render_meta_overview(None)
         t = self.query_one("#rowgroups", DataTable)
         for label, right in [("#", True), ("first row", True), ("rows", True), ("compressed", True), ("", False),
                              ("ratio", True)]:
             t.add_column(Text(label, style="bold", justify="right" if right else "left"))
-        cmax = max((r["compressed"] for r in rgs), default=1) or 1
-        for r in rgs[:5000]:
-            n = round(10 * r["compressed"] / cmax)
-            bar = Text.assemble("▰" * n, ("▱" * (10 - n), d))
-            t.add_row(Text(str(r["index"]), style=d, justify="right"), Text(f"{r['start']:,}", justify="right"),
-                      Text(f"{r['rows']:,}", justify="right"), Text(F.human_bytes(r["compressed"]), justify="right"),
-                      bar, Text(f"{r['uncompressed'] / r['compressed']:.2f}×" if r["compressed"] else "", style=d,
-                                justify="right"))
-        self.query_one("#meta-rg-panel").border_title = self._dim_markup(f"row groups  {len(rgs):,}")
-        n_stats = sum(1 for s in ds.column_chunk_summary() if s["has_stats"])
-        st = Text.assemble(("✓", "green"), " Footer read",
-                           (f"   {F.human_bytes(md.serialized_size)}  ·  {md.num_row_groups:,} row groups  ·  "
-                            f"stats on {n_stats}/{md.num_columns} columns", d))
-        self.query_one("#meta-status", Static).update(st)
+        self.query_one("#meta-rg-panel").border_title = self._dim_markup(f"row groups  {md.num_row_groups:,}")
+        self.query_one("#meta-status", Static).update(Text.assemble(
+            "Reading the footer …", (f"   {F.human_bytes(md.serialized_size)}  ·  {md.num_row_groups:,} row groups", d)))
         kv = ds.key_value_metadata()
         parts = [Text(""), Text("key-value metadata", style="bold")]
         from rich.json import JSON
@@ -1951,6 +1987,56 @@ class PqxApp(App):
         if len(parts) == 2:
             parts.append(Text("none", style=d))
         self.query_one("#meta-kv", Static).update(Group(*parts))
+
+    def _render_meta_overview(self, rgs: list[dict] | None) -> None:
+        """The file overview; ``rgs`` (``ds.row_groups()``) fills in the per-row-group figures."""
+        ds, md, d = self.ds, self.ds.meta, self.dim
+        ov = Table.grid(padding=(0, 2))
+        ov.add_column(style=d, no_wrap=True)
+        ov.add_column()
+        if rgs is None:
+            groups = Text(f"{md.num_row_groups:,}")
+            data = Text("…", style=d)
+        else:
+            avg_rg = (sum(r["rows"] for r in rgs) / len(rgs)) if rgs else 0
+            comp = sum(r["compressed"] for r in rgs)
+            unc = sum(r["uncompressed"] for r in rgs)
+            groups = Text.assemble(f"{md.num_row_groups:,}", (f"   ~{avg_rg:,.0f} rows each", d))
+            data = Text.assemble(F.human_bytes(comp), (f"   compressed  ·  {F.human_bytes(unc)} raw"
+                                                       + (f"  ·  {unc / comp:.2f}×" if comp else ""), d))
+        rows = [
+            ("path", Text.assemble((os.path.basename(ds.path), "cyan"), (f"   {os.path.dirname(ds.path)}/", d))),
+            ("file size", Text.assemble(F.human_bytes(ds.file_size), (f"   {ds.file_size:,} bytes", d))),
+            ("rows", Text(f"{ds.num_rows:,}")),
+            ("columns", Text.assemble(f"{len(ds.columns)}", (f"   {md.num_columns} leaf", d))),
+            ("row groups", groups),
+            ("data", data),
+            ("format", Text(str(md.format_version))),
+            ("created by", Text(str(md.created_by or "?"))),
+            ("footer", Text(F.human_bytes(md.serialized_size))),
+        ]
+        for k, v in rows:
+            ov.add_row(k, v)
+        self.query_one("#meta-overview", Static).update(ov)
+
+    def _build_meta_footer(self, summ: list[dict], rgs: list[dict]) -> None:
+        md, d = self.ds.meta, self.dim
+        self._render_meta_overview(rgs)
+        t = self.query_one("#rowgroups", DataTable)
+        cmax = max((r["compressed"] for r in rgs), default=1) or 1
+        for r in rgs[:5000]:
+            n = round(10 * r["compressed"] / cmax)
+            bar = Text.assemble("▰" * n, ("▱" * (10 - n), d))
+            t.add_row(Text(str(r["index"]), style=d, justify="right"), Text(f"{r['start']:,}", justify="right"),
+                      Text(f"{r['rows']:,}", justify="right"), Text(F.human_bytes(r["compressed"]), justify="right"),
+                      bar, Text(f"{r['uncompressed'] / r['compressed']:.2f}×" if r["compressed"] else "", style=d,
+                                justify="right"))
+        self.query_one("#meta-rg-panel").border_title = self._dim_markup(f"row groups  {len(rgs):,}")
+        n_stats = sum(1 for s in summ if s["has_stats"])
+        st = Text.assemble(("✓", "green"), " Footer read",
+                           (f"   {F.human_bytes(md.serialized_size)}  ·  {md.num_row_groups:,} row groups  ·  "
+                            f"stats on {n_stats}/{md.num_columns} columns", d))
+        self.query_one("#meta-status", Static).update(st)
 
     # -------------------------------------------------------------- stats tab
     def _build_stats_list(self) -> None:
@@ -2014,13 +2100,8 @@ class PqxApp(App):
             self.query_one(PlotControls).focus()
             self.call_after_refresh(self.replot)  # after layout, so the plot fills the pane
         elif pane == "tab-schema":
-            t = self.query_one("#schema-table", DataTable)
-            # SQL-result columns may not be in the file: then Schema keeps its own cursor
-            if self.current_column in self.ds._by_name:
-                row = t.get_row_index(self.current_column)
-                if t.cursor_row != row:
-                    t.move_cursor(row=row, animate=False)  # its highlight event updates the description
-            t.focus()
+            self._sync_schema()  # (if it's still being read, it syncs once built)
+            self.query_one("#schema-table", DataTable).focus()
         elif pane == "tab-data":
             name = self.current_column
             if name and not self._move_grid_to_column(name) and name in dict(self.result_schema):

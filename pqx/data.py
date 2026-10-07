@@ -134,6 +134,9 @@ class ParquetDataset:
         self._schema_known = threading.Event()  # pyarrow has parsed the footer (or failed to)
         self._ready = threading.Event()  # DuckDB's views exist (or failed to): see ``con``
         self._setup_error: Exception | None = None
+        self._footer_lock = threading.Lock()
+        self._footer: tuple[list[dict], list[int]] | None = None
+        self._encodings: dict[str, set[str]] = {}
         self._io_errors = 0
         self._bad_rgs: set[int] = set()  # row groups pyarrow failed on in a way we couldn't pin down
         # Database-wide config: every cursor shows timestamps in UTC rather than local time, and the
@@ -243,53 +246,107 @@ class ParquetDataset:
 
     # --------------------------------------------------------------- metadata
     def column_chunk_summary(self) -> list[dict]:
-        """Per-column storage + statistics aggregated over all row groups."""
-        md = self.meta
-        out: dict[str, dict] = {}
-        paths = [md.schema.column(i).path for i in range(md.num_columns)]
-        for rg in range(md.num_row_groups):
-            g = md.row_group(rg)
-            for i in range(g.num_columns):
-                c = g.column(i)
-                d = out.setdefault(
-                    paths[i],
-                    dict(path=paths[i], physical=c.physical_type, compression=c.compression,
-                         encodings=set(), compressed=0, uncompressed=0, min=None, max=None,
-                         nulls=0, has_stats=True),
-                )
-                d["compressed"] += c.total_compressed_size
-                d["uncompressed"] += c.total_uncompressed_size
-                d["encodings"].update(c.encodings)
-                st = c.statistics
-                if st is None or not st.has_min_max:
-                    d["has_stats"] = d["has_stats"] and st is not None and st.has_null_count
-                else:
-                    try:
-                        d["min"] = st.min if d["min"] is None else min(d["min"], st.min)
-                        d["max"] = st.max if d["max"] is None else max(d["max"], st.max)
-                    except TypeError:
-                        pass
-                if st is not None and st.has_null_count:
-                    d["nulls"] += st.null_count
-        for i in range(md.num_columns):
-            sc = md.schema.column(i)
-            if sc.path in out:
-                out[sc.path]["logical"] = str(sc.logical_type) if sc.logical_type else ""
-        return list(out.values())
+        """Per-column storage + statistics aggregated over all row groups (leaf
+        columns, by path; encodings come from ``column_encodings``).
+
+        One pass over every column chunk in the footer, shared with
+        ``row_groups`` and computed once: ~1 s per million chunks, so call it
+        off the UI thread."""
+        return self._footer_scan()[0]
 
     def row_groups(self) -> list[dict]:
-        if getattr(self, "_rg_cache", None) is not None:
-            return self._rg_cache
         rows = []
         start = 0
+        comp = self._footer_scan()[1]
         for i in range(self.meta.num_row_groups):
             g = self.meta.row_group(i)
-            comp = sum(g.column(j).total_compressed_size for j in range(g.num_columns))
-            rows.append(dict(index=i, start=start, rows=g.num_rows, compressed=comp,
+            rows.append(dict(index=i, start=start, rows=g.num_rows, compressed=comp[i],
                              uncompressed=g.total_byte_size))
             start += g.num_rows
-        self._rg_cache = rows
         return rows
+
+    def column_encodings(self, path: str) -> set[str]:
+        """Encodings used by leaf column ``path`` in any row group (cheap: one column)."""
+        if path not in self._encodings:
+            md = self.meta
+            idx = [i for i in range(md.num_columns) if md.schema.column(i).path == path]
+            out: set[str] = set()
+            for rg in range(md.num_row_groups):
+                g = md.row_group(rg)
+                for i in idx:
+                    if i < g.num_columns:
+                        out.update(g.column(i).encodings)
+            self._encodings[path] = out
+        return self._encodings[path]
+
+    def _footer_scan(self) -> tuple[list[dict], list[int]]:
+        """(``column_chunk_summary``, compressed bytes per row group), cached.
+
+        The per-chunk cost is pyarrow's Python objects, so this touches as few
+        as it can: plain booleans, ints and floats compare their statistics as
+        stored (``min_raw``, which is what ``min`` converts them to anyway) and
+        encodings are left to ``column_encodings``."""
+        with self._footer_lock:
+            if self._footer is None:
+                self._footer = self._scan_footer()
+            return self._footer
+
+    def _scan_footer(self) -> tuple[list[dict], list[int]]:
+        md = self.meta
+        n = md.num_columns
+        schema = [md.schema.column(i) for i in range(n)]
+        paths = [sc.path for sc in schema]
+        first: dict[str, int] = {}
+        slot = [first.setdefault(p, i) for i, p in enumerate(paths)]  # leaves sharing a path add up
+        raw = [sc.physical_type in ("BOOLEAN", "INT32", "INT64", "FLOAT", "DOUBLE")
+               and sc.logical_type.type == "NONE" and sc.converted_type == "NONE" for sc in schema]
+        comp, unc, nulls = [0] * n, [0] * n, [0] * n
+        lo: list[Any] = [None] * n
+        hi: list[Any] = [None] * n
+        has = [True] * n
+        info: dict[int, tuple] = {}  # slot -> (physical type, compression) of its first chunk
+        rg_comp = []
+        for rg in range(md.num_row_groups):
+            g = md.row_group(rg)
+            total = 0
+            for i in range(g.num_columns):
+                c = g.column(i)
+                k = slot[i]
+                if k not in info:
+                    info[k] = (c.physical_type, c.compression)
+                size = c.total_compressed_size
+                total += size
+                comp[k] += size
+                unc[k] += c.total_uncompressed_size
+                st = c.statistics
+                if st is None:
+                    has[k] = False
+                    continue
+                if st.has_min_max:
+                    if raw[i]:
+                        a, b = st.min_raw, st.max_raw
+                    else:
+                        a, b = st.min, st.max
+                    try:
+                        m = lo[k]
+                        lo[k] = a if m is None else min(m, a)
+                        m = hi[k]
+                        hi[k] = b if m is None else max(m, b)
+                    except TypeError:
+                        pass
+                    if st.has_null_count:
+                        nulls[k] += st.null_count
+                elif st.has_null_count:
+                    nulls[k] += st.null_count
+                else:
+                    has[k] = False
+            rg_comp.append(total)
+        logical = {sc.path: str(sc.logical_type) if sc.logical_type else "" for sc in schema}
+        out = [dict(path=paths[k], physical=phys, compression=codec, compressed=comp[k],
+                    uncompressed=unc[k], min=lo[k], max=hi[k], nulls=nulls[k], has_stats=has[k],
+                    logical=logical[paths[k]])
+               for k, (phys, codec) in sorted(info.items())]
+        return out, rg_comp
 
     def key_value_metadata(self) -> dict[str, str]:
         kv = self.meta.metadata or {}
@@ -348,11 +405,14 @@ class ParquetDataset:
         n = self.num_rows
         if not sample or not self._has_rownum or sample >= n:
             return ""
-        rgs = self.row_groups()
-        k = max(1, min(slices, len(rgs)))
+        rows = [self.meta.row_group(i).num_rows for i in range(self.meta.num_row_groups)]
+        starts = [0]
+        for r in rows:
+            starts.append(starts[-1] + r)
+        k = max(1, min(slices, len(rows)))
         chunk = max(1, -(-sample // k))
-        picks = sorted({round(i * (len(rgs) - 1) / max(k - 1, 1)) for i in range(k)})
-        ranges = [(rgs[i]["start"], rgs[i]["start"] + min(chunk, rgs[i]["rows"])) for i in picks]
+        picks = sorted({round(i * (len(rows) - 1) / max(k - 1, 1)) for i in range(k)})
+        ranges = [(starts[i], starts[i] + min(chunk, rows[i])) for i in picks]
         return "(" + " OR ".join(f"({ROWNUM} >= {a} AND {ROWNUM} < {b})" for a, b in ranges) + ")"
 
     def validate(self, view: View) -> list[tuple[str, pa.DataType]]:
