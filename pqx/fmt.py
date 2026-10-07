@@ -4,7 +4,8 @@ A column gets a *formatter* chosen once from its name, Arrow type and unit;
 the grid then calls it per cell. Heuristics (by name / unit, case-insensitive):
 
 * MJD / JD times      → 7 decimals (~10 ms); detail view adds the UTC calendar date
-* RA / Dec / lon/lat  → 6 decimals (~4 mas); detail view adds sexagesimal
+* RA / Dec / lon/lat  → 6 decimals (~4 mas); detail view adds sexagesimal: hours for
+                        RA-like names, degrees for Dec, latitudes and every other longitude
 * magnitudes          → 3 decimals
 * fluxes              → 4 significant digits
 * errors / sigmas     → 3 significant digits
@@ -32,6 +33,10 @@ DIM = "dim"
 _MJD = re.compile(r"mjd|(^|_)jd($|_)|^jd|epoch|tai$|utc$", re.I)
 _ANGLE = re.compile(r"(^|_)(ra|dec|decl|lon|lat|glon|glat|elon|elat|lambda|beta)($|_)", re.I)
 _ANGLE_CAMEL = re.compile(r"^(ra|dec|decl)($|[A-Z0-9_])|(Ra|Dec|RA|DEC)$")  # raJ2000, decl, coordRa
+_RA = re.compile(r"(^|_)ra($|_)", re.I)
+_RA_CAMEL = re.compile(r"^ra($|[A-Z0-9_])|(Ra|RA)$")                       # raJ2000, coordRa
+_LAT = re.compile(r"(^|_)(dec|decl|lat|glat|elat|beta)($|_)", re.I)
+_LAT_CAMEL = re.compile(r"^(dec|decl)($|[A-Z0-9_])|(Dec|DEC)$")            # decJ2000, coordDec
 _ERR = re.compile(r"err|sigma|unc|std|rms|cov", re.I)
 _MAG = re.compile(r"mag($|[A-Z_])|^mag|Mag", re.I)
 _FLUX = re.compile(r"flux", re.I)
@@ -342,8 +347,9 @@ def deg_to_hms(deg: float) -> str:
     return f"{hh:02d}h{mm:02d}m{ss:06.3f}s"
 
 
-def deg_to_dms(deg: float) -> str:
-    sign = "-" if deg < 0 else "+"
+def deg_to_dms(deg: float, plus: bool = True) -> str:
+    """Degrees as ±DD°MM′SS.ss″; ``plus=False`` drops the "+" (longitudes, 0–360)."""
+    sign = "-" if deg < 0 else ("+" if plus else "")
     a = abs(float(deg))
     d = int(a)
     m = (a - d) * 60
@@ -369,10 +375,11 @@ def derived(name: str, kind: str, v: Any) -> str:
         if 0 < v < 200_000:
             return mjd_to_iso(v)
     if kind == "angle":
-        if re.search(r"(^|_)ra|^ra|Ra$|lon", name) and not re.search(r"dec", low):
+        if _LAT.search(name) or _LAT_CAMEL.search(name):      # Dec, latitudes: signed, ±90
+            return deg_to_dms(v) if -90 <= v <= 90 else ""
+        if _RA.search(name) or _RA_CAMEL.search(name):        # RA: hours
             return deg_to_hms(v)
-        if -90 <= v <= 90:
-            return deg_to_dms(v)
+        return deg_to_dms(v, plus=False)                      # other longitudes: degrees
     if kind == "err" and re.search(r"(ra|dec)", low) and abs(v) < 1:
         return f"{v * 3.6e6:.3g} mas"
     if kind == "flux" and v > 0 and "err" not in low:

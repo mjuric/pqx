@@ -45,6 +45,25 @@ def test_derived():
     assert F.shortest(0.10000000149011612, pa.float32()) == 0.1
 
 
+def test_derived_angles():
+    d = F.derived
+    # RA-like names: hours
+    for name in ("ra", "RA", "raJ2000", "coord_ra", "coordRa", "ra_deg", "ra_icrs"):
+        assert d(name, "angle", 180.0) == "12h00m00.000s", name
+    # Dec / latitudes: signed degrees, only within ±90
+    for name in ("dec", "decl", "decJ2000", "coordDec", "lat", "glat", "elat", "beta", "pickup_lat"):
+        assert d(name, "angle", -30.5) == "-30°30′00.00″", name
+        assert d(name, "angle", 45.25) == "+45°15′00.00″", name
+        assert d(name, "angle", 120.0) == "", name
+    # every other longitude: degrees, any range, no hours
+    assert d("pickup_lon", "angle", -74.000439) == "-74°00′01.58″"
+    for name in ("lon", "glon", "elon", "lambda", "pickup_lon"):
+        assert d(name, "angle", 285.5) == "285°30′00.00″", name
+        assert d(name, "angle", 12.0) == "12°00′00.00″", name
+        assert d(name, "angle", -170.25) == "-170°15′00.00″", name
+    assert "h" not in d("lon", "angle", 30.0)
+
+
 def test_percent():
     assert F.percent(1_290_773, 1_290_773) == "100%"     # was "1e+02%"
     assert F.percent(0, 10) == "0%"
