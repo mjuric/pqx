@@ -65,7 +65,8 @@ UPSTREAM_SOURCE = {
     "get_row": "7f4134ffa6f7b3b9",
     "_on_idle": "d94152378c36b0c2",
     "_update_dimensions": "c62ef3216f7c354b",
-    "_render_cell": "56c87899a3bfc4da",
+    "_render_cell": "56c87899a3bfc4da",  # also: GridTable._render_cell's fast path mirrors it
+    "_get_styles_to_render_cell": "058dea3ae068f137",
     "clear": "6af902cb1b84743d",
     "move_cursor": "f312ced43e2c45fd",
     "watch_cursor_coordinate": "a4f113b27d09127b",
