@@ -264,6 +264,15 @@ async def test_file_duckdb_cannot_read(demo_path, monkeypatch):
         assert "edit with" not in s and "Query failed" not in s and demo_path not in s
         assert app.query_one("#schema-table", DataTable).row_count == len(app.ds.columns)
         assert plain(app.query_one("#meta-status", Static)).startswith("✓ Footer read")
+        # keys don't keep trying (or keep notifying): one notification, whatever is pressed
+        fetches = []
+        monkeypatch.setattr(ParquetDataset, "fetch", lambda *a, **k: fetches.append(a))
+        for key in ["down", "pagedown", "right", "ctrl+end", "end", "home", "d", "down"]:
+            await pilot.press(key)
+        await pilot.press("slash", *"mag > 1", "enter")
+        await settle(pilot, app)
+        assert len(app._notifications) == 1 and not fetches
+        assert plain(app.query_one("#status", Static)).startswith("✗ DuckDB can't read this file")
 
 
 async def test_zero_column_file(tmp_path):

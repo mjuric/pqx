@@ -1269,6 +1269,9 @@ class PqxApp(App):
         (``_ensure_columns``) or the Details pane needs them. A plain view's window
         is read whole if that is cheap anyway (``ParquetDataset.window_cost``).
         A new window cancels any column fetch still running for the old one."""
+        if self.ds.setup_error is not None:  # no query can run: say why (once), don't try
+            self._show_error(self.ds.setup_error)
+            return
         self._page_gen += 1
         self._cancel_column_fetches()
         shown = list(self.cols_shown)
@@ -1851,6 +1854,9 @@ class PqxApp(App):
 
     @work(thread=True, exclusive=True, group="filter")
     def apply_filter(self, text: str, keep_file_row: int | None = None) -> None:
+        if self.ds.setup_error is not None:  # no query can run: say why (once), don't try
+            self.call_from_thread(self._show_error, self.ds.setup_error)
+            return
         if is_sql_query(text):
             view = View(sql=text)
         else:
@@ -1983,8 +1989,10 @@ class PqxApp(App):
             reason = re.sub(r"^Failed to read Parquet file '.*?':\s*", "", reason)
             self._last_error = reason[:160]
             self._error_hint = ""
-            self.notify(f"{msg[:600]}\n\nSchema and Metadata (from the footer) still work.",
-                        title="✗ DuckDB can't read this file", severity="error", timeout=12)
+            if not self.__dict__.get("_unreadable_notified"):  # once: stats, plots etc. fail the same way
+                self._unreadable_notified = True
+                self.notify(f"{msg[:600]}\n\nSchema and Metadata (from the footer) still work.",
+                            title="✗ DuckDB can't read this file", severity="error", timeout=12)
             self._render_status()
             return
         first = msg.split("\n")[0]
