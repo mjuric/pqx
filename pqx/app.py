@@ -49,7 +49,7 @@ from . import plots
 from .cells import (FAILED_MARK, MISSING, PLACEHOLDER, UNAVAILABLE, CellRow, ColumnCells, one_cell_per_char, RowCells, RowLayout, text_width,
                     widest_candidates)
 from .data import (ColumnStats, Page, ParquetDataset, Stopped, View, guess_sky_columns, is_sql_query,
-                   parse_row_spec, quote_ident)
+                   parse_row_spec, sql_column_ref, sql_ident, sql_text_literal)
 from .screens import ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen, HelpScreen
 from .widgets import CursorList, DetailList
 
@@ -157,11 +157,25 @@ def pqx_theme(accent: str, border: str) -> Theme:
 
 
 class ColumnSuggester(Suggester):
-    """Completes the identifier under the cursor with a column name or keyword."""
+    """Completes the identifier under the cursor with a column name or keyword.
 
-    def __init__(self, words: list[str]):
+    A column name goes in as SQL would need it: bare if it's a plain identifier
+    and not a keyword, else quoted (a name is the file's, and must not become SQL
+    of its own). Names with control characters aren't offered (no input box should
+    hold those; ``=`` can still filter on such a column)."""
+
+    def __init__(self, columns: list[str], words: list[str] = ()):
         super().__init__(use_cache=False, case_sensitive=True)
-        self.words = words
+        self.columns = list(columns)
+        self.keywords = list(words)
+        self._words: list[tuple[str, str]] | None = None  # (what matches, what goes in), made on first use
+
+    @property
+    def words(self) -> list[tuple[str, str]]:
+        if self._words is None:
+            self._words = ([(c, sql_ident(c)) for c in self.columns if not F.has_controls(c)]
+                           + [(w, w) for w in self.keywords])
+        return self._words
 
     async def get_suggestion(self, value: str) -> str | None:
         m = re.search(r"([A-Za-z_][A-Za-z0-9_]*)$", value)
@@ -169,9 +183,9 @@ class ColumnSuggester(Suggester):
             return None
         tok = m.group(1)
         low = tok.lower()
-        for w in self.words:
+        for w, text in self.words:
             if w.lower().startswith(low) and len(w) > len(tok):
-                return value[: m.start()] + w
+                return value[: m.start()] + text
         return None
 
 
@@ -864,7 +878,7 @@ class PlotControls(Static, can_focus=True):
             if self.has_focus and i == self.cur:
                 st = st + Style(reverse=True)
             a = t.cell_len
-            t.append(f"{self.values[key] or '—'} ▾", st)
+            t.append(f"{F.sanitize(self.values[key]) or '—'} ▾", st)
             spans.append((key, a, t.cell_len - 1))
         self._spans = spans
         return t
@@ -980,7 +994,7 @@ class PqxApp(App):
                         placeholder="SQL WHERE expression — mag < 21 and band = 'r' — or a full query: "
                                     "select … from t",
                         id="filter",
-                        suggester=ColumnSuggester(self.ds.column_names + SQL_WORDS))
+                        suggester=ColumnSuggester(self.ds.column_names, SQL_WORDS))
         with TabbedContent(id="tabs", initial="tab-data"):
             with TabPane("Data", id="tab-data"):
                 with Horizontal():
@@ -1022,7 +1036,7 @@ class PqxApp(App):
         yield Static(id="keys")
 
     def on_mount(self) -> None:
-        self.title = f"pqx — {os.path.basename(self.ds.path)}"
+        self.title = f"pqx — {F.sanitize(os.path.basename(self.ds.path))}"
         if self.dim_mode == "bright-black":
             self.screen.add_class("dim-bright-black")
         self._render_titlebar()
@@ -1030,7 +1044,7 @@ class PqxApp(App):
         self.query_one("#filterbox").border_title = self._dim_markup("filter")
         self._setup_formatters(self.result_schema)
         if self._config_error:
-            self.notify(f"Ignoring saved column formats: {escape(self._config_error)}", title="! Config",
+            self.notify(f"Ignoring saved column formats: {escape(F.sanitize(self._config_error))}", title="! Config",
                         severity="warning", timeout=8)
         self.query_one("#detail").display = False
         grid = self.query_one(GridTable)
@@ -1105,7 +1119,7 @@ class PqxApp(App):
     def _render_titlebar(self) -> None:
         ds, d = self.ds, self.dim
         t = Text.assemble(
-            ("pqx", "bold"), ("  ·  ", d), (os.path.basename(ds.path), "bold cyan"),
+            ("pqx", "bold"), ("  ·  ", d), (F.sanitize(os.path.basename(ds.path)), "bold cyan"),
             (f"  ·  {ds.num_rows:,} rows  ·  {len(ds.columns)} columns  ·  {F.human_bytes(ds.file_size)}"
              f"  ·  {ds.meta.num_row_groups:,} row groups", d),
         )
@@ -1203,7 +1217,7 @@ class PqxApp(App):
         elif self._busy:
             label, t0 = next(iter(self._busy.values()))
             t.append(SPINNER[self._spin], self.accent)
-            t.append(" " + label[:1].upper() + label[1:])
+            t.append(F.sanitize(" " + label[:1].upper() + label[1:]))  # (labels can name columns)
             extra = []
             if grid.row_count:
                 extra.append(f"first {grid.row_count:,} shown" if tot is None else f"{tot:,} rows")
@@ -1227,7 +1241,7 @@ class PqxApp(App):
                     bits.append("SQL result")
                 if self.view.order_by:
                     c, desc = self.view.order_by[0]
-                    bits.append(f"sorted {c} {'↓' if desc else '↑'}")
+                    bits.append(f"sorted {F.sanitize(c)} {'↓' if desc else '↑'}")
                 if self._count_secs is not None and not self.view.is_trivial:
                     bits.append(f"{self._count_secs:.2f} s")
                 if self.raw:
@@ -1238,7 +1252,7 @@ class PqxApp(App):
                     t.append("  ·  " + "  ·  ".join(bits), d)
                 if self._hidden_hint and grid.row_count:
                     t.append("   !", "yellow")
-                    t.append(f" {self._hidden_hint} is hidden", "bold")
+                    t.append(f" {F.sanitize(self._hidden_hint)} is hidden", "bold")
                     t.append(" · c to show", d)
         out.update(t)
 
@@ -1265,8 +1279,8 @@ class PqxApp(App):
         arrow = (" ↓" if order[name] else " ↑") if name in order else ""
         fm = self.formatters.get(name) or F.CellFormatter(name, typ)
         override = F.describe_override(fm.override, fm.kind)
-        return Text.assemble((name, "bold"), (arrow, "bold"), "\n",
-                             (F.short_type(typ) + (f"·{unit}" if unit else ""), self.dim),
+        return Text.assemble((F.sanitize(name), "bold"), (arrow, "bold"), "\n",
+                             (F.short_type(typ) + (f"·{F.sanitize(unit)}" if unit else ""), self.dim),
                              (f"·{override}" if override else "", self.dim),
                              justify="right" if fm.right else "left")
 
@@ -1340,6 +1354,13 @@ class PqxApp(App):
         if gen is not None and gen != self._page_gen:
             return  # a newer window is on its way (or already shown): this one is superseded
         grid = self.query_one(GridTable)
+        if list(page.columns) != [c.key.value for c in grid.ordered_columns]:
+            # not the columns the grid was built for (validate's schema): its rows would read cells
+            # of columns they don't have. Say so and keep what's shown.
+            self._show_error(ValueError(f"the query returned other columns than expected "
+                                        f"({len(page.columns)}, not {len(grid.ordered_columns)})"))
+            self._page_failed(gen if gen is not None else self._page_gen)
+            return
         col = grid.cursor_column if column is None else column
         scroll_x = grid.scroll_x
         grid.clear()
@@ -1485,7 +1506,8 @@ class PqxApp(App):
             self._cols_failed.update(names)
             self._mark_unavailable(page, names)
             self.notify(f"Couldn't load {len(names)} column{'s' if len(names) != 1 else ''}: "
-                        f"{escape(str(err).splitlines()[0][:200])}", title="✗ Columns", severity="error", timeout=6)
+                        f"{escape(F.sanitize((str(err).splitlines() or [''])[0][:200]))}", title="✗ Columns",
+                        severity="error", timeout=6)
         if got is None or not current:
             return  # cancelled (Esc, a newer fetch, a new page) or superseded: nothing to merge
         self._merge_columns(page, got)
@@ -1711,7 +1733,7 @@ class PqxApp(App):
         if name is None:
             return
         if v is UNAVAILABLE:
-            self.notify(f"{escape(name)} couldn't be loaded for these rows", severity="error", timeout=4)
+            self.notify(f"{escape(F.sanitize(name))} couldn't be loaded for these rows", severity="error", timeout=4)
             return
         if v is not MISSING:
             fn(name, v)
@@ -1809,7 +1831,7 @@ class PqxApp(App):
             cell = Text(full, style=self.dim if v is None else "")
             info = self.ds._by_name.get(name)
             if info is not None and info.unit and v is not None:
-                cell.append(f"  {info.unit}", self.dim)
+                cell.append(f"  {F.sanitize(info.unit)}", self.dim)
             extra = F.derived(name, fmt.kind, v)
             if extra:
                 cell.append("\n· " + extra, self.dim)
@@ -1965,7 +1987,9 @@ class PqxApp(App):
         if self.view.sql:
             self.notify("= filtering works on the table, not on SQL results", severity="warning")
             return
-        q = quote_ident(name)
+        # The condition goes into the filter box: a keyword or odd name is quoted (plain ones read
+        # better bare), and no control character of the name or value is put there as is (sql_*).
+        q = sql_column_ref(name)
         if v is None:
             cond = f"{q} IS NULL"
         elif isinstance(v, bool):
@@ -1979,12 +2003,10 @@ class PqxApp(App):
         elif isinstance(v, dt.date):
             cond = f"{q} = DATE '{v.isoformat()}'"
         elif isinstance(v, str):
-            cond = f"{q} = '" + v.replace("'", "''") + "'"
+            cond = f"{q} = {sql_text_literal(v)}"
         else:
             self.notify("Can't filter on this value type", severity="warning")
             return
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
-            cond = cond.replace(q, name, 1)  # plain identifiers read better unquoted
         inp = self.query_one("#filter", Input)
         cur = inp.value.strip()
         inp.value = f"({cur}) and {cond}" if cur and " or " in cur.lower() else (f"{cur} and {cond}" if cur else cond)
@@ -1993,16 +2015,17 @@ class PqxApp(App):
 
     @_ui
     def _show_error(self, e: Exception, mark_input: bool = False) -> None:
-        msg = str(e).strip()
+        # DuckDB's messages quote names and values from the file: shown as text, never as markup
+        msg = F.sanitize(str(e).strip(), keep_ws=True)
         if e is self.ds.setup_error:  # not this query's fault: no query can run on this file
             reason = re.sub(r"^[A-Za-z ]+ Error:\s*", "", msg.split("\n")[0])
             reason = re.sub(r"^Failed to read Parquet file '.*?':\s*", "", reason)
-            self._last_error = reason[:160]
+            self._last_error = F.sanitize(reason[:160])
             self._error_hint = ""
             if not self.__dict__.get("_unreadable_notified"):  # once: stats, plots etc. fail the same way
                 self._unreadable_notified = True
                 self.notify(f"{msg[:600]}\n\nSchema and Metadata (from the footer) still work.",
-                            title="✗ DuckDB can't read this file", severity="error", timeout=12)
+                            title="✗ DuckDB can't read this file", severity="error", timeout=12, markup=False)
             self._render_status()
             return
         first = msg.split("\n")[0]
@@ -2011,10 +2034,10 @@ class PqxApp(App):
         first = first.rstrip("!")
         m = re.search(r'Candidate bindings: "(?:[^".]+\.)?([^"]+)"', msg)
         self._error_hint = f'did you mean "{m.group(1)}"?' if m else "edit with /"
-        self._last_error = first[:160]
+        self._last_error = F.sanitize(first[:160])
         if mark_input:
             self.query_one("#filterbox").add_class("error")
-        self.notify(msg[:600], title="✗ Query failed", severity="error", timeout=8)
+        self.notify(msg[:600], title="✗ Query failed", severity="error", timeout=8, markup=False)
         self._render_status()
 
     # ----------------------------------------------------------------- sorting
@@ -2071,7 +2094,7 @@ class PqxApp(App):
         offset, row = grid.offset, grid.abs_row  # before the rebuild resets the cursor
         self._rebuild_columns()
         self.load_window(offset, row, col)
-        self.notify(f"Hid {escape(name)} · c brings it back", timeout=2)
+        self.notify(f"Hid {escape(F.sanitize(name))} · c brings it back", timeout=2)
 
     def action_pin_columns(self) -> None:
         grid = self.query_one(GridTable)
@@ -2107,7 +2130,7 @@ class PqxApp(App):
             return
         new = F.step_override(fm.override, fm.kind, delta)
         if new is None:
-            self.notify(f"{escape(fm.name)} has no digits to change · F sets a format spec",
+            self.notify(f"{escape(F.sanitize(fm.name))} has no digits to change · F sets a format spec",
                         severity="warning", timeout=3)
             return
         self._set_format(fm, new)
@@ -2147,11 +2170,11 @@ class PqxApp(App):
         if (self._stats_rendered and self._stats_rendered[0] is self.view and self._stats_rendered[1] == fm.name
                 and not self._stats_stale):
             self._render_stats(*self._stats_rendered[1:])  # reformat what's shown; no need to re-profile
-        name, shown = escape(fm.name), escape(F.describe_override(value, fm.kind) or "automatic")
+        name, shown = escape(F.sanitize(fm.name)), escape(F.describe_override(value, fm.kind) or "automatic")
         try:
             config.save_format(fm.name, value)
         except (config.ConfigError, OSError) as e:
-            self.notify(f"{name}: {shown}, for this session only — not saved: {escape(str(e))}",
+            self.notify(f"{name}: {shown}, for this session only — not saved: {escape(F.sanitize(str(e)))}",
                         severity="warning", timeout=6)
             return
         self.notify(f"✓ {name}: {shown}", timeout=2)
@@ -2161,9 +2184,13 @@ class PqxApp(App):
 
     def _copy_value(self, name: str, v) -> None:
         typ = dict(self.result_schema).get(name, pa.null())
-        s = F.format_value(F.shortest(v, typ), "float", raw=True, width=0) if v is not None else ""
+        # what's copied is what the detail pane shows: control characters (an ESC pasted into a
+        # terminal could end a bracketed paste and run what follows) as their visible stand-ins
+        raw = F.format_value(F.shortest(v, typ), "float", raw=True, width=0, safe=False) if v is not None else ""
+        s = F.sanitize(raw, keep_ws=True)
         self.copy_to_clipboard(s)
-        self.notify(f"✓ Copied {escape(name)} = {escape(s[:60])}", timeout=2)
+        note = "  (control characters copied as ␛-style symbols)" if s != raw else ""
+        self.notify(f"✓ Copied {escape(F.sanitize(name))} = {escape(s[:60])}{note}", timeout=2 if not note else 5)
 
     def action_goto(self) -> None:
         def done(spec):
@@ -2173,7 +2200,7 @@ class PqxApp(App):
                 total = self.total if self.total is not None else 1 << 62
                 target = parse_row_spec(spec, total)
             except ValueError:
-                self.notify(f"Not a row number: {escape(spec)}", severity="error")
+                self.notify(f"Not a row number: {escape(F.sanitize(spec))}", severity="error")
                 return
             self._seek_to(target)
         self.push_screen(GotoScreen(self.total), done)
@@ -2227,12 +2254,12 @@ class PqxApp(App):
         return True
 
     def action_export(self) -> None:
-        stem = os.path.splitext(os.path.basename(self.ds.path))[0]
+        stem = F.sanitize(os.path.splitext(os.path.basename(self.ds.path))[0])  # (no control characters in the box)
         default = os.path.join(os.getcwd(), f"{stem}.subset.parquet")
         desc = "all rows" if self.view.is_trivial else (
-            "SQL result" if self.view.sql else f"where {self.view.where}" if self.view.where else "")
+            "SQL result" if self.view.sql else f"where {F.sanitize(self.view.where)}" if self.view.where else "")
         if self.view.order_by:
-            desc += f" · sorted by {self.view.order_by[0][0]}"
+            desc += f" · sorted by {F.sanitize(self.view.order_by[0][0])}"
         n = f"{self.total:,} rows" if self.total is not None else "row count pending"
         self.push_screen(ExportScreen(default, f"{desc} · {n} · {len(self.cols_shown)} visible columns"),
                          self._do_export)
@@ -2257,7 +2284,7 @@ class PqxApp(App):
         size = F.human_bytes(os.path.getsize(opts["path"])) if os.path.exists(opts["path"]) else "?"
         # (notify is safe during teardown)
         self.call_from_thread(self.notify, f"✓ Wrote {F.human_count(n)} rows · {size} · {time.time() - t0:.1f} s"
-                                           f"\n→ {opts['path']}", timeout=8)
+                                           f"\n→ {escape(F.sanitize(opts['path']))}", timeout=8)
 
     # ------------------------------------------------------------ schema tab
     # Schema and Metadata need a pass over every column chunk in the footer (sizes,
@@ -2319,7 +2346,7 @@ class PqxApp(App):
 
     @_ui
     def _footer_failed(self, e: Exception) -> None:
-        msg = Text.assemble(("✗", "red"), " Couldn't read the footer's statistics", (f"   {e}", self.dim))
+        msg = Text.assemble(("✗", "red"), " Couldn't read the footer's statistics", (f"   {F.sanitize(str(e))}", self.dim))
         self.query_one("#schema-desc", Static).update(msg)
         self.query_one("#meta-status", Static).update(msg)
 
@@ -2352,8 +2379,8 @@ class PqxApp(App):
                 null_p = Text(F.percent(nulls, self.ds.num_rows), justify="right")
             else:
                 null_n, null_p = Text("0", style=d, justify="right"), Text("")
-            cells = [Text(str(i), style=d, justify="right"), Text(c.name, style="bold"),
-                     Text(F.short_type(c.arrow_type), style=d), Text(c.unit) if c.unit else Text("–", style=d)]
+            cells = [Text(str(i), style=d, justify="right"), Text(F.sanitize(c.name), style="bold"),
+                     Text(F.short_type(c.arrow_type), style=d), Text(F.sanitize(c.unit)) if c.unit else Text("–", style=d)]
             cells += [null_n, null_p,
                       fm(mn) if mn is not None else Text("–", style=d, justify="right"),
                       fm(mx) if mx is not None else Text("–", style=d, justify="right"),
@@ -2393,10 +2420,12 @@ class PqxApp(App):
             enc = ", ".join(sorted(e.replace("RLE_DICTIONARY", "dict").lower()
                                    for e in self.ds.column_encodings(name)))
         d = self.dim
-        t = Text.assemble((c.name, "bold cyan"), f"   {c.arrow_type}", (f"   [{c.unit}]" if c.unit else ""),
+        S = F.sanitize  # (name, type, unit and description are all the file's)
+        t = Text.assemble((S(c.name), "bold cyan"), f"   {S(str(c.arrow_type))}", (f"   [{S(c.unit)}]" if c.unit else ""),
                           (f"   {'nullable' if c.nullable else 'not null'}  ·  {F.human_bytes(size)}"
                            + (f"  ·  {ratio} {comp}" if ratio else "") + (f"  ·  {enc}" if enc else ""), d), "\n",
-                          (c.description or "no description in the file's field metadata", "" if c.description else d),
+                          (S(c.description, keep_ws=True) or "no description in the file's field metadata",
+                           "" if c.description else d),
                           ("\n→ enter opens statistics  ·  i from the data grid", d))
         desc = self.query_one("#schema-desc", Static)
         desc.border_title = self._dim_markup(f"column {i}")
@@ -2420,15 +2449,19 @@ class PqxApp(App):
         kv = ds.key_value_metadata()
         parts = [Text(""), Text("key-value metadata", style="bold")]
         from rich.json import JSON
+        S = F.sanitize  # keys and values are the file's: their control characters are shown, not sent
         for k, v in kv.items():
             if k == "ARROW:schema":
                 parts.append(Text.assemble((k, "cyan"), (f"   {F.human_bytes(len(v))} · decoded in Schema", d)))
                 continue
             try:
-                parts.append(Text(k, style="cyan"))
-                parts.append(JSON(v, indent=2, highlight=False))
+                parts.append(Text(S(k), style="cyan"))
+                js = JSON(v, indent=2, highlight=False)  # (its text keeps C1 controls and DEL as they are)
+                js.text = Text(S(js.text.plain, keep_ws=True))  # (no highlighting: no spans to keep)
+                parts.append(js)
             except Exception:
-                parts[-1] = Text.assemble((k, "cyan"), "   ", v if len(v) < 4000 else v[:4000] + " …")
+                parts[-1] = Text.assemble((S(k), "cyan"), "   ", S(v if len(v) < 4000 else v[:4000] + " …",
+                                                                   keep_ws=True))
         if len(parts) == 2:
             parts.append(Text("none", style=d))
         self.query_one("#meta-kv", Static).update(Group(*parts))
@@ -2450,14 +2483,15 @@ class PqxApp(App):
             data = Text.assemble(F.human_bytes(comp), (f"   compressed  ·  {F.human_bytes(unc)} raw"
                                                        + (f"  ·  {unc / comp:.2f}×" if comp else ""), d))
         rows = [
-            ("path", Text.assemble((os.path.basename(ds.path), "cyan"), (f"   {os.path.dirname(ds.path)}/", d))),
+            ("path", Text.assemble((F.sanitize(os.path.basename(ds.path)), "cyan"),
+                                   (f"   {F.sanitize(os.path.dirname(ds.path))}/", d))),
             ("file size", Text.assemble(F.human_bytes(ds.file_size), (f"   {ds.file_size:,} bytes", d))),
             ("rows", Text(f"{ds.num_rows:,}")),
             ("columns", Text.assemble(f"{len(ds.columns)}", (f"   {md.num_columns} leaf", d))),
             ("row groups", groups),
             ("data", data),
             ("format", Text(str(md.format_version))),
-            ("created by", Text(str(md.created_by or "?"))),
+            ("created by", Text(F.sanitize(str(md.created_by or "?")))),
             ("footer", Text(F.human_bytes(md.serialized_size))),
         ]
         for k, v in rows:
@@ -2501,7 +2535,7 @@ class PqxApp(App):
     # -------------------------------------------------------------- stats tab
     def _build_stats_list(self) -> None:
         ol = self.query_one("#stats-cols", CursorList)
-        ol.set_items([(name, Text.assemble((name.ljust(18), "bold"), "  ", (F.short_type(typ), self.dim)))
+        ol.set_items([(name, Text.assemble((F.sanitize(name).ljust(18), "bold"), "  ", (F.short_type(typ), self.dim)))
                       for name, typ in self.result_schema], width=32)
         self.query_one("#stats-cols-panel").border_title = self._dim_markup(f"columns  {len(self.result_schema)}")
         if self._stats_col not in dict(self.result_schema):
@@ -2584,7 +2618,7 @@ class PqxApp(App):
             self._stats_stale = True
 
     def _scope(self, view: View) -> str:
-        return "all rows" if view.is_trivial else ("SQL result" if view.sql else f"where {view.where}")
+        return "all rows" if view.is_trivial else ("SQL result" if view.sql else f"where {F.sanitize(view.where)}")
 
     @work(thread=True, exclusive=True, group="stats")
     def compute_stats(self, name: str) -> None:
@@ -2594,7 +2628,7 @@ class PqxApp(App):
         if typ is None:
             return
         sample = self._sample()
-        self.call_from_thread(self._set_busy, "stats", f"profiling {name}")
+        self.call_from_thread(self._set_busy, "stats", f"profiling {F.sanitize(name)}")
         self.call_from_thread(self._stats_running, name)
         t0 = time.time()
         try:
@@ -2620,14 +2654,16 @@ class PqxApp(App):
     def _stats_head(self, name: str, status: Text) -> Group:
         info = self.ds._by_name.get(name)
         typ = dict(self.result_schema).get(name)
-        line = Text.assemble((name, "bold cyan"), (f"   {F.short_type(typ)}" if typ is not None else "", self.dim),
-                             (f"   [{info.unit}]" if info and info.unit else ""),
-                             (f"   {info.description}" if info and info.description else "", self.dim))
+        S = F.sanitize
+        line = Text.assemble((S(name), "bold cyan"), (f"   {F.short_type(typ)}" if typ is not None else "", self.dim),
+                             (f"   [{S(info.unit)}]" if info and info.unit else ""),
+                             (f"   {S(info.description, keep_ws=True)}" if info and info.description else "", self.dim))
         return Group(line, status)
 
     @_ui
     def _stats_running(self, name: str) -> None:
-        st = Text.assemble((SPINNER[3], self.accent), f" Profiling {name}", (f"   {self._scope(self.view)}", self.dim))
+        st = Text.assemble((SPINNER[3], self.accent), f" Profiling {F.sanitize(name)}",
+                           (f"   {self._scope(self.view)}", self.dim))
         self.query_one("#stats-head", Static).update(self._stats_head(name, st))
 
     @_ui
@@ -2638,11 +2674,11 @@ class PqxApp(App):
         d = self.dim
         fm = self.formatters.get(name) or F.CellFormatter(name, typ)
         if st.sampled:
-            status = Text.assemble(("!", "yellow"), f" Profiled {name}, sampled",
+            status = Text.assemble(("!", "yellow"), f" Profiled {F.sanitize(name)}, sampled",
                                    (f"   {F.human_count(st.count)} rows  ·  {elapsed:.2f} s  ·  {self._scope(self.view)}"
                                     "  ·  m scans everything", d))
         else:
-            status = Text.assemble(("✓", "green"), f" Profiled {name}",
+            status = Text.assemble(("✓", "green"), f" Profiled {F.sanitize(name)}",
                                    (f"   {st.count:,} rows  ·  {elapsed:.2f} s  ·  {self._scope(self.view)}", d))
         self.query_one("#stats-head", Static).update(self._stats_head(name, status))
 
@@ -2656,7 +2692,7 @@ class PqxApp(App):
                 if is_int:
                     return Text(f"{int(round(v)):,}" if abs(v) < 1e15 else str(int(round(v))), justify="right")
                 return fm(float(v))
-            return Text(str(v))
+            return Text(F.sanitize(str(v)))
 
         left = [("rows", Text(f"{st.count:,}", justify="right"), "sampled" if st.sampled else ""),
                 ("nulls", Text(f"{st.nulls:,}", justify="right"), pct(st.nulls) if st.nulls else "")]
@@ -2704,7 +2740,7 @@ class PqxApp(App):
             temporal = pa.types.is_timestamp(typ) or pa.types.is_date(typ)
             plot = plots.render_histogram(edges, counts, width=width, height=10, color=None,
                                           log_y=self._hist_log_y, log_x=self._hist_log_x and not temporal,
-                                          xlabel=name + ("  (UTC)" if temporal else ""),
+                                          xlabel=F.sanitize(name) + ("  (UTC)" if temporal else ""),
                                           xfmt=_epoch_label if temporal else None, dim=self.dim_style)
             plot = Group(Text("\ndistribution", style="bold"), plot,
                          Text(f"{len(counts)} bins" + ("  ·  log counts" if self._hist_log_y else "")
@@ -2777,8 +2813,8 @@ class PqxApp(App):
         view = self.view
         sample = self._sample()
         d = self.dim
-        self.call_from_thread(self._set_busy, "plot", f"binning {x} × {y}")
-        self.call_from_thread(self._plot_show, Text.assemble((SPINNER[3], self.accent), f" Binning {x} × {y}",
+        self.call_from_thread(self._set_busy, "plot", f"binning {F.sanitize(x)} × {F.sanitize(y)}")
+        self.call_from_thread(self._plot_show, Text.assemble((SPINNER[3], self.accent), f" Binning {F.sanitize(x)} × {F.sanitize(y)}",
                                                              (f"   {self._scope(view)}", d)), None)
         t0 = time.time()
         try:
@@ -2795,7 +2831,7 @@ class PqxApp(App):
                     pw, ph = max(10, w - 12), max(4, h - 5)
                     grid, xl, yl = self.ds.xy_counts(view, x, y, 2 * pw, 2 * ph, sample=sample)
                     n = int(grid.sum())
-                    out = plots.render_density(grid, xl, yl, cmap=cmap, xlabel=x, ylabel=y, accent=self.accent,
+                    out = plots.render_density(grid, xl, yl, cmap=cmap, xlabel=F.sanitize(x), ylabel=F.sanitize(y), accent=self.accent,
                                                dim=self.dim_style)
                     detail = f"{2 * pw}×{2 * ph} bins"
         except duckdb.InterruptException:
@@ -2809,9 +2845,9 @@ class PqxApp(App):
             return
         rest = f"   {F.human_count(n)} rows  ·  {detail}  ·  {time.time() - t0:.2f} s  ·  {self._scope(view)}"
         if sample:
-            status = Text.assemble(("!", "yellow"), f" Binned {x} × {y}, sampled", (rest + "  ·  m scans everything", d))
+            status = Text.assemble(("!", "yellow"), f" Binned {F.sanitize(x)} × {F.sanitize(y)}, sampled", (rest + "  ·  m scans everything", d))
         else:
-            status = Text.assemble(("✓", "green"), f" Binned {x} × {y}", (rest, d))
+            status = Text.assemble(("✓", "green"), f" Binned {F.sanitize(x)} × {F.sanitize(y)}", (rest, d))
         self.call_from_thread(self._plot_show, status, out)
 
     @_ui
