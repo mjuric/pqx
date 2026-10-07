@@ -1,43 +1,119 @@
-# pqx — a terminal explorer for Parquet files
+<div align="center">
 
-`pqx` is an interactive, keyboard-driven terminal UI for looking inside
-Parquet files: browse rows, filter with SQL, profile columns, draw sky maps and
-density plots, and export subsets. It is built for large LSST catalogs
-(SSSource, SSObject, DiaSource, …) but works with any single Parquet file.
+# pqx
 
-Nothing is loaded in full. The grid pulls small windows of rows, and every
-aggregate (counts, statistics, histograms, sky maps) runs inside
-[DuckDB](https://duckdb.org). A multi-GB file opens instantly, and jumping to
-row 3,000,000,000 costs one row-group read.
+**Look inside any Parquet file, from your terminal.**
 
+Browse rows, filter with SQL, profile columns, plot, and export.<br>
+Files of any size open in under a second.
+
+[![PyPI](https://img.shields.io/pypi/v/pqx?include_prereleases&color=7aa2f7)](https://pypi.org/project/pqx/)
+[![Python](https://img.shields.io/pypi/pyversions/pqx?color=7aa2f7)](https://pypi.org/project/pqx/)
+[![CI](https://github.com/mjuric/pqx/actions/workflows/ci.yml/badge.svg)](https://github.com/mjuric/pqx/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-7aa2f7)](#license)
+
+[Install](#install) · [Tour](#a-quick-tour) · [Big files](#built-for-big-files) · [Keys](#keys) · [Astronomy](#for-astronomers)
+
+<img src="docs/screenshots/hero.png" alt="pqx showing a 4-million-row taxi-trip file filtered to card payments over 10 miles" width="900">
+
+</div>
+
+## Install
+
+```sh
+pipx install pqx          # or: uv tool install pqx   ·   pip install pqx
+pqx trips.parquet
 ```
-pip install -e .          # or: pip install -e ".[dev]" for tests
-pqx catalog.parquet
-pqx sssource.parquet --where "ssObjectId = 9000123"
-python -m pqx.demo demo.parquet --rows 1000000   # a synthetic LSST-like file to play with
+
+The 0.2.0 pre-release has everything on this page: `pipx install --pip-args=--pre pqx`
+or `pip install --pre pqx`. Python 3.10 or newer. pqx runs in any modern terminal, local or over SSH, and
+uses your terminal's own colours.
+
+## A quick tour
+
+```sh
+pqx trips.parquet                                   # browse
+pqx trips.parquet -w "payment_type = 'card'"        # open with a filter
+pqx trips.parquet -w "select vendor, count(*) from t group by 1"
 ```
 
-## What you get
+### Browse
 
-| Tab | |
-|---|---|
-| **Data** | A fast, scrollable grid over the entire file. Headers show type and unit, and values use astronomy-aware formatting. **d** opens a detail panel with every column of the current row at full precision, plus derived readings: MJD → UTC date, RA/Dec → sexagesimal, errors in mas, flux → AB mag. |
-| **Schema** | Every column with its type, unit, description (from Parquet field metadata, including Felis-style `"[unit] description"`), null count, min/max from row-group statistics, compressed size, compression ratio and encodings. |
-| **Stats** | Pick a column to see count, nulls, NaNs, distinct values, min/max, mean/std and quantiles, with a histogram for numeric and time columns or a top-values bar chart for categorical ones. |
-| **Plot** | **Sky (Mollweide)** maps of any lon/lat pair, with RA/Dec auto-detected, and **density scatter** plots of any two numeric columns, both drawn in text with sub-character resolution and log-density colour. |
-| **Metadata** | File overview, row-group table and key-value metadata, with JSON shown pretty-printed. |
+Scroll through every row and column with the keyboard or mouse. Headers show
+each column's type and unit. Press **d** to see the current row as a list, every
+column at full precision.
 
-The **filter bar** (press `/`) takes either
+<img src="docs/screenshots/detail.png" alt="The data grid with the row detail panel open" width="900">
 
-* a SQL `WHERE` expression: `mag < 21 and band = 'r'`, `ssObjectId is not null`,
-  `ra between 10 and 20`; or
-* a full query over the table `t`: `select band, count(*), avg(mag) from t group by 1`.
+### Filter and query with SQL
 
-The filter applies everywhere: grid, stats, plots and export. Column names
-auto-complete (→ accepts), ↑/↓ recall history, and errors appear inline
-without losing the current view.
+Press **/** and type a `WHERE` expression, or a whole query over the table `t`.
+Column names complete as you type, and errors show inline without losing your
+place. The filter applies everywhere: grid, stats, plots and export. Press
+**=** on any cell to keep only rows with that value.
+
+<img src="docs/screenshots/sql.png" alt="A GROUP BY query over the file, shown as a table" width="900">
+
+### See the schema at a glance
+
+Every column with its type, unit, nulls, min/max, size on disk and
+compression, read from the file's footer without scanning the data.
+
+<img src="docs/screenshots/schema.png" alt="The Schema tab: types, nulls, min/max, sizes and compression for each column" width="900">
+
+### Profile a column, plot two
+
+**Stats** gives counts, nulls, distinct values, quantiles and a histogram (or
+the most frequent values). **Plot** draws a density map of any two numeric
+columns, right in the terminal.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/stats.png" alt="Column statistics with a histogram"></td>
+<td width="50%"><img src="docs/screenshots/plot.png" alt="A density plot of pickup longitude and latitude"></td>
+</tr>
+</table>
+
+### Export what you see
+
+Press **e** to write the current view (filter, sort and visible columns) to
+Parquet, CSV or JSON.
+
+## Built for big files
+
+pqx never loads a file in full. The grid reads only the rows and columns on
+screen, and counts, statistics and plots run inside
+[DuckDB](https://duckdb.org).
+
+- **Opens fast.** An 8-million-row, 184-column file is ready in under half a
+  second; a file with 2,000 row groups in about a second.
+- **Jumps anywhere.** Going to row 3,000,000,000 reads one row group, not the
+  rows before it. Paging takes milliseconds whatever the file size.
+- **Wide is fine.** Hundreds of columns scroll as smoothly as ten; columns load
+  as they come into view.
+- **Stays responsive.** Long queries run in the background, and **Esc**
+  cancels them. On very large files, stats and plots sample about 2 million
+  rows (**m** to toggle).
 
 ## Keys
+
+Press **?** in pqx for the full list.
+
+| | |
+|---|---|
+| `/` · `x` | filter · clear filter |
+| arrows, PgUp/PgDn, Home/End | move around; Ctrl+Home/End for first/last row |
+| `g` | go to a row: `1234`, `1.5M`, `50%`, `-1` |
+| `s` · `=` | sort by this column · filter to this cell's value |
+| `d` | row detail panel |
+| `c` · `-` · `p` | choose columns · hide this column · pin columns |
+| `<` `>` · `F` | fewer / more digits · set a format (`.2f`, `,d`, `.1%`) |
+| `y` · `i` · `e` | copy cell · stats for this column · export |
+| `1`–`5` | Data, Schema, Stats, Plot, Metadata |
+| Esc · `q` | cancel running queries · quit |
+
+<details>
+<summary><b>All keys</b></summary>
 
 | key | action |
 |---|---|
@@ -53,7 +129,7 @@ without losing the current view.
 | Home / End | first / last column; `‹` `›` beside the header mark hidden columns (click to page) |
 | `f` · `y` · `i` | raw/smart formatting · copy cell · stats for column |
 | `<` `>` · `F` | one digit fewer / more for the cursor column · set its format (`.2f`, `.3e`, `,d`, or a digit count; empty resets) |
-| `1`–`5` · `Ctrl+←` `Ctrl+→` | go to a tab · previous / next tab. The strip in the panel border reads `1 Data ─ 2 Schema ─ … ^← ^→`; names underline under the mouse and switch on click |
+| `1`–`5` · `Ctrl+←` `Ctrl+→` | go to a tab · previous / next tab |
 | `e` | export the current view (filter + sort + visible columns) to Parquet/CSV/JSON |
 | `m` | toggle sampling for stats and plots |
 | `l` `L` `[` `]` | Stats: log counts, log values, fewer/more bins |
@@ -63,114 +139,92 @@ without losing the current view.
 | Esc | cancel running queries / leave the filter bar |
 | `?` · `q` | help · quit |
 
-Data, Schema and Stats stay on the same column: move to a column in one of
-them and the others are on it when you switch tabs, with the grid on the same
-row. A column hidden in the grid leaves the grid where it is and the status
-line says `‹col› is hidden · c to show`. Columns computed by a SQL query
-aren't in the file's schema, so Schema keeps its own row for them. Plot has
-its own column pickers.
+Data, Schema and Stats stay on the same column: move to a column in one of them
+and the others are on it when you switch tabs.
+
+</details>
 
 ## Column formats
 
-Values get an automatic format from the column's name, type and unit (see the
-**Data** tab above). Any column can be overridden in the grid. `<` and `>` drop
-or add one digit: decimals for MJD, angle and magnitude columns, significant
-digits for other floats. `F` takes a Python format spec instead (`.2f`, `.3e`,
-`,d`, `.1%`), and an empty entry returns the column to automatic. An overridden
-column shows its format in the header, after the type and unit. Overrides change
-the grid and stats only; the detail panel and `y` keep full precision.
-
-Overrides are remembered by column name, for every file, in
-`~/.config/pqx/formats.yaml` (or `$XDG_CONFIG_HOME/pqx/formats.yaml`), which
-is easy to edit by hand:
+Numbers get a sensible format from the column's type and unit. Change any
+column in the grid: `<` and `>` drop or add a digit, and `F` takes a Python
+format spec (`.2f`, `.3e`, `,d`, `.1%`); an empty entry goes back to automatic.
+pqx remembers your formats by column name, for every file, in
+`~/.config/pqx/formats.yaml`:
 
 ```yaml
 columns:
-  ra: .4f        # a format spec
-  psfFlux: 3     # 3 significant digits
+  fare_amount: .2f   # a format spec
+  trip_distance: 3   # 3 significant digits
 ```
 
-`--format COL=SPEC` (repeatable) sets a format for one session without saving it.
+`--format COL=SPEC` sets a format for one session without saving it.
 
-## Look
+## Looks
 
-pqx draws with your terminal's own background and 16-colour palette, so it
-matches whatever scheme you use, and it looks the same with or without 24-bit
-colour. Panels are thin boxes, the focused one in the accent colour. Colour is
-kept for things that mean something: the file name and other object names are
-cyan, and status lines use ✓ (green) for done, ! (yellow) for warnings such as
-sampling, ✗ (red) for errors, and ⠸ while running. The style follows acid's CLI
-design language.
+pqx draws with your terminal's background and 16-colour palette, so it matches
+your colour scheme. Colour is kept for things that mean something: ✓ done,
+! warning, ✗ error.
 
 | option | env | |
 |---|---|---|
 | `--accent blue\|cyan\|magenta\|green\|yellow` | `PQX_ACCENT` | focus colour (default blue) |
-| `--dim faint\|bright-black` | `PQX_DIM` | secondary text: the faint attribute (default), or ANSI bright black for terminals that ignore faint |
+| `--dim faint\|bright-black` | `PQX_DIM` | secondary text: the faint attribute (default), or bright black for terminals that ignore faint |
 | `--border NAME` | `PQX_BORDER` | unfocused panel border, an ANSI colour name (default `bright_black`) |
-| `--theme NAME` | | use a Textual theme instead of the terminal's colours |
+| `--theme NAME` | | a Textual theme instead of your terminal's colours: `tokyo-night`, `dracula`, `catppuccin-mocha`, `nord`, `gruvbox`, … |
 
-Sky maps and density plots default to **magma**; the colormaps (magma,
-viridis, inferno, plasma, gray) are emitted as exact xterm-256 colours, and
-`terminal` draws density with your palette alone (faint, accent, bold).
+The screenshots on this page use `--theme tokyo-night`.
 
-## Large files
+## For astronomers
 
-* **Seeking.** When no filter or sort is active, a window is fetched with DuckDB's
-  `file_row_number` pushdown. Only the row group(s) holding the window are read,
-  so paging is O(1) in file size (about 20 ms per window on a 30M-row / 850 MB file).
-* **Filtered and sorted views** use `LIMIT/OFFSET` over the query. The total
-  row count is computed in the background, and the grid is usable before it
-  arrives.
-* **Cancellation.** A new filter, stats request or plot interrupts the
-  now-stale DuckDB query instead of letting it run to completion. Esc cancels
-  everything that's running.
-* **Sampling** (`m`, `--sample`) makes stats and plots read about 2M rows from
-  up to 16 evenly spaced row groups and skip the rest. It turns on
-  automatically for files over 200M rows or 8 GiB, and is worth enabling
-  whenever the storage is slow (network file systems, cold caches). Sampled
-  results are marked as such.
-* `--threads N` caps DuckDB's parallelism on shared machines.
+pqx began as a tool for LSST catalogs (SSSource, SSObject, DiaSource, …) and
+knows their conventions:
 
-## Sky maps
+- **Sky maps.** Mollweide maps of any lon/lat pair, with RA/Dec found
+  automatically, coloured by log surface density.
+- **Formatting that reads like a paper.** MJD to 7 decimals, angles and
+  magnitudes to sensible precision, and in the detail panel MJD → UTC, RA/Dec
+  → sexagesimal, errors in mas and flux → AB mag.
+- **Felis-style units and descriptions** (`"[unit] description"`) from Parquet
+  field metadata.
+
+<img src="docs/screenshots/sky.png" alt="A Mollweide sky map of a million simulated solar-system detections" width="900">
+
+`python -m pqx.demo demo.parquet --rows 1000000` writes a synthetic LSST-like
+file to try it on.
+
+<details>
+<summary><b>How the sky map is drawn</b></summary>
 
 The Mollweide renderer is a port of the one in
-[acid](https://github.com/mjuric/acid) (`acid/io/skymap_art.py`), adapted to
-work from an equirectangular count grid, which DuckDB bins in a single
-`GROUP BY`, instead of a HEALPix map:
+[acid](https://github.com/mjuric/acid), adapted to work from an
+equirectangular count grid that DuckDB bins in a single `GROUP BY`:
 
-* each character cell is inverse-projected, so rendering cost doesn't depend on row count;
-* **area** is carried by glyph shape: 2×2 quadrant sub-cells light up when at
-  least half of a sub-cell is covered, so partial coverage draws as partially
-  filled glyphs;
-* **density** is carried by colour: log surface density in deg⁻² through a
-  selectable colormap (magma by default; viridis, inferno, plasma, gray, or
-  `terminal`), with a colorbar legend;
-* the limb and graticule are a braille outline, and RA increases to the left.
+- each character cell is inverse-projected, so rendering cost doesn't depend on
+  row count;
+- area is carried by glyph shape: 2×2 quadrant sub-cells light up when at least
+  half of a sub-cell is covered;
+- density is carried by colour: log surface density in deg⁻² through magma,
+  viridis, inferno, plasma, gray or your terminal's palette, with a colorbar;
+- the limb and graticule are a braille outline, and RA increases to the left.
 
-## Versions
-
-The version comes from git tags via [setuptools-scm](https://setuptools-scm.readthedocs.io/), as in
-acid: a tagged commit `vX.Y.Z` is version `X.Y.Z`, and anything after it is a dev version such as
-`0.2.dev3+g1a2b3c4`. `pqx --version` prints it.
-
-To release, publish a GitHub Release; creating it also creates the tag:
-
-```
-gh release create v0.2.0 --generate-notes
-```
-
-That runs `.github/workflows/publish.yml`, which builds the package with `uv build` and uploads it to
-PyPI with trusted publishing (OIDC, no stored token). The same tag runs the full test matrix in CI.
-One-time setup on PyPI: add a trusted publisher for project `pqx`: owner `mjuric`, repository `pqx`,
-workflow `publish.yml`, environment `pypi`.
+</details>
 
 ## Development
 
-```
+```sh
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest          # data layer, formatting/plots, and headless UI tests (Textual pilot)
+.venv/bin/pytest
 ```
 
-Layout: `pqx/data.py` (DuckDB/PyArrow access layer), `pqx/fmt.py`
-(astronomy-aware formatting), `pqx/plots.py` (text plots), `pqx/app.py` +
-`pqx/screens.py` + `pqx/app.tcss` (the Textual UI), `pqx/demo.py` (synthetic data).
+`pqx/data.py` reads files (DuckDB and PyArrow), `pqx/app.py`, `pqx/cells.py`
+and `pqx/screens.py` are the Textual UI, `pqx/fmt.py` formats values and
+`pqx/plots.py` draws plots. Design notes are in [`docs/design`](docs/design).
+`python docs/screenshots/make_screenshots.py` regenerates the screenshots on this page.
+
+Releases come from git tags via setuptools-scm: publishing a GitHub Release
+`vX.Y.Z` builds pqx and uploads it to PyPI.
+
+## License
+
+BSD-3-Clause; see [LICENSE](LICENSE).
