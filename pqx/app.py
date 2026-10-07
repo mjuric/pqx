@@ -12,6 +12,7 @@ import math
 import os
 import re
 import time
+from contextlib import contextmanager
 
 import duckdb
 import pyarrow as pa
@@ -29,12 +30,13 @@ from textual.message import Message
 from textual.suggester import Suggester
 from textual.theme import Theme
 from textual.widgets import DataTable, Input, Label, OptionList, Static, TabbedContent, TabPane
-from textual.widgets.data_table import ColumnKey
+from textual.widgets.data_table import ColumnKey, Row, RowKey
 
 from . import _terminal
 from . import config
 from . import fmt as F
 from . import plots
+from .cells import Cell, ColumnCells, text_width, widest_candidates
 from .data import ColumnStats, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec, quote_ident
 from .screens import ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen, HelpScreen
 from .widgets import CursorList, DetailList
@@ -45,6 +47,7 @@ SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SAMPLE_ROWS = 2_000_000       # rows used for stats/plots when sampling
 AUTO_SAMPLE_ROWS = 200_000_000        # sampling defaults on above this many rows…
 AUTO_SAMPLE_BYTES = 8 * 1024 ** 3     # …or this file size
+WIDTH_SAMPLE_ROWS = 16        # rows spread through a window that set its column widths (plus those on screen)
 
 ACCENTS = ("blue", "cyan", "magenta", "green", "yellow")
 DIM_MODES = ("faint", "bright-black")
@@ -217,6 +220,94 @@ class GridTable(DataTable):
 
     def _page_rows(self) -> int:
         return max(1, self.scrollable_content_region.height - self.header_height - 1)
+
+    # ------------------------------------------------------- lazy cells
+    #: per column, in column order: what its cells share (see pqx.cells); set by set_rows
+    cell_columns: list[ColumnCells] = []
+    _widen_pending: bool = False
+
+    def column_cells(self, formatters: list[F.CellFormatter], raw: bool) -> list[ColumnCells]:
+        """Fresh per-column cell state for the current columns, wired to widen them."""
+        return [ColumnCells(fm, raw, col, self._widened) for fm, col in zip(formatters, self.ordered_columns)]
+
+    def set_rows(self, rows: list[list], labels: list[Text], cell_columns: list[ColumnCells]) -> None:
+        """Replace the (cleared) table's rows with ``rows`` of cells, all at once.
+
+        Unlike ``add_row`` this measures no cells: column widths are the caller's
+        business (``ColumnCells`` widen their column as cells get formatted). Row
+        labels are measured here, since they're few."""
+        self.cell_columns = cell_columns
+        keys = [c.key for c in self.ordered_columns]
+        locations, data, rows_meta = self._row_locations, self._data, self.rows
+        for i, (cells, label) in enumerate(zip(rows, labels)):
+            key = RowKey()
+            locations[key] = i
+            data[key] = dict(zip(keys, cells))
+            rows_meta[key] = Row(key, 1, label)
+        if labels:
+            self._labelled_row_exists = True
+            self._label_column.content_width = max(self._label_column.content_width,
+                                                   max(text_width(t) for t in labels))
+        self._require_update_dimensions = True
+        self._update_count += 1
+        self.cursor_coordinate = self.cursor_coordinate
+        if self.row_count and self.columns and self.show_cursor and self.cursor_type != "none":
+            self._highlight_cursor()
+        self.refresh()
+        self.check_idle()
+
+    def update_dimensions_now(self) -> None:
+        """Settle the virtual size now rather than on idle, so the cursor can be
+        scrolled into view at once (DataTable otherwise draws the top of the
+        table first, then scrolls after the refresh)."""
+        self._require_update_dimensions = False
+        new_rows = self._new_rows.copy()
+        self._new_rows.clear()
+        self._update_dimensions(new_rows)
+
+    def _widened(self) -> None:
+        """A cell outgrew its column: redraw with the new widths, once per batch of growth."""
+        if not self._widen_pending:
+            self._widen_pending = True
+            self.call_later(self._relayout)
+
+    def _relayout(self) -> None:
+        self._widen_pending = False
+        self.invalidate_cells()
+
+    @contextmanager
+    def sizing(self):
+        """Columns widened inside this block are drawn by the caller's own redraw: no extra one."""
+        pending, self._widen_pending = self._widen_pending, True
+        try:
+            yield
+        finally:
+            self._widen_pending = pending
+
+    def invalidate_cells(self) -> None:
+        """Cells' text or column widths changed: drop rendered cells and lines, re-measure, redraw."""
+        self._update_count += 1  # every DataTable render cache is keyed on it
+        self._require_update_dimensions = True
+        self.refresh()
+        self.check_idle()
+
+    def fit_columns(self, rows: list[int] | None = None, columns: list[int] | None = None) -> None:
+        """Format the cells in ``rows`` × ``columns`` (default: all), growing columns to fit them."""
+        if rows is None:
+            rows = range(self.row_count)
+        data = self._data
+        keys = [c.key for c in self.ordered_columns]
+        if columns is not None:
+            keys = [keys[i] for i in columns if i < len(keys)]
+        row_keys = [self._row_locations.get_key(r) for r in rows]
+        for rk in row_keys:
+            row = data.get(rk)
+            if row is None:
+                continue
+            for k in keys:
+                cell = row.get(k)
+                if isinstance(cell, Cell):
+                    cell.text  # noqa: B018  (formats and widens the column)
 
     def action_cursor_down(self) -> None:
         if self.cursor_row >= self.row_count - 1 and self.more_below():
@@ -790,13 +881,18 @@ class PqxApp(App):
         grid.clear()
         grid.offset = page.offset
         fm = [self.formatters.get(n) or F.CellFormatter(n, t) for n, t in zip(page.columns, page.types)]
-        raw = self.raw
-        for i, row in enumerate(page.rows):
-            label_n = page.row_numbers[i] if page.row_numbers[i] is not None else page.offset + i
-            grid.add_row(*[f(v, raw) for f, v in zip(fm, row)], label=Text(f"{label_n:,}", style=self.dim))
+        # cells format themselves when first drawn (pqx.cells); widths come from a sample, below
+        ccols = grid.column_cells(fm, self.raw)
+        rows = [list(map(Cell, row, ccols)) for row in page.rows]
+        dim, off = self.dim, page.offset
+        labels = [Text(f"{off + i if n is None else n:,}", style=dim) for i, n in enumerate(page.row_numbers)]
+        grid.set_rows(rows, labels, ccols)
         self.page = page
+        r = max(0, min(len(page.rows) - 1, cursor_abs - page.offset))
+        h = max(1, grid.scrollable_content_region.height - grid.header_height)
+        self._fit_columns(max(0, r - h + 1))  # where the cursor lands, scrolled into view from the top
+        grid.update_dimensions_now()
         if page.rows:
-            r = max(0, min(len(page.rows) - 1, cursor_abs - page.offset))
             grid.move_cursor(row=r, column=min(col, max(0, len(self.cols_shown) - 1)), animate=False)
             grid.scroll_x = scroll_x
         if self.total is None and len(page.rows) < grid.window:
@@ -805,6 +901,32 @@ class PqxApp(App):
         self._render_status()
         self._update_detail()
         self.call_after_refresh(self._render_hscroll)
+
+    def _fit_columns(self, top: int) -> None:
+        """Size the grid's columns for the window, formatting as few cells as possible.
+
+        A number or string column fits its likely widest values
+        (``widest_candidates``); any other column fits a sample of rows spread
+        through the window plus the screenful from row ``top``. A cell that
+        turns out wider widens its column when first drawn."""
+        grid = self.query_one(GridTable)
+        n = grid.row_count
+        if not n or self.page is None:
+            return
+        values = list(zip(*self.page.rows))
+        sampled = []
+        with grid.sizing():
+            for i, cc in enumerate(grid.cell_columns):
+                guess = widest_candidates(values[i], cc.fmt.kind, cc.raw) if i < len(values) else None
+                if guess is None:
+                    sampled.append(i)
+                else:
+                    cc.fit_values(guess)
+            if sampled:
+                h = max(1, grid.scrollable_content_region.height - grid.header_height)
+                step = max(1, n // WIDTH_SAMPLE_ROWS)
+                rows = sorted({*range(0, n, step), n - 1, *range(top, min(n, top + h))})
+                grid.fit_columns(rows, sampled)
 
     @on(GridTable.HScroll)
     def _hscroll(self) -> None:
@@ -1197,8 +1319,11 @@ class PqxApp(App):
     def action_toggle_raw(self) -> None:
         self.raw = not self.raw
         grid = self.query_one(GridTable)
-        if self.page is not None:
-            self._apply_page(self.page, grid.abs_row, grid.cursor_column)
+        for cc in grid.cell_columns:  # cells re-format when next drawn
+            cc.invalidate(self.raw)
+        self._fit_columns(int(grid.scroll_y))
+        grid.invalidate_cells()
+        self._render_status()
 
     def _cursor_formatter(self) -> F.CellFormatter | None:
         grid = self.query_one(GridTable)
@@ -1245,8 +1370,13 @@ class PqxApp(App):
         if col is not None:
             col.label = self._column_label(fm.name)
             col.content_width = max(line.cell_len for line in col.label.split())  # let it shrink to fit
-        if self.page is not None:
-            self._apply_page(self.page, grid.abs_row, grid.cursor_column)
+        for i, cc in enumerate(grid.cell_columns):
+            if cc.fmt.name == fm.name:  # re-format the column: all of it, so its width is exact
+                cc.fmt = fm
+                cc.invalidate()
+                with grid.sizing():
+                    grid.fit_columns(columns=[i])
+        grid.invalidate_cells()
         if (self._stats_rendered and self._stats_rendered[0] is self.view and self._stats_rendered[1] == fm.name
                 and not self._stats_stale):
             self._render_stats(*self._stats_rendered[1:])  # reformat what's shown; no need to re-profile
