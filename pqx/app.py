@@ -462,7 +462,7 @@ class GridTable(DataTable):
         inner = width - 2 * pad
         s = text.plain if text is not None else ""
         if (not s or inner < 1 or text._spans or text.justify not in ("left", "right", "center")
-                or text.overflow not in (None, "fold") or "\n" in s or cell_len(s) != len(s)):
+                or text.overflow not in (None, "fold") or "\n" in s or not (s.isascii() and s.isprintable() or cell_len(s) == len(s))):
             return super()._render_cell(row_index, column_index, base_style, width, cursor, hover)
         fixed = row_index < self.fixed_rows or column_index < self.fixed_columns
         component, post = self._get_styles_to_render_cell(

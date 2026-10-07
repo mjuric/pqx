@@ -82,7 +82,9 @@ def widest_candidates(values, kind: str, raw: bool = False, k: int = 3) -> list 
         return None
     try:
         if kind in ("str", "time"):  # a timestamp's text grows with microseconds and a time zone
-            return heapq.nlargest(k, (v for v in values if v is not None), key=lambda v: cell_len(str(v)))
+            # the longest few first (cheap), then by cell width: a wide character counts twice
+            longest = heapq.nlargest(4 * k, (v for v in values if v is not None), key=lambda v: len(str(v)))
+            return heapq.nlargest(k, longest, key=lambda v: cell_len(str(v)))
         vals = [v for v in values if v is not None and isfinite(v)]
         if raw:
             return [max(vals, key=lambda v: len(repr(v)))] if vals else []
