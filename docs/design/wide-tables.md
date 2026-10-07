@@ -87,6 +87,41 @@ row groups.
 - Results must be identical to today's: values, types (timestamps, decimals,
   nested, dictionary-encoded strings), `file_row_number` labels and NULLs.
 
+### E. Fetch only the columns in view (added during integration)
+Real LSST files (e.g. SSSource: 8M rows × 184 columns in ~1M-row row groups, no
+page index) are dominated by decoding inside big row groups, and that cost
+follows the bytes of the columns requested: on SSSource, 150 rows in the middle
+of a row group take 481 ms with all 184 columns and 55 ms with 20.
+- The grid loads pinned columns plus the visible ones ± one screen. Missing
+  columns are fetched when scrolling reaches them, with
+  `ds.fetch_columns(page.row_numbers, missing)` under their own tag, and merged
+  into the current page.
+- **Staleness:** merge only if a page-generation counter still matches. A new
+  page load cancels outstanding column fetches; different tags don't cancel each
+  other, so cancel explicitly.
+- **Pages without row ids** (`ds.has_row_ids(view)` is False: SQL results, and
+  filtered/sorted views of files with their own `file_row_number`) keep fetching
+  all columns.
+- **Details pane:** it shows every column, so fetch its missing columns for the
+  whole page once (debounced, own tag) and cache them; never per cursor row.
+- Column widths for not-yet-loaded columns must not jump when data arrives:
+  reserve them from metadata/statistics or the header. Copy (`y`), `=`, export,
+  stats and the Details pane need a column's data before using it.
+- Don't inherit the race fixed in #15: a superseded column fetch must never
+  overwrite newer data.
+
+### F. Startup independent of row-group count (added during integration)
+On a 2000-row-group × 300-column file, startup takes 13.9 s before the grid
+responds: `column_chunk_summary` walks 600k column chunks in Python (8.9 s) and is
+called twice (Schema and Metadata tabs) on the UI thread in `on_mount`; opening
+the dataset takes another 3.1 s.
+- Compute the summary once, cached, without per-chunk Python overhead where
+  possible, and build the Schema/Metadata tabs off the critical path (a worker,
+  or lazily on first view) so the grid is usable first.
+- Profile `ParquetDataset.__init__` and fix what dominates it.
+- Target: the grid is interactive in ≤ 1 s on that file, and ≤ 1 s on SSSource;
+  the Schema and Metadata tabs fill in as soon as their data is ready.
+
 ### Not changing
 Behaviour and look: everything must work as now, including cursor, hover,
 pinning, sorting, header clicks, hidden-column markers, the format header
@@ -103,6 +138,8 @@ replaces.
 | `wide-tables-load` | subagent B | section B: `_apply_page`, cell storage, widths, raw/format invalidation |
 | `wide-tables-detail` | subagent C | section C: `DetailList` / `_update_detail` |
 | `wide-tables-fetch` | subagent D | section D: `ParquetDataset.fetch` for trivial views |
+| `wide-tables-lazycols` | subagent E | section E: column-lazy fetching in the grid and Details pane |
+| `wide-tables-startup` | subagent F | section F: startup cost (`column_chunk_summary`, tab building, dataset open) |
 
 - **Subagents:** each runs the benchmark before and after their work, puts the
   numbers in their PR, commits and pushes per logical unit, keeps `pytest` and
