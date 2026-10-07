@@ -18,7 +18,6 @@ from itertools import accumulate
 
 import duckdb
 import pyarrow as pa
-from rich.cells import cell_len
 from rich.console import Group
 from rich.padding import Padding
 from rich.segment import Segment
@@ -45,7 +44,7 @@ from . import _terminal
 from . import config
 from . import fmt as F
 from . import plots
-from .cells import CellRow, ColumnCells, RowCells, RowLayout, text_width, widest_candidates
+from .cells import CellRow, ColumnCells, one_cell_per_char, RowCells, RowLayout, text_width, widest_candidates
 from .data import ColumnStats, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec, quote_ident
 from .screens import ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen, HelpScreen
 from .widgets import CursorList, DetailList
@@ -461,8 +460,12 @@ class GridTable(DataTable):
         pad = self.cell_padding
         inner = width - 2 * pad
         s = text.plain if text is not None else ""
+        if not s or not one_cell_per_char(s):  # (tabs, wide or combining characters: Rich's job)
+            return super()._render_cell(row_index, column_index, base_style, width, cursor, hover)
+        if text.justify != "left":
+            s = s.rstrip()  # as Rich's right/center justification does
         if (not s or inner < 1 or text._spans or text.justify not in ("left", "right", "center")
-                or text.overflow not in (None, "fold") or "\n" in s or not (s.isascii() and s.isprintable() or cell_len(s) == len(s))):
+                or text.overflow not in (None, "fold")):
             return super()._render_cell(row_index, column_index, base_style, width, cursor, hover)
         fixed = row_index < self.fixed_rows or column_index < self.fixed_columns
         component, post = self._get_styles_to_render_cell(

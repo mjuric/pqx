@@ -17,12 +17,14 @@ column grows (see :meth:`ColumnCells.fit`).
 from __future__ import annotations
 
 import heapq
+import unicodedata
 from bisect import bisect_left, bisect_right
 from collections.abc import Sequence
+from functools import lru_cache
 from math import isfinite
 from typing import Any, Callable
 
-from rich.cells import cell_len
+from rich.cells import cell_len, get_character_cell_size
 from rich.text import Text
 
 from .fmt import CellFormatter
@@ -97,11 +99,30 @@ def widest_candidates(values, kind: str, raw: bool = False, k: int = 3) -> list 
     return vals[:k] + vals[max(0, neg - k):neg] + vals[pos:pos + k] + vals[-k:]
 
 
+@lru_cache(maxsize=4096)
+def _one_cell(c: str) -> bool:
+    """A character that is one terminal cell on its own and never joins its neighbours
+    into a grapheme (no combining marks, joiners, variation selectors, flag halves)."""
+    return (get_character_cell_size(c) == 1 and not unicodedata.combining(c)
+            and unicodedata.category(c) not in ("Mn", "Mc", "Me", "Cf") and not 0x1F1E6 <= ord(c) <= 0x1F1FF
+            and not 0x1160 <= ord(c) <= 0x11FF)  # Hangul medial/final jamo compose with the one before
+
+
+def one_cell_per_char(s: str) -> bool:
+    """True if ``s`` is printable and each code point is one cell: then slicing ``s`` crops it
+    exactly as Rich does, and ``len(s)`` is its width."""
+    if s.isascii():
+        return s.isprintable()
+    return s.isprintable() and all(map(_one_cell, s))
+
+
 def text_width(t: Text | str) -> int:
     """Width a text needs on one line: its widest line (as DataTable measures it)."""
     s = t if isinstance(t, str) else t.plain
     if s.isascii() and s.isprintable():  # the usual case: one cell per character
         return len(s)
+    if "\t" in s:
+        s = s.expandtabs(8)  # Rich expands tabs before measuring and drawing
     if "\n" not in s:
         return cell_len(s)
     return max(cell_len(line) for line in s.split("\n"))

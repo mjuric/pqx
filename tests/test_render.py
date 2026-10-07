@@ -333,3 +333,69 @@ async def test_pin_while_scrolled_right(wide300_path, size, keys):
             await settle(pilot, app)
         assert g.fixed_columns > 200
         await _check_look(pilot, app, g, "pinned far right")
+
+
+# Characters that trip up a naive one-line renderer: tabs, controls, wide, combining, joiners,
+# variation selectors, flags, skin tones, Hangul jamo, trailing spaces.
+FUZZ_ALPHABET = (list("abcXYZ019 .-_") + [" ", "  ", "\t", "\r", "\x00", "\x1b", "\x7f", "\x85", "\xa0", "\xad",
+                 "中", "日本", "ｱ", "Ａ", "́", "​", "‍", "️", "ᄀ", "ᅡ", "ᆨ", "👍", "❤", "🇺🇸",
+                 "é", "ß", "Ω", "∞", "·", "✓", "–", "…", " ", "　", "ا", "\U0001F3FD", "ั", "⃝", "∅"])
+
+
+async def test_render_cell_fast_path_matches_datatable_fuzz(monkeypatch, tmp_path):
+    """GridTable._render_cell vs DataTable._render_cell on random one-line texts, styles,
+    justifications and widths, under random cursor, hover, pinned, zebra, padding, CSS
+    priority and focus states (seeded, so failures reproduce)."""
+    import random
+
+    from rich.style import Style
+    from rich.text import Text
+
+    from pqx import cells as C
+
+    rnd = random.Random(1234)
+    n = 40
+    p = tmp_path / "fuzz.parquet"
+    pq.write_table(pa.table({"id": np.arange(n), **{f"s{i}": [f"v{i}{j}" for j in range(n)] for i in range(6)}}), p)
+    current = [None]
+    real = C.Cell.text
+    monkeypatch.setattr(C.Cell, "text", property(lambda self: real.fget(self) if current[0] is None else current[0]))
+    styles = ["", "dim", "bold", "bold red", Style(italic=True), Style(color="red", bgcolor="blue")]
+    app = PqxApp(str(p))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        from pqx.app import pqx_theme
+        app.register_theme(pqx_theme("red", "#808080"))
+        themes = [app.theme, "pqx-red"]
+        bad = []
+        for t in range(1500):
+            if t % 150 == 0:
+                g.zebra_stripes = rnd.random() < 0.5
+                g.cursor_type = rnd.choice(["cell", "row", "column", "cell"])
+                g.cursor_foreground_priority = rnd.choice(["css", "renderable"])
+                g.cursor_background_priority = rnd.choice(["css", "renderable"])
+                g.fixed_columns = rnd.choice([0, 2, 2])
+                g.cell_padding = rnd.choice([1, 1, 2])
+                g.blur() if rnd.random() < 0.3 else g.focus()
+                app.theme = rnd.choice(themes)
+                await pilot.pause(0.02)
+            s = "".join(rnd.choice(FUZZ_ALPHABET) for _ in range(rnd.randint(0, 12)))
+            current[0] = Text(s, style=rnd.choice(styles), justify=rnd.choice(["left", "right", "center"]))
+            r, c = rnd.randint(0, 20), rnd.randint(0, 6)
+            if c < g.fixed_columns:
+                base = g.get_component_styles("datatable--fixed").rich_style + Style.from_meta({"fixed": True})
+            else:
+                base = g._get_row_style(r, g.rich_style)
+            width = rnd.randint(1, 30)
+            cursor, hover = rnd.random() < 0.4, rnd.random() < 0.3
+            g._show_hover_cursor = rnd.random() < 0.5
+            g._cell_render_cache.clear()
+            ours = GridTable._render_cell(g, r, c, base, width, cursor, hover)
+            g._cell_render_cache.clear()
+            ref = DataTable._render_cell(g, r, c, base, width, cursor, hover)
+            g._cell_render_cache.clear()
+            if [[(x.text, x.style) for x in line] for line in ours] != [[(x.text, x.style) for x in line] for line in ref]:
+                bad.append((s, current[0].justify, width, cursor, hover, c < g.fixed_columns))
+        assert g._fast_cell_styles, "the fast path wasn't used"
+        assert not bad, bad[:5]
