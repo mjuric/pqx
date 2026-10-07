@@ -379,7 +379,7 @@ class ParquetDataset:
         single-threaded, stopping as soon as the window is complete, then casts
         each column to the Arrow type DuckDB returns for it, so the page is
         identical to the DuckDB path's. Returns ``None`` to use DuckDB instead:
-        when DuckDB should be faster (see ``_direct_is_cheaper``), or for
+        when DuckDB should be faster (see ``_direct_estimate``), or for
         anything pyarrow might read differently (unusual types or metadata,
         or any error)."""
         names = list(columns or self.column_names)
