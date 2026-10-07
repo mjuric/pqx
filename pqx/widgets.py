@@ -173,6 +173,27 @@ class DetailList(CursorList):
         self.clear_options()
         self.add_options([Option(self._prompt(k, False), id=n) for k, (n, _) in enumerate(entries)])
 
+    def replace_option_prompt_at_index(self, index: int, prompt) -> DetailList:
+        """OptionList's, but when the entry keeps its height (a moving selection
+        restyles two entries) only that entry is redrawn, not all in view."""
+        option = self.get_option_at_index(index)
+        height = self._line_cache.heights.get(index)
+        option._set_prompt(prompt)
+        region = self.scrollable_content_region
+        if height is None or not region:
+            self._clear_caches()
+            return self
+        width = region.width - self._get_left_gutter_width()
+        width -= self.get_component_styles("option-list--option").padding.width
+        if self._get_visual(option).get_height(self.styles, width) != height:
+            self._clear_caches()
+            return self
+        cache = self._option_render_cache
+        for key in [key for key in cache.keys() if key[0] is option]:
+            cache.discard(key)
+        self.refresh()
+        return self
+
     def select(self, name: str | None) -> None:
         """Select the entry for column ``name`` (scrolling it into view if it moves)."""
         k = next((k for k, (n, _) in enumerate(self._items) if n == name), None)

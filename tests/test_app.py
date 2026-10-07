@@ -1028,8 +1028,19 @@ def detail_text(lst):
     return {k: " ".join(v) for k, v in out.items()}
 
 
-async def test_detail_pane_renders_only_what_is_in_view(tall_detail_path):
+async def test_detail_pane_renders_only_what_is_in_view(tall_detail_path, monkeypatch):
+    from textual.visual import RichVisual
+
     from pqx.widgets import DetailList
+
+    drawn = []  # entries rendered into lines
+    render_strips = RichVisual.render_strips
+
+    def counted(self, *a):
+        if isinstance(self._widget, DetailList):
+            drawn.append(self._renderable)
+        return render_strips(self, *a)
+    monkeypatch.setattr(RichVisual, "render_strips", counted)
 
     app = PqxApp(tall_detail_path)
     async with app.run_test(size=(150, 30)) as pilot:
@@ -1044,11 +1055,13 @@ async def test_detail_pane_renders_only_what_is_in_view(tall_detail_path):
         orig = lst._grid
         lst._grid = lambda name, *a: (built.append(name), orig(name, *a))[1]
 
-        await pilot.press("down")  # a new row: only the entries in view are built
+        drawn.clear()
+        await pilot.press("down")  # a new row: only the entries in view are built and drawn
         await pilot.pause(0.1)
         assert g.cursor_row == 3
         in_view = lst.scrollable_content_region.height
         assert 0 < len(built) <= in_view + 1, built  # (+1: the selection, built whole)
+        assert in_view - 1 <= len(drawn) <= in_view + 1
         shown = detail_text(lst)
         assert shown[5].split()[:2] == ["c005", "3005"]
 
@@ -1075,6 +1088,19 @@ async def test_detail_pane_renders_only_what_is_in_view(tall_detail_path):
         for i, text in detail_text(lst).items():
             name = lst.options[i].id
             assert text.split()[:2] == ([name, "even#2"] if name == "note" else [name, str(2000 + int(name[1:]))])
+
+        # moving the selection redraws the two entries it leaves and enters, not all in view
+        lst.scroll_home(animate=False)
+        await pilot.pause(0.05)
+        built.clear()
+        drawn.clear()
+        g.move_cursor(column=1)
+        await pilot.pause(0.1)
+        assert lst.selected == "c001" and len(built) <= 2 and len(drawn) <= 2, (built, drawn)
+
+        def name_reversed(k):
+            return lst.render_line(lst._index_to_line[k] - lst.scroll_offset.y)._segments[0].style.reverse
+        assert name_reversed(1) and not name_reversed(0) and not name_reversed(2)
 
 
 def test_detail_entry_layout_matches_rich_grid():
