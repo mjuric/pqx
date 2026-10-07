@@ -58,9 +58,9 @@ SAMPLE_ROWS = 2_000_000       # rows used for stats/plots when sampling
 AUTO_SAMPLE_ROWS = 200_000_000        # sampling defaults on above this many rows…
 AUTO_SAMPLE_BYTES = 8 * 1024 ** 3     # …or this file size
 WIDTH_SAMPLE_ROWS = 16        # rows spread through a window that size its non-numeric columns
-LAZY_TAGS = ("cols", "detail", "cell")
+LAZY_TAGS = ("cols", "detail", "cell")  # query tags of the column fetches for a page (see load_window)
 LAZY_MIN_SAVING_MS = 20  # load a plain view's window lazily only if that's estimated to save this much
-DETAIL_FETCH_DELAY = 0.1  # s the Details pane waits (for the cursor to settle) before loading a page's columns  # query tags of the column fetches for a page (see load_window)
+DETAIL_FETCH_DELAY = 0.1  # s the Details pane waits (for the cursor to settle) before loading a page's columns
 #: a typical value per formatting kind, to size a column not loaded yet that has no statistics
 KIND_SAMPLES = {"float": -1.2345678901234567, "float32": -1.2345678, "flux": -1234.5678901, "err": 0.012345678,
                 "mag": 21.123456, "angle": 123.4567891, "mjd": 60000.123456789, "bool": True,
@@ -908,7 +908,7 @@ class PqxApp(App):
         self._fetch_seq = 0
         self._inflight: dict[str, tuple[int, int, frozenset]] = {}  # tag -> (seq, page gen, columns)
         self._cols_failed: set[str] = set()  # columns that failed to load for the page on screen
-        self._stats_cache: dict[tuple[int, int], tuple] = {}  # (row group, leaf) -> (min, max) or ()
+        self._chunk_stats: dict[tuple[int, int], tuple] = {}  # (row group, leaf) -> (min, max) or ()
         self.total: int | None = self.ds.num_rows if self.view.is_trivial else None
         big = self.ds.num_rows > AUTO_SAMPLE_ROWS or self.ds.file_size > AUTO_SAMPLE_BYTES
         self.sampling = big if sample is None else sample
@@ -1281,6 +1281,7 @@ class PqxApp(App):
         finally:
             self.call_from_thread(self._set_busy, "page", None)
         if view is not self.view:
+            self.call_from_thread(self._page_failed, gen)
             return
         if cols is not None:
             page = _with_placeholders(page, shown, dict(self.result_schema))
@@ -1288,7 +1289,8 @@ class PqxApp(App):
 
     @_ui
     def _page_failed(self, gen: int) -> None:
-        """The newest window load failed or was cancelled: the old page stays, columns load for it again."""
+        """A window load came to nothing (failed, cancelled, or its view changed meanwhile). If it
+        was the newest, the page on screen stays, and its columns load as before."""
         if gen == self._page_gen:
             self._page_gen += 1
             self._shown_gen = self._page_gen
@@ -1384,6 +1386,7 @@ class PqxApp(App):
         grid = self.query_one(GridTable)
         if len(grid.ordered_columns) != len(page.columns):
             return
+
         def missing(screens):
             return [n for n in (page.columns[i] for i in grid.columns_near(screens=screens))
                     if n in page.missing and n not in self._cols_failed]
@@ -1501,7 +1504,7 @@ class PqxApp(App):
 
     def _chunk_min_max(self, rg: int, leaf: int) -> tuple:
         key = (rg, leaf)
-        hit = self._stats_cache.get(key)
+        hit = self._chunk_stats.get(key)
         if hit is None:
             hit = ()
             try:
@@ -1510,7 +1513,7 @@ class PqxApp(App):
                     hit = (st.min, st.max)
             except Exception:  # noqa: BLE001 - statistics pyarrow can't decode: none
                 pass
-            self._stats_cache[key] = hit
+            self._chunk_stats[key] = hit
         return hit
 
     def _reserved_width(self, name: str, fm: F.CellFormatter, raw: bool, rgs: list[int]) -> int:
@@ -1523,8 +1526,11 @@ class PqxApp(App):
             for rg in rgs:
                 vals.extend(self._chunk_min_max(rg, leaves[0]))
         if fm.kind in F.SIG_DIGITS:
+            floats = [v for v in vals if isinstance(v, float) and math.isfinite(v)]
             vals = [math.copysign(1.2345678901234567, v) * 10.0 ** math.floor(math.log10(abs(v)))
                     if isinstance(v, float) and math.isfinite(v) and v else v for v in vals]
+            if floats and min(floats) < 0 < max(floats):  # values near zero, with leading zeros
+                vals += [-0.012345678901234567, 0.012345678901234567]
         if not vals and fm.kind in KIND_SAMPLES:
             vals = [KIND_SAMPLES[fm.kind]]
         width = 0
