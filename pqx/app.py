@@ -89,8 +89,8 @@ KEYS = {
     "tab-plot": [("enter/click", "pick"), ("tab", "next field"), ("← →", "change"), ("r", "rotate"), ("m", "sampling"), ("e", "export"),
                  ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
     "tab-meta": [("↑↓", "scroll"), ("tab", "next panel"), ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
-    "detail": [("↑↓", "column"), ("enter/esc/tab", "back to grid"), ("d", "close"), ("1-5", "tabs"),
-               ("?", "help"), ("q", "quit")],
+    "detail": [("↑↓", "column"), ("=", "match"), ("y", "copy"), ("i", "stats"), ("enter/esc/tab", "back to grid"),
+               ("d", "close"), ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
     "dropdown": [("type", "to filter"), ("↑↓", "move"), ("enter/click", "pick"), ("esc", "close")],
     "filter": [("enter", "apply"), ("esc", "back"), ("ctrl+x", "clear"), ("↑↓", "history"), ("→", "complete"),
                ("select … from t", "full query")],
@@ -942,6 +942,9 @@ class PqxApp(App):
         self._cols_cancelled = False  # a fetch for the page on screen was cancelled (see cell_highlighted)
         self._cell_waiters: dict[str, list] = {}  # cell fetch tag -> actions waiting for that column
         self._chunk_stats: dict[tuple[int, int], tuple] = {}  # (row group, leaf) -> (min, max) or ()
+        #: (view, file row): the record the cursor is to stay on once that view's first page is
+        #: shown (see _set_view and _keep_record)
+        self._keep: tuple[View, int] | None = None
         self.total: int | None = self.ds.num_rows if self.view.is_trivial else None
         big = self.ds.num_rows > AUTO_SAMPLE_ROWS or self.ds.file_size > AUTO_SAMPLE_BYTES
         self.sampling = big if sample is None else sample
@@ -1344,6 +1347,7 @@ class PqxApp(App):
         """A window load came to nothing (failed, cancelled, or its view changed meanwhile). If it
         was the newest, the page on screen stays, and its columns load as before."""
         if gen == self._page_gen:
+            self._keep = None  # (the first page of a view didn't come: no record to go back to)
             self._page_gen += 1
             self._shown_gen = self._page_gen
             self._ensure_columns()  # load_window cancelled the page's column fetches: start again
@@ -1392,6 +1396,47 @@ class PqxApp(App):
         self._update_detail()
         self.call_after_refresh(self._render_hscroll)
         self._ensure_columns()
+        if self._keep is not None and self._keep[0] is self.view:
+            if page.offset == 0:
+                self._keep_record(page)
+            else:  # (the user went elsewhere before the first page came)
+                self._keep = None
+
+    def _keep_record(self, page) -> None:
+        """The first page of a new view is shown, at its top: put the cursor on the record
+        it was on before (``_keep``), here if the page holds it, else once found."""
+        view, file_row = self._keep
+        self._keep = None
+        try:
+            r = page.row_numbers.index(file_row)
+        except ValueError:
+            r = None
+        if r is not None:
+            self._seek_to(page.offset + r)
+        elif len(page.rows) >= self.query_one(GridTable).window:  # more rows than this page: look it up
+            self._locate_record(view, file_row)
+
+    @work(thread=True, exclusive=True, group="locate")
+    def _locate_record(self, view: View, file_row: int) -> None:
+        """Find file row ``file_row``'s position in ``view`` (a scan of the file: off the UI
+        thread, after the first page, and cancelled by Esc or a newer view)."""
+        self.call_from_thread(self._set_busy, "locate", "finding row")
+        try:
+            with self.ds.tagged("locate"):
+                pos = self.ds.find_row(view, file_row)
+        except Exception:  # noqa: BLE001  (cancelled, or failed: the cursor just stays at the top)
+            return
+        finally:
+            self.call_from_thread(self._set_busy, "locate", None)
+        if pos is not None:
+            self.call_from_thread(self._record_located, view, pos)
+
+    @_ui
+    def _record_located(self, view: View, pos: int) -> None:
+        # only if the view is still the one, and the cursor still where the first page put it
+        # (the user moved meanwhile: it stays where they took it)
+        if view is self.view and self.query_one(GridTable).abs_row == 0 and pos > 0:
+            self._seek_to(pos)
 
     def _fit_columns(self, columns: list[int] | None = None) -> None:
         """Size the grid's columns (default: all) for the window, formatting as few cells as possible.
@@ -1789,6 +1834,15 @@ class PqxApp(App):
             self._move_grid_to_column(name)
         self.query_one(GridTable).focus()
 
+    def action_detail_key(self, action: str, *args) -> None:
+        """A grid key pressed in the Details pane (=, y, i, F, < >): the same action on the
+        pane's field of the record it shows, i.e. the grid's cell there. Focus stays in the
+        pane (the format dialog hands it back when it closes; i goes to Stats)."""
+        name = self.query_one(DetailList).selected
+        if not name or not self._move_grid_to_column(name):
+            return
+        getattr(self, f"action_{action}")(*args)
+
     @on(OptionList.OptionHighlighted, "#detail-list")
     def detail_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         # only the user's own moves in the pane drive the grid. The pane
@@ -1924,9 +1978,16 @@ class PqxApp(App):
         self._rebuild_columns()
         self._build_stats_list()
         self._init_plot_controls(keep=True)
+        # the cursor stays on the same record: in a plain view, the file row is its position; in a
+        # filtered or sorted one, it's looked up once the first page is shown (_keep_record)
         target = 0
+        self._keep = None
+        self.ds.interrupt("locate")  # (a lookup for the view being replaced)
         if keep_file_row is not None:
-            target = keep_file_row if view.is_trivial else 0
+            if view.is_trivial:
+                target = keep_file_row
+            elif self.ds.has_row_ids(view):
+                self._keep = (view, keep_file_row)
         # stay on the current column if the new view shows it
         col = self.cols_shown.index(self.current_column) if self.current_column in self.cols_shown else 0
         self.load_window(max(0, target - grid.window // 2), target, col)
@@ -2012,7 +2073,12 @@ class PqxApp(App):
         cur = inp.value.strip()
         inp.value = f"({cur}) and {cond}" if cur and " or " in cur.lower() else (f"{cur} and {cond}" if cur else cond)
         self.history.append(inp.value)
-        self.apply_filter(inp.value)
+        # the record filtered on matches the new filter: the cursor stays on it
+        grid = self.query_one(GridTable)
+        fr = None
+        if self.page and self.page.rows:
+            fr = self.page.row_numbers[min(grid.cursor_row, len(self.page.rows) - 1)]
+        self.apply_filter(inp.value, fr)
 
     @_ui
     def _show_error(self, e: Exception, mark_input: bool = False) -> None:
@@ -2060,6 +2126,8 @@ class PqxApp(App):
         else:
             order = []
         self.view = View(where=self.view.where, order_by=order)
+        self._keep = None
+        self.ds.interrupt("locate")
         grid = self.query_one(GridTable)
         col = grid.cursor_column
         self.total = self.ds.num_rows if self.view.is_trivial else self.total
@@ -2134,7 +2202,8 @@ class PqxApp(App):
             self.notify(f"{F.sanitize(fm.name)} has no digits to change · F sets a format spec",
                         severity="warning", timeout=3, markup=False)
             return
-        self._set_format(fm, new)
+        # (the Details pane always shows full precision: from there, say where the change shows)
+        self._set_format(fm, new, " (grid)" if isinstance(self.focused, DetailList) else "")
 
     def action_set_format(self) -> None:
         fm = self._cursor_formatter()
@@ -2147,8 +2216,9 @@ class PqxApp(App):
         self._with_cursor_value(lambda _, sample: self.push_screen(FormatScreen(fm.name, fm.kind, fm.override,
                                                                                   sample), done))
 
-    def _set_format(self, fm: F.CellFormatter, value: int | str | None) -> None:
-        """Apply a column's format override (None = automatic), redraw, and remember it."""
+    def _set_format(self, fm: F.CellFormatter, value: int | str | None, where: str = "") -> None:
+        """Apply a column's format override (None = automatic), redraw, and remember it.
+        ``where`` is appended to the notification (e.g. " (grid)")."""
         fm.override = value
         if value is None:
             self.col_formats.pop(fm.name, None)
@@ -2175,10 +2245,10 @@ class PqxApp(App):
         try:
             config.save_format(fm.name, value)
         except (config.ConfigError, OSError) as e:
-            self.notify(f"{name}: {shown}, for this session only — not saved: {F.sanitize(str(e))}",
+            self.notify(f"{name}: {shown}{where}, for this session only — not saved: {F.sanitize(str(e))}",
                         severity="warning", timeout=6, markup=False)
             return
-        self.notify(f"✓ {name}: {shown}", timeout=2, markup=False)
+        self.notify(f"✓ {name}: {shown}{where}", timeout=2, markup=False)
 
     def action_copy_cell(self) -> None:
         self._with_cursor_value(self._copy_value)
