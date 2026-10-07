@@ -3,6 +3,7 @@ import os
 
 import pyarrow.parquet as pq
 import pytest
+from rich.styled import Styled
 from textual.worker import WorkerState
 from textual.widgets import DataTable, Input, OptionList, Static, TabbedContent
 from textual.widgets.data_table import ColumnKey
@@ -610,3 +611,393 @@ async def test_format_change_does_not_resurrect_old_stats(demo_path):
         await pilot.press("less_than_sign")
         await pilot.pause(0.1)
         assert len(calls) == 1  # old numbers are not redrawn under the new filter
+
+
+async def test_move_grid_to_column(demo_path):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        g.move_cursor(row=5)
+        assert app._move_grid_to_column("ingestTime")
+        await pilot.pause(0.05)
+        assert app.cols_shown[g.cursor_column] == "ingestTime" and g.cursor_row == 5
+        app.set_current_column("ra", "grid")
+        assert app.current_column == "ra"
+        app.cols_shown = [c for c in app.cols_shown if c != "dec"]
+        assert not app._move_grid_to_column("dec")
+
+
+async def _press(pilot, app, *keys):
+    await pilot.press(*keys)
+    await settle(pilot, app)
+    await pilot.pause(0.1)
+
+
+def _count_stats(app) -> list[str]:
+    calls = []
+    compute = app.compute_stats
+    app.compute_stats = lambda name: (calls.append(name), compute(name))
+    return calls
+
+
+async def test_linked_columns_across_tabs(demo_path):
+    """Data, Schema and Stats stay on one current column, by number keys and ctrl+arrows."""
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        names = app.ds.column_names
+        g = app.query_one(GridTable)
+        st = app.query_one("#schema-table", DataTable)
+        ol = app.query_one("#stats-cols", OptionList)
+        tc = app.query_one(TabbedContent)
+        assert app.current_column == names[0]
+        calls = _count_stats(app)
+
+        g.move_cursor(row=5, column=names.index("mag"))
+        await pilot.pause(0.1)
+        assert app.current_column == "mag"
+
+        await _press(pilot, app, "2")  # Data -> Schema
+        assert tc.active == "tab-schema" and st.cursor_row == names.index("mag")
+        assert plain(app.query_one("#schema-desc", Static)).startswith("mag")
+        await _press(pilot, app, "down")
+        assert app.current_column == "snr"
+
+        await _press(pilot, app, "3")  # Schema -> Stats: highlighted and profiled, once
+        assert ol.highlighted == names.index("snr") and app._stats_shown == "snr" and calls == ["snr"]
+        await pilot.press("down")
+        await pilot.pause(0.3)
+        await settle(pilot, app)
+        assert app.current_column == "trailLength" and app._stats_shown == "trailLength"
+
+        await _press(pilot, app, "1")  # Stats -> Data: same row
+        assert names[g.cursor_column] == "trailLength" and g.cursor_row == 5
+
+        await _press(pilot, app, "3")  # Data -> Stats: already profiled, not again
+        assert ol.highlighted == names.index("trailLength") and calls == ["snr", "trailLength"]
+        await _press(pilot, app, "up")
+        await _press(pilot, app, "2")  # Stats -> Schema
+        assert st.cursor_row == names.index("snr")
+        await _press(pilot, app, "up")
+        await _press(pilot, app, "1")  # Schema -> Data
+        assert names[g.cursor_column] == "mag" and g.cursor_row == 5
+
+        await _press(pilot, app, "right")
+        await _press(pilot, app, "ctrl+right")  # Data -> Schema
+        assert tc.active == "tab-schema" and st.cursor_row == names.index("snr")
+        await _press(pilot, app, "down")
+        await _press(pilot, app, "ctrl+right")  # Schema -> Stats
+        assert tc.active == "tab-stats" and app._stats_shown == "trailLength"
+        await pilot.press("down")
+        await pilot.pause(0.3)
+        await _press(pilot, app, "ctrl+left")  # Stats -> Schema
+        assert tc.active == "tab-schema" and st.cursor_row == names.index("isDipole")
+        await _press(pilot, app, "down")
+        await _press(pilot, app, "ctrl+left")  # Schema -> Data
+        assert tc.active == "tab-data" and names[g.cursor_column] == "detector"
+        await _press(pilot, app, "left")
+        await _press(pilot, app, "ctrl+left", "ctrl+left", "ctrl+left")  # Data -> Meta -> Plot (not linked) -> Stats
+        assert tc.active == "tab-stats" and ol.highlighted == names.index("isDipole")
+        assert app.current_column == "isDipole"
+        await pilot.press("up")
+        await pilot.pause(0.3)
+        await _press(pilot, app, "ctrl+right", "ctrl+right", "ctrl+right")  # Stats -> Plot -> Meta -> Data
+        assert tc.active == "tab-data" and names[g.cursor_column] == "trailLength" and g.cursor_row == 5
+
+
+async def test_linked_columns_jumps(demo_path):
+    """i and Schema Enter jump to Stats on that column, profile it once, and the others follow."""
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        names = app.ds.column_names
+        g = app.query_one(GridTable)
+        st = app.query_one("#schema-table", DataTable)
+        tc = app.query_one(TabbedContent)
+        calls = _count_stats(app)
+
+        g.move_cursor(column=names.index("band"))
+        await _press(pilot, app, "i")
+        assert tc.active == "tab-stats" and app._stats_shown == "band" and calls == ["band"]
+        await _press(pilot, app, "2")
+        assert st.cursor_row == names.index("band")
+        st.move_cursor(row=names.index("dec"))
+        await _press(pilot, app, "enter")
+        assert tc.active == "tab-stats" and app._stats_shown == "dec" and calls == ["band", "dec"]
+        assert app.current_column == "dec"
+        await _press(pilot, app, "1")
+        assert names[g.cursor_column] == "dec"
+
+
+async def test_linked_columns_hidden(demo_path):
+    """A hidden current column leaves the grid put, with a status hint until the cursor moves."""
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        names = app.ds.column_names
+        g = app.query_one(GridTable)
+        st = app.query_one("#schema-table", DataTable)
+        status = app.query_one("#status", Static)
+        g.move_cursor(row=7, column=names.index("mag"))
+        await _press(pilot, app, "minus")  # hide mag: the cursor lands on snr, same row
+        assert app.current_column == "snr" and g.abs_row == 7
+
+        await _press(pilot, app, "2")
+        st.move_cursor(row=names.index("mag"))
+        await _press(pilot, app, "1")
+        assert app.cols_shown[g.cursor_column] == "snr" and app.current_column == "mag"
+        s = plain(status)  # appended to the usual status
+        assert s.startswith("✓ 20,000 rows") and s.endswith("! mag is hidden · c to show")
+        await _press(pilot, app, "2")  # nothing moved: Schema is still on mag
+        assert st.cursor_row == names.index("mag") and app.current_column == "mag"
+        assert "hidden" not in plain(status)
+        await _press(pilot, app, "1")
+        assert "mag is hidden" in plain(status)
+        await _press(pilot, app, "right")  # moving clears the hint
+        assert "hidden" not in plain(status) and app.current_column == app.cols_shown[g.cursor_column]
+
+        await _press(pilot, app, "2")
+        st.move_cursor(row=names.index("mag"))
+        await _press(pilot, app, "1")
+        assert "mag is hidden" in plain(status)
+        await pilot.press("c")  # bringing it back lands on it, same row
+        assert isinstance(app.screen, ColumnPicker)
+        await pilot.press("ctrl+a")
+        await pilot.click("#apply")
+        await settle(pilot, app)
+        assert app.cols_shown[g.cursor_column] == "mag" and "hidden" not in plain(status)
+        assert g.abs_row == 7
+
+        # a filter clears the hint, and it never hides "No matching rows"
+        await _press(pilot, app, "minus")
+        await _press(pilot, app, "2")
+        st.move_cursor(row=names.index("mag"))
+        await _press(pilot, app, "1")
+        assert "mag is hidden" in plain(status)
+        await pilot.press("slash", *"mag > 99", "enter")
+        await settle(pilot, app)
+        assert app.total == 0 and plain(status).startswith("! No matching rows") and "hidden" not in plain(status)
+
+
+async def test_linked_columns_filters(demo_path):
+    """Applying a filter keeps the current column in the grid, and on Stats re-profiles it."""
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        names = app.ds.column_names
+        g = app.query_one(GridTable)
+        st = app.query_one("#schema-table", DataTable)
+        ol = app.query_one("#stats-cols", OptionList)
+        g.move_cursor(column=names.index("mag"))
+        await pilot.press("slash", *"mag > 18", "enter")  # from Data
+        await settle(pilot, app)
+        assert not app.view.is_trivial and names[g.cursor_column] == "mag" and app.current_column == "mag"
+
+        await _press(pilot, app, "2")
+        await pilot.press("slash", *"mag > 19", "enter")  # from Schema
+        await settle(pilot, app)
+        assert st.cursor_row == names.index("mag") and app.current_column == "mag"
+        await _press(pilot, app, "escape", "3")  # profiled under the new filter
+        assert app._stats_shown == "mag" and app._stats_rendered[0] is app.view
+
+        await pilot.press("slash", *"select ra, dec from t", "enter")  # on Stats, dropping mag
+        await settle(pilot, app)
+        assert app._stats_col == "ra" and ol.highlighted == 0 and app._stats_shown == "ra"
+        assert app._stats_rendered[0] is app.view and app.current_column == "mag"
+        await pilot.press("ctrl+x")  # cleared: back on mag
+        await settle(pilot, app)
+        await _press(pilot, app, "escape")  # out of the filter box
+        assert app.query_one(TabbedContent).active == "tab-stats"
+        assert app.view.is_trivial and ol.highlighted == names.index("mag") and app._stats_shown == "mag"
+        assert app._stats_rendered[0] is app.view
+        await _press(pilot, app, "1")
+        assert names[g.cursor_column] == "mag"
+
+
+async def test_linked_columns_sql_result(demo_path):
+    """SQL-result columns that aren't in the file leave Schema on its own row; Stats follows."""
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        names = app.ds.column_names
+        g = app.query_one(GridTable)
+        st = app.query_one("#schema-table", DataTable)
+        ol = app.query_one("#stats-cols", OptionList)
+        status = app.query_one("#status", Static)
+        await pilot.press("slash", *"select ra, dec, mag*2 as m2 from t", "enter")
+        await settle(pilot, app)
+        assert app.cols_shown == ["ra", "dec", "m2"]
+        await _press(pilot, app, "end")
+        assert app.current_column == "m2"
+
+        row = st.cursor_row
+        await _press(pilot, app, "2")  # m2 isn't in the file: Schema stays put
+        assert st.cursor_row == row and app.current_column == "m2"
+        await _press(pilot, app, "3")
+        assert ol.highlighted == 2 and app._stats_shown == "m2"
+        await _press(pilot, app, "2")
+        st.move_cursor(row=names.index("dec"))
+        await _press(pilot, app, "1")
+        assert app.cols_shown[g.cursor_column] == "dec"
+
+        await _press(pilot, app, "2")
+        st.move_cursor(row=names.index("band"))  # not in the result
+        await _press(pilot, app, "3")  # Stats keeps its column; that doesn't change the current one
+        assert app._stats_col == "m2" and app.current_column == "band"
+        await _press(pilot, app, "2")
+        assert st.cursor_row == names.index("band")
+        await _press(pilot, app, "1")  # can't be shown in this result: no hint, the grid stays put
+        assert app.cols_shown[g.cursor_column] == "dec" and "hidden" not in plain(status)
+        assert app.current_column == "band"
+
+
+async def test_linked_columns_no_bounce(demo_path):
+    """Views moved behind other tabs, or while being synced, never change the current column."""
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        names = app.ds.column_names
+        g = app.query_one(GridTable)
+        ol = app.query_one("#stats-cols", OptionList)
+        g.move_cursor(column=names.index("ra"))
+        await _press(pilot, app, "3")
+        assert app.current_column == "ra"
+        g.move_cursor(column=names.index("mag"), row=3)  # grid and Schema moved behind Stats: ignored
+        app.query_one("#schema-table", DataTable).move_cursor(row=names.index("band"))
+        await pilot.pause(0.1)
+        assert app.current_column == "ra"
+        ol.highlighted = names.index("snr")  # Stats' own move counts
+        await pilot.pause(0.3)
+        await settle(pilot, app)
+        assert app.current_column == "snr"
+        seen = []
+        orig = app.set_current_column
+        app.set_current_column = lambda name, source: (seen.append((name, source)), orig(name, source))
+        for key in ["1", "2", "3", "1", "2", "1", "3"]:
+            await _press(pilot, app, key)
+            assert app.current_column == "snr", key
+        # the grid and Schema were elsewhere: their syncs did report, with the same column
+        assert {s for _, s in seen} >= {"grid", "schema"} and {n for n, _ in seen} == {"snr"}
+
+
+async def test_detail_pane_focus_and_link(demo_path):
+    from textual.events import MouseScrollDown
+
+    from pqx.widgets import DetailList
+
+    app = PqxApp(demo_path)
+    async with app.run_test(size=(150, 24)) as pilot:  # short: the pane scrolls
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        lst = app.query_one(DetailList)
+        g.move_cursor(row=7, column=2)
+        await pilot.press("d")
+        await pilot.pause(0.1)
+        assert lst.option_count == len(app.cols_shown)
+        assert lst.selected == app.cols_shown[2]
+
+        await pilot.press("tab")  # into the pane, selection on the grid's column
+        await pilot.pause(0.05)
+        assert app.focused is lst and lst.selected == app.cols_shown[2]
+        assert app.query_one("#detail").has_focus_within
+        assert "back to grid" in plain(app.query_one("#keys"))
+        assert isinstance(selected_prompt(lst), Styled)  # focused: the whole entry reversed
+        await pilot.press("down", "down")  # the grid follows sideways, same row
+        await pilot.pause(0.05)
+        assert lst.selected == app.cols_shown[4]
+        assert g.cursor_column == 4 and g.cursor_row == 7
+        assert app.current_column == app.cols_shown[4]
+        await pilot.press("end")
+        await pilot.pause(0.05)
+        assert g.cursor_column == len(app.cols_shown) - 1 and g.cursor_row == 7
+        await pilot.press("home", "down")
+        await pilot.press("enter")  # back to the grid, on the selected column
+        await pilot.pause(0.05)
+        assert app.focused is g and g.cursor_column == 1 and g.cursor_row == 7
+        assert not isinstance(selected_prompt(lst), Styled)  # unfocused: just the name
+        assert "into detail" in plain(app.query_one("#keys"))
+
+        for key in ("escape", "tab"):
+            await pilot.press("tab", "down", key)
+            await pilot.pause(0.05)
+            assert app.focused is g and g.cursor_column == 2 and g.cursor_row == 7
+            g.move_cursor(column=1)
+            await pilot.pause(0.05)
+
+        # moving the grid moves the pane's selection, without the pane taking over
+        g.move_cursor(column=5)
+        await pilot.pause(0.05)
+        assert lst.selected == app.cols_shown[5] and app.focused is g
+        await pilot.press("down")  # a new row: same selection, new values
+        await pilot.pause(0.05)
+        assert lst.selected == app.cols_shown[5] and g.cursor_row == 8 and g.cursor_column == 5
+
+        # the wheel only scrolls the pane
+        lst.scroll_home(animate=False)
+        await pilot.pause(0.05)
+        for _ in range(5):  # routed by the screen, as a real wheel is
+            await pilot._post_mouse_events([MouseScrollDown], lst, offset=(2, 2))
+        await pilot.pause(0.1)
+        assert lst.scroll_y > 0
+        assert lst.selected == app.cols_shown[5] and g.cursor_column == 5 and app.focused is g
+        y0 = lst.scroll_y
+        await pilot.press("down")  # a new row keeps the pane where it was scrolled to
+        await pilot.pause(0.05)
+        assert lst.scroll_y == y0 and g.cursor_row == 9
+
+        # a click on an entry focuses the pane and moves the grid there
+        lst.scroll_home(animate=False)
+        await pilot.pause(0.05)
+        y = lst._index_to_line[3]
+        await pilot.click(lst, offset=(2, y))
+        await pilot.pause(0.05)
+        assert app.focused is lst and lst.selected == app.cols_shown[3]
+        assert g.cursor_column == 3 and g.cursor_row == 9
+
+        await pilot.press("d")  # closing the pane hands focus back to the grid
+        await pilot.pause(0.05)
+        assert not app.query_one("#detail").display and app.focused is g
+        assert "into detail" not in plain(app.query_one("#keys"))  # Tab goes to the filter now
+
+
+def selected_prompt(lst):
+    return lst.get_option_at_index(lst.highlighted).prompt
+
+
+async def test_detail_pane_rows_and_views(demo_path):
+    from pqx.widgets import DetailList
+
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        lst = app.query_one(DetailList)
+        d = app.query_one("#detail")
+        g.move_cursor(column=3)
+        await pilot.press("d")
+        await pilot.pause(0.1)
+
+        await pilot.press("ctrl+end")  # a new window of rows: the pane follows, same column
+        await settle(pilot, app)
+        assert g.abs_row == 19_999 and "row 19,999" in str(d.border_title)
+        assert lst.selected == app.cols_shown[3]
+        await pilot.press("tab", "down", "enter")
+        await pilot.pause(0.05)
+        assert g.abs_row == 19_999 and g.cursor_column == 4
+
+        app.apply_filter("select band, ra, dec from t")  # other columns
+        await settle(pilot, app)
+        assert [o.id for o in lst.options] == ["band", "ra", "dec"]
+        await pilot.press("tab", "down")
+        await pilot.pause(0.05)
+        assert app.cols_shown[g.cursor_column] == lst.selected
+        await pilot.press("enter")
+
+        app.apply_filter("ra < -1000")  # no rows: no stale entries to wander into
+        await settle(pilot, app)
+        assert lst.option_count == 0 and "no rows" in str(d.border_title)
+        col = app.current_column
+        await pilot.press("tab", "down")
+        await pilot.pause(0.05)
+        assert app.current_column == col

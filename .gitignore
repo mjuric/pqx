@@ -21,3 +21,5 @@ htmlcov/
 *~
 .idea/
 .vscode/
+.project-map/
+.claude/worktrees/

@@ -37,7 +37,7 @@ from . import fmt as F
 from . import plots
 from .data import ColumnStats, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec, quote_ident
 from .screens import ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen, HelpScreen
-from .widgets import CursorList
+from .widgets import CursorList, DetailList
 
 _terminal.install()  # X10/urxvt mouse (GNU screen) + lenient input decoding; see _terminal.py
 
@@ -57,8 +57,8 @@ SQL_WORDS = ["and", "or", "not", "is", "null", "between", "in", "like", "ilike",
 
 KEYS = {
     "tab-data": [("/", "filter"), ("x", "clear filter"), ("1-5", "tabs"), ("?", "help"), ("q", "quit"),
-                 ("s", "sort"), ("=", "match cell"), ("d", "detail"), ("c", "columns"), ("g", "go to"),
-                 ("e", "export"), ("< > F", "format")],
+                 ("s", "sort"), ("=", "match cell"), ("d", "detail"), ("tab", "into detail"), ("c", "columns"),
+                 ("g", "go to"), ("e", "export"), ("< > F", "format")],
     "tab-schema": [("↑↓", "column"), ("enter", "stats"), ("/", "filter"), ("1-5", "tabs"), ("?", "help"),
                    ("q", "quit")],
     "tab-stats": [("↑↓", "column"), ("l", "log counts"), ("L", "log values"), ("[ ]", "bins"),
@@ -66,6 +66,8 @@ KEYS = {
     "tab-plot": [("enter/click", "pick"), ("tab", "next field"), ("← →", "change"), ("r", "rotate"), ("m", "sampling"), ("e", "export"),
                  ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
     "tab-meta": [("↑↓", "scroll"), ("tab", "next panel"), ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
+    "detail": [("↑↓", "column"), ("enter/esc/tab", "back to grid"), ("d", "close"), ("1-5", "tabs"),
+               ("?", "help"), ("q", "quit")],
     "dropdown": [("type", "to filter"), ("↑↓", "move"), ("enter/click", "pick"), ("esc", "close")],
     "filter": [("enter", "apply"), ("esc", "back"), ("ctrl+x", "clear"), ("↑↓", "history"), ("→", "complete"),
                ("select … from t", "full query")],
@@ -442,6 +444,8 @@ class PqxApp(App):
         self._busy: dict[str, tuple[str, float]] = {}
         self._spin = 0
         self._stats_col: str | None = None
+        self.current_column: str | None = None  # shared by Data, Details, Schema and Stats
+        self._hidden_hint: str | None = None  # current column hidden in the grid, until the cursor moves
         self._hist_bins = 60
         self._hist_log_y = False
         self._hist_log_x = False
@@ -485,8 +489,8 @@ class PqxApp(App):
                             yield GridTable(id="grid", header_height=2, cursor_type="cell")
                             yield EdgeMarker(1, id="more-right", classes="edge")
                         yield Static(id="status")
-                    with VerticalScroll(id="detail", classes="panel"):
-                        yield Static(id="detail-body")
+                    with Vertical(id="detail", classes="panel"):
+                        yield DetailList(id="detail-list")
             with TabPane("Schema", id="tab-schema"):
                 with Vertical():
                     with Vertical(id="schema-panel", classes="panel tabbed"):
@@ -611,12 +615,17 @@ class PqxApp(App):
                 ctx = "dropdown"
             elif isinstance(self.focused, Input):
                 ctx = "filter"
+            elif isinstance(self.focused, DetailList):
+                ctx = "detail"
             else:
                 ctx = self.query_one(TabbedContent).active
         except NoMatches:  # another modal (help, export) is up
             return
         t = Text(no_wrap=True, overflow="ellipsis")
-        for i, (k, label) in enumerate(KEYS.get(ctx, [])):
+        keys = KEYS.get(ctx, [])
+        if ctx == "tab-data" and not self.screen_stack[0].query_one("#detail").display:
+            keys = [kl for kl in keys if kl != ("tab", "into detail")]  # Tab goes to the filter then
+        for i, (k, label) in enumerate(keys):
             if i:
                 t.append("   ")
             t.append(k, "bold")
@@ -719,6 +728,10 @@ class PqxApp(App):
                     bits.append(f"row {grid.abs_row:,}")
                 if bits:
                     t.append("  ·  " + "  ·  ".join(bits), d)
+                if self._hidden_hint and grid.row_count:
+                    t.append("   !", "yellow")
+                    t.append(f" {self._hidden_hint} is hidden", "bold")
+                    t.append(" · c to show", d)
         out.update(t)
 
     # --------------------------------------------------------------- the grid
@@ -841,6 +854,12 @@ class PqxApp(App):
 
     @on(DataTable.CellHighlighted, "#grid")
     def cell_highlighted(self) -> None:
+        # only the Data tab's own moves count: page loads behind another tab don't
+        if self._tab_is("tab-data") and self.page is not None:
+            grid = self.query_one(GridTable)
+            if grid.cursor_column < len(self.page.columns):
+                self.set_current_column(self.page.columns[grid.cursor_column], "grid")
+        self._hidden_hint = None
         self._render_status()
         self._update_detail()
 
@@ -862,24 +881,71 @@ class PqxApp(App):
             return None, None
         return self.page.columns[c], self.page.rows[r][c]
 
+    # ---------------------------------------------------------- current column
+    def set_current_column(self, name: str | None, source: str) -> None:
+        """Record the column the user is on. ``source`` is the view it came from:
+        "grid", "detail", "schema" or "stats". Each view moves to it when shown."""
+        if name:
+            self.current_column = name
+
+    def _move_grid_to_column(self, name: str) -> bool:
+        """Put the grid cursor on column ``name``, same row; False if it isn't shown."""
+        if name not in self.cols_shown:
+            return False
+        grid = self.query_one(GridTable)
+        col = self.cols_shown.index(name)
+        if grid.cursor_column != col:
+            grid.move_cursor(column=col, animate=False)
+        return True
+
     # ------------------------------------------------------------ detail pane
     def action_toggle_detail(self) -> None:
         d = self.query_one("#detail")
         d.display = not d.display
+        if not d.display and self.query_one(TabbedContent).active == "tab-data":
+            self.query_one(GridTable).focus()
         self._update_detail()
+        self._render_keys()
+
+    def action_detail_to_grid(self, cancel: bool = False) -> None:
+        """Enter, Tab or Esc in the pane: back to the grid, on the selected column.
+        Esc also cancels running queries, as it does everywhere else."""
+        if cancel and self._busy:
+            self.action_escape()
+        name = self.query_one(DetailList).selected
+        if name:
+            self._move_grid_to_column(name)
+        self.query_one(GridTable).focus()
+
+    @on(OptionList.OptionHighlighted, "#detail-list")
+    def detail_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        # only the user's own moves in the pane drive the grid. The pane
+        # following the grid must not echo back, even if its event arrives
+        # after the pane got focus: by then it is stale or names the grid's
+        # own column.
+        lst = self.query_one(DetailList)
+        name = event.option.id
+        grid = self.query_one(GridTable)
+        on_grid = self.cols_shown[grid.cursor_column] if grid.cursor_column < len(self.cols_shown) else None
+        if self.focused is not lst or not name or event.option_index != lst.highlighted or name == on_grid:
+            return
+        self.set_current_column(name, "detail")
+        self._move_grid_to_column(name)
 
     def _update_detail(self) -> None:
         d = self.query_one("#detail")
-        if not d.display or self.page is None or not self.page.rows:
+        if not d.display or self.page is None:
+            return
+        if not self.page.rows:
+            d.border_title = self._dim_markup("no rows")
+            self.query_one(DetailList).set_entries([], 0)
             return
         grid = self.query_one(GridTable)
         r = min(grid.cursor_row, len(self.page.rows) - 1)
         row = self.page.rows[r]
         rn = self.page.row_numbers[r]
-        tbl = Table.grid(padding=(0, 2), expand=True)
-        tbl.add_column(no_wrap=True, max_width=22)
-        tbl.add_column(ratio=1)
         cur_col = self.page.columns[grid.cursor_column] if grid.cursor_column < len(self.page.columns) else None
+        entries = []
         for name, typ, v in zip(self.page.columns, self.page.types, row):
             fmt = self.formatters.get(name) or F.CellFormatter(name, typ)
             full = F.format_value(F.shortest(v, typ), fmt.kind, raw=True, width=0)
@@ -892,9 +958,11 @@ class PqxApp(App):
             extra = F.derived(name, fmt.kind, v)
             if extra:
                 cell.append("\n· " + extra, self.dim)
-            tbl.add_row(Text(name, style="bold reverse" if name == cur_col else "bold"), cell)
+            entries.append((name, cell))
         d.border_title = self._dim_markup(f"row {grid.abs_row:,}" + (f" · file row {rn:,}" if rn is not None else ""))
-        self.query_one("#detail-body", Static).update(tbl)
+        lst = self.query_one(DetailList)
+        lst.set_entries(entries, min(22, max((len(n) for n, _ in entries), default=0)))
+        lst.select(cur_col)
 
     # --------------------------------------------------------------- filtering
     def action_focus_filter(self) -> None:
@@ -946,6 +1014,7 @@ class PqxApp(App):
             self.query_one(GridTable).focus()
         self._last_error = ""
         self._count_secs = None
+        self._hidden_hint = None
         was_sql = bool(self.view.sql)
         self.view = view
         grid = self.query_one(GridTable)
@@ -962,7 +1031,9 @@ class PqxApp(App):
         target = 0
         if keep_file_row is not None:
             target = keep_file_row if view.is_trivial else 0
-        self.load_window(max(0, target - grid.window // 2), target)
+        # stay on the current column if the new view shows it
+        col = self.cols_shown.index(self.current_column) if self.current_column in self.cols_shown else 0
+        self.load_window(max(0, target - grid.window // 2), target, col)
         if not view.is_trivial:
             self.count_rows()
         self._refresh_analysis()
@@ -1003,7 +1074,8 @@ class PqxApp(App):
         inp.value = ""
         self.view = View(sql=self.view.sql, where=self.view.where)  # sort is dropped with the filter
         self.apply_filter("", fr)
-        self.query_one(GridTable).focus()
+        # focusing the grid from another tab would switch to Data (TabbedContent follows focus)
+        self.query_one(GridTable).focus() if self._tab_is("tab-data") else self.set_focus(None)
 
     def action_clear_filter_anywhere(self) -> None:
         """ctrl+x: clear the filter even while typing in the filter box."""
@@ -1095,10 +1167,14 @@ class PqxApp(App):
 
         def done(result):
             if result:
+                grid = self.query_one(GridTable)
+                offset, row = grid.offset, grid.abs_row  # before the rebuild resets the cursor
                 self.cols_shown = result
                 self._rebuild_columns()
-                grid = self.query_one(GridTable)
-                self.load_window(grid.offset, grid.abs_row, 0)
+                # land on the current column (also the one a hidden-column hint was about)
+                col = result.index(self.current_column) if self.current_column in result else 0
+                self._hidden_hint = None
+                self.load_window(offset, row, col)
         self.push_screen(ColumnPicker(cols, self.cols_shown), done)
 
     def action_hide_column(self) -> None:
@@ -1108,8 +1184,9 @@ class PqxApp(App):
         name = self.cols_shown[grid.cursor_column]
         self.cols_shown = [c for c in self.cols_shown if c != name]
         col = min(grid.cursor_column, len(self.cols_shown) - 1)
+        offset, row = grid.offset, grid.abs_row  # before the rebuild resets the cursor
         self._rebuild_columns()
-        self.load_window(grid.offset, grid.abs_row, col)
+        self.load_window(offset, row, col)
         self.notify(f"Hid {escape(name)} · c brings it back", timeout=2)
 
     def action_pin_columns(self) -> None:
@@ -1335,6 +1412,8 @@ class PqxApp(App):
         name = str(event.row_key.value) if event.row_key else None
         if name is None or name not in self.ds._by_name:
             return
+        if self._tab_is("tab-schema"):  # not the highlight the table gets when it's built
+            self.set_current_column(name, "schema")
         c = self.ds.column(name)
         i, size, ratio, comp, enc = self._schema_info[name]
         d = self.dim
@@ -1418,24 +1497,39 @@ class PqxApp(App):
         self.query_one("#stats-cols-panel").border_title = self._dim_markup(f"columns  {len(self.result_schema)}")
         if self._stats_col not in dict(self.result_schema):
             self._stats_col = None
+        # (the highlight comes back with _sync_stats, when Stats is shown or the view changes on it)
 
     def _show_stats_for(self, name: str) -> None:
-        self.action_tab("tab-stats")
+        self.set_current_column(name, "stats")
+        if self._tab_is("tab-stats"):
+            self._sync_stats()
+        else:
+            self.action_tab("tab-stats")  # tab_activated highlights and profiles it, once
+
+    def _sync_stats(self) -> None:
+        """Highlight the current column in the Stats list and profile it, unless it's already shown."""
         ol = self.query_one("#stats-cols", OptionList)
-        try:
-            ol.highlighted = ol.get_option_index(name)
-        except Exception:
-            pass
-        self._stats_col = name
-        ol.focus()
-        self.compute_stats(name)
+        names = [n for n, _ in self.result_schema]
+        if self.current_column in names:
+            self._stats_col = self.current_column
+        elif self._stats_col is None and names:
+            self._stats_col = names[0]
+        if self._stats_col:
+            # _stats_col is set first, so the highlight event below isn't taken for a move
+            ol.highlighted = names.index(self._stats_col)
+            if self._stats_stale or self._stats_shown != self._stats_col:
+                timer = self.__dict__.get("_pqx_timers", {}).pop("stats", None)
+                if timer is not None:  # a highlight's debounced profile is superseded by this one
+                    timer.stop()
+                self.compute_stats(self._stats_col)
 
     @on(OptionList.OptionHighlighted, "#stats-cols")
     def stats_col_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         name = event.option.id
-        if name and name != self._stats_col:
+        if name and name != self._stats_col:  # syncing sets _stats_col first, so it never lands here
             self._stats_col = name
             if self._tab_is("tab-stats"):
+                self.set_current_column(name, "stats")
                 self._debounced("stats", 0.15, lambda: self._tab_is("tab-stats") and self.compute_stats(name))
 
     def _debounced(self, key: str, delay: float, fn) -> None:
@@ -1448,28 +1542,37 @@ class PqxApp(App):
     def tab_activated(self, event: TabbedContent.TabActivated) -> None:
         pane = event.pane.id
         self._render_tab_titles(pane)
+        # each linked view moves to the current column (Plot has its own pickers)
+        self._hidden_hint = None
         if pane == "tab-stats":
-            if self._stats_col is None and self.result_schema:
-                self._stats_col = self.result_schema[0][0]
-                self.query_one("#stats-cols", OptionList).highlighted = 0
-            if self._stats_col and (self._stats_stale or self._stats_shown != self._stats_col):
-                self.compute_stats(self._stats_col)
+            self._sync_stats()
             self.query_one("#stats-cols", OptionList).focus()
         elif pane == "tab-plot":
             self.query_one(PlotControls).focus()
             self.call_after_refresh(self.replot)  # after layout, so the plot fills the pane
         elif pane == "tab-schema":
-            self.query_one("#schema-table", DataTable).focus()
+            t = self.query_one("#schema-table", DataTable)
+            # SQL-result columns may not be in the file: then Schema keeps its own cursor
+            if self.current_column in self.ds._by_name:
+                row = t.get_row_index(self.current_column)
+                if t.cursor_row != row:
+                    t.move_cursor(row=row, animate=False)  # its highlight event updates the description
+            t.focus()
         elif pane == "tab-data":
+            name = self.current_column
+            if name and not self._move_grid_to_column(name) and name in dict(self.result_schema):
+                self._hidden_hint = name
             self.query_one(GridTable).focus()
         elif pane == "tab-meta":
             self.query_one("#meta-file").focus()
+        self._render_status()
         self._render_keys()
 
     def _refresh_analysis(self) -> None:
         active = self.query_one(TabbedContent).active
-        if active == "tab-stats" and self._stats_col:
-            self.compute_stats(self._stats_col)
+        if active == "tab-stats":
+            self._stats_stale = True
+            self._sync_stats()
         elif active == "tab-plot":
             self.replot()
         else:  # recompute lazily when those tabs are next opened

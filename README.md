@@ -47,6 +47,8 @@ without losing the current view.
 | `s` | sort by the cursor column (asc → desc → off); clicking a header does the same |
 | `=` | narrow the filter to rows equal to the cursor cell |
 | `d` / Enter | row detail panel |
+| `tab` / click | into the open detail panel |
+| `↑` `↓` · `enter` `esc` `tab` | detail panel: pick a column (the grid follows on the same row; the wheel only scrolls) · back to the grid on that column |
 | `c` · `-` · `p` | choose columns · hide column · pin columns |
 | Home / End | first / last column; `‹` `›` beside the header mark hidden columns (click to page) |
 | `f` · `y` · `i` | raw/smart formatting · copy cell · stats for column |
@@ -60,6 +62,13 @@ without losing the current view.
 | `r` | Plot: rotate the sky-map centre between RA 0° and 180° |
 | Esc | cancel running queries / leave the filter bar |
 | `?` · `q` | help · quit |
+
+Data, Schema and Stats stay on the same column: move to a column in one of
+them and the others are on it when you switch tabs, with the grid on the same
+row. A column hidden in the grid leaves the grid where it is and the status
+line says `‹col› is hidden · c to show`. Columns computed by a SQL query
+aren't in the file's schema, so Schema keeps its own row for them. Plot has
+its own column pickers.
 
 ## Column formats
 
