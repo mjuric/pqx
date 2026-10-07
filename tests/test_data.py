@@ -166,3 +166,31 @@ def test_helpers():
     assert parse_row_spec("10k", 100) == 99
     with pytest.raises(ValueError):
         parse_row_spec("abc", 10)
+
+
+def test_duckdb_setup_in_background(demo_path):
+    """DuckDB parses the footer and creates its views on a thread; queries wait for that."""
+    ds = ParquetDataset(demo_path)
+    assert ds.cursor().execute("SELECT current_setting('parquet_metadata_cache')").fetchone()[0] is True
+    assert ds.count(View(where="mag < 20")) > 0
+    assert ds._duck_types(wait=True) is not None
+
+
+def test_duckdb_setup_failure_is_reported_on_use(demo_path, monkeypatch):
+    def boom(self):
+        raise duckdb.IOException("IO Error: cannot read it")
+
+    monkeypatch.setattr(ParquetDataset, "_create_views", boom)
+    ds = ParquetDataset(demo_path)  # pyarrow reads it: opening works
+    assert ds._duck_types(wait=True) is None
+    with pytest.raises(duckdb.IOException, match="cannot read it"):
+        ds.count(View(where="mag < 20"))
+    with pytest.raises(duckdb.IOException):
+        ds.fetch(View(), 0, 10)
+
+
+def test_unreadable_file_raises(tmp_path):
+    p = tmp_path / "bad.parquet"
+    p.write_bytes(b"not a parquet file at all")
+    with pytest.raises(Exception):
+        ParquetDataset(str(p))

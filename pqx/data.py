@@ -125,41 +125,67 @@ class ParquetDataset:
         self.path = os.path.abspath(os.path.expanduser(path))
         if not os.path.exists(self.path):
             raise FileNotFoundError(self.path)
-        self.pf = pq.ParquetFile(self.path)
-        self.meta = self.pf.metadata
-        self.arrow_schema: pa.Schema = self.pf.schema_arrow
-        self.num_rows: int = self.meta.num_rows
-        self.file_size = os.path.getsize(self.path)
-        self.columns = [self._column_info(f) for f in self.arrow_schema]
-        self._by_name = {c.name: c for c in self.columns}
         self._lock = threading.Lock()
         self._tls = threading.local()
         self._tagged: dict[str, duckdb.DuckDBPyConnection] = {}
         self._types_cache: dict[str, pa.DataType | None] | None = None
         self._types_done = threading.Event()
         self._types_thread: threading.Thread | None = None
+        self._schema_known = threading.Event()  # pyarrow has parsed the footer (or failed to)
+        self._ready = threading.Event()  # DuckDB's views exist (or failed to): see ``con``
+        self._setup_error: Exception | None = None
         self._io_errors = 0
         self._bad_rgs: set[int] = set()  # row groups pyarrow failed on in a way we couldn't pin down
+        # Database-wide config: every cursor shows timestamps in UTC rather than local time, and the
+        # footer is parsed once rather than on every query (~1 s each for 2000 row groups x 300
+        # columns); DuckDB's cache checks the file's modification time.
+        self._con = duckdb.connect(":memory:", config={"TimeZone": "UTC", "parquet_metadata_cache": True})
+        if threads:
+            self._con.execute(f"SET threads={int(threads)}")
+        # DuckDB parses the footer on a background thread (see _bind_types) while pyarrow parses it
+        # here: on huge footers each takes most of a second.
+        self._start_types()
+        try:
+            self.pf = pq.ParquetFile(self.path)
+        except BaseException:
+            self._schema_known.set()
+            self._stop_types()
+            raise
+        self.meta = self.pf.metadata
+        self.arrow_schema: pa.Schema = self.pf.schema_arrow
+        self.num_rows: int = self.meta.num_rows
+        self.file_size = os.path.getsize(self.path)
+        self.columns = [self._column_info(f) for f in self.arrow_schema]
+        self._by_name = {c.name: c for c in self.columns}
         self._wide_decimals = {f.name for f in self.arrow_schema
                                if pa.types.is_decimal(f.type) and f.type.precision > 38}
-        # database-wide config, so every cursor shows timestamps in UTC rather than local time
-        self.con = duckdb.connect(":memory:", config={"TimeZone": "UTC"})
-        if threads:
-            self.con.execute(f"SET threads={int(threads)}")
-        src = f"read_parquet({quote_str(self.path)}, file_row_number=true)"
         # file_row_number collides if the file already has such a column; then
         # fall back to OFFSET-based seeking everywhere.
         self._has_rownum = "file_row_number" not in self._by_name
+        self._schema_known.set()
+
+    @property
+    def con(self) -> duckdb.DuckDBPyConnection:
+        """The DuckDB connection, once its views over the file exist: waits for
+        the background setup, and raises what that failed with, if it did."""
+        if not self._ready.is_set():
+            self._start_types()
+            self._ready.wait()
+        if self._setup_error is not None:
+            raise self._setup_error
+        return self._con
+
+    def _create_views(self) -> None:
+        src = f"read_parquet({quote_str(self.path)}, file_row_number=true)"
         if self._has_rownum:
-            self.con.execute(
+            self._con.execute(
                 f"CREATE VIEW __pqx_src AS SELECT * RENAME (file_row_number AS {ROWNUM}) FROM {src}"
             )
-            self.con.execute(f"CREATE VIEW {TABLE} AS SELECT * EXCLUDE ({ROWNUM}) FROM __pqx_src")
+            self._con.execute(f"CREATE VIEW {TABLE} AS SELECT * EXCLUDE ({ROWNUM}) FROM __pqx_src")
         else:
-            self.con.execute(
+            self._con.execute(
                 f"CREATE VIEW {TABLE} AS SELECT * FROM read_parquet({quote_str(self.path)})"
             )
-        self._start_types()  # DuckDB's result types, for direct reads (binding reads the footer)
 
     # ------------------------------------------------------------------ schema
     @staticmethod
@@ -624,10 +650,12 @@ class ParquetDataset:
         """Arrow type of each column as DuckDB returns it, or ``None`` where the
         direct path can't reproduce it. Bound once on a background thread
         (started with the dataset); until that's done this returns ``None``
-        (fetches use DuckDB), or with ``wait`` blocks for it."""
+        (fetches use DuckDB), or with ``wait`` blocks for it. It also blocks
+        while DuckDB is still being set up: a DuckDB fetch would wait for that
+        anyway, and the types follow within milliseconds (the footer is cached)."""
         while not self._types_done.is_set():
             self._start_types()
-            if not wait:
+            if not wait and self._ready.is_set():
                 return None
             self._types_done.wait(0.1)
         return self._types_cache
@@ -641,17 +669,41 @@ class ParquetDataset:
             _BINDING.add(self)
 
     def _stop_types(self) -> None:
-        """Wait for the background bind (DuckDB aborts the process if a query is
-        still running on a daemon thread when Python exits). Binding can't be
-        interrupted (DuckDB checks only once it's bound), and it's one footer
-        parse: ~1 s for 2000 row groups x 300 columns."""
+        """Wait for the background setup and bind (DuckDB aborts the process if a
+        query is still running on a daemon thread when Python exits). Binding
+        can't be interrupted (DuckDB checks only once it's bound), and it's one
+        footer parse: ~1 s for 2000 row groups x 300 columns."""
         t = self._types_thread
         if t is not None and t is not threading.current_thread():
             t.join(30)
 
+    def _setup(self) -> None:
+        """Have DuckDB parse the footer (into its metadata cache) while pyarrow
+        parses it in ``__init__``, then create the views once the schema says
+        how. Sets ``_ready`` whatever happens; ``con`` raises a failure."""
+        try:
+            try:
+                self._con.execute(f"SELECT * FROM read_parquet({quote_str(self.path)}) LIMIT 0")
+            except Exception:  # noqa: BLE001 - creating the views says what's wrong
+                pass
+            self._schema_known.wait()
+            if not hasattr(self, "_has_rownum"):  # pyarrow couldn't open it: __init__ raises
+                raise RuntimeError("the dataset failed to open")
+            self._create_views()
+        except Exception as e:  # noqa: BLE001
+            self._setup_error = e
+        finally:
+            self._ready.set()
+
     def _bind_types(self) -> None:
         # Untagged: ds.interrupt() couldn't shorten it, only throw the result away.
-        cur = self.con.cursor()
+        if not self._ready.is_set():
+            self._setup()
+        if self._setup_error is not None:
+            self._types_cache = None
+            self._types_done.set()
+            return
+        cur = self._con.cursor()
         try:
             tbl = cur.execute(f"SELECT * FROM {TABLE} LIMIT 0").arrow()
             if isinstance(tbl, pa.RecordBatchReader):
