@@ -191,7 +191,12 @@ def _control_repr(c: int) -> str:
 
 
 CONTROL_CHARS = frozenset([*range(0x20), *range(0x7F, 0xA0)])
-_CONTROLS = {c: _control_repr(c) for c in CONTROL_CHARS}
+# Bidi controls (embeddings, overrides, isolates, marks) reorder what's shown around them, and
+# zero-width characters hide in it: shown as ⟨U+202E⟩ and the like. (All are format characters,
+# so str.isprintable() is False for them too: the fast path below still catches every one.)
+INVISIBLE_CHARS = frozenset([*range(0x202A, 0x202F), *range(0x2066, 0x206A), 0x200E, 0x200F, 0x061C,
+                             *range(0x200B, 0x200E), 0x2060, 0xFEFF])
+_CONTROLS = {c: _control_repr(c) for c in CONTROL_CHARS} | {c: f"⟨U+{c:04X}⟩" for c in INVISIBLE_CHARS}
 _CONTROLS_BUT_WS = {c: r for c, r in _CONTROLS.items() if c not in (0x09, 0x0A)}
 
 
