@@ -180,6 +180,13 @@ class ParquetDataset:
             raise self._setup_error
         return self._con
 
+    @property
+    def setup_error(self) -> Exception | None:
+        """Why DuckDB can't read the file (its views couldn't be created), once
+        that's known; ``None`` if it can, or while it's still being set up.
+        Every query raises this exception; the footer-based metadata still works."""
+        return self._setup_error if self._ready.is_set() else None
+
     def _create_views(self) -> None:
         src = f"read_parquet({quote_str(self.path)}, file_row_number=true)"
         if self._has_rownum:

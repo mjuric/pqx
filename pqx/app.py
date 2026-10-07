@@ -1113,7 +1113,13 @@ class PqxApp(App):
         d = self.dim
         t = Text(no_wrap=True, overflow="ellipsis")
         tot = self.total
-        if self._last_error:
+        if self._last_error and self.ds.setup_error is not None:
+            t.append("✗", "red")
+            t.append(" DuckDB can't read this file", "bold")
+            t.append("   reason: ", d)
+            t.append(self._last_error)
+            t.append("   → Schema (2) and Metadata (5) still work", d)
+        elif self._last_error:
             t.append("✗", "red")
             t.append(" Query failed", "bold")
             t.append("   reason: ", d)
@@ -1578,6 +1584,15 @@ class PqxApp(App):
     @_ui
     def _show_error(self, e: Exception, mark_input: bool = False) -> None:
         msg = str(e).strip()
+        if e is self.ds.setup_error:  # not this query's fault: no query can run on this file
+            reason = re.sub(r"^[A-Za-z ]+ Error:\s*", "", msg.split("\n")[0])
+            reason = re.sub(r"^Failed to read Parquet file '.*?':\s*", "", reason)
+            self._last_error = reason[:160]
+            self._error_hint = ""
+            self.notify(f"{msg[:600]}\n\nSchema and Metadata (from the footer) still work.",
+                        title="✗ DuckDB can't read this file", severity="error", timeout=12)
+            self._render_status()
+            return
         first = msg.split("\n")[0]
         first = re.sub(r"^(Binder|Parser|Catalog|Conversion|Invalid Input|Out of Range) Error:\s*", "", first)
         first = re.sub(r'Referenced column ("[^"]+") not found in FROM clause!?', r"unknown column \1", first)
@@ -1856,7 +1871,7 @@ class PqxApp(App):
         # (~0.3 s): let the grid's first page in first, unless that's taking a while.
         worker = get_current_worker()
         deadline = time.monotonic() + FOOTER_WAIT
-        while self.page is None and time.monotonic() < deadline:
+        while self.page is None and self.ds.setup_error is None and time.monotonic() < deadline:
             if worker.is_cancelled:  # quitting
                 return
             time.sleep(0.01)

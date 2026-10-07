@@ -245,3 +245,31 @@ async def test_rowgroup_table_filled_in_batches(tmp_path):
         t = app.query_one("#rowgroups", DataTable)
         await _until(pilot, lambda: t.row_count == 700)
         assert [str(t.get_row_at(i)[1]) for i in (0, 699)] == ["0", "699"]
+
+
+async def test_file_duckdb_cannot_read(demo_path, monkeypatch):
+    """DuckDB failing on the file says so (not "Query failed … edit with /"); Schema and Metadata still fill."""
+    import duckdb
+
+    def boom(self):
+        raise duckdb.InvalidInputException(f"Invalid Input Error: Failed to read Parquet file '{self.path}': "
+                                           "Need at least one non-root column in the file")
+
+    monkeypatch.setattr(ParquetDataset, "_create_views", boom)
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        s = plain(app.query_one("#status", Static))
+        assert s.startswith("✗ DuckDB can't read this file") and "Need at least one non-root column" in s
+        assert "edit with" not in s and "Query failed" not in s and demo_path not in s
+        assert app.query_one("#schema-table", DataTable).row_count == len(app.ds.columns)
+        assert plain(app.query_one("#meta-status", Static)).startswith("✓ Footer read")
+
+
+async def test_zero_column_file(tmp_path):
+    p = tmp_path / "nocols.parquet"
+    pq.write_table(pa.table({}), p)
+    app = PqxApp(str(p))
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        assert plain(app.query_one("#status", Static)).startswith("✗ DuckDB can't read this file")
