@@ -36,7 +36,7 @@ from . import _terminal
 from . import config
 from . import fmt as F
 from . import plots
-from .cells import Cell, ColumnCells, text_width, widest_candidates
+from .cells import CellRow, ColumnCells, text_width, widest_candidates
 from .data import ColumnStats, ParquetDataset, View, guess_sky_columns, is_sql_query, parse_row_spec, quote_ident
 from .screens import ColumnPicker, ExportScreen, FieldDropdown, FormatScreen, GotoScreen, HelpScreen
 from .widgets import CursorList, DetailList
@@ -236,19 +236,20 @@ class GridTable(DataTable):
         """Fresh per-column cell state for the current columns, wired to widen them."""
         return [ColumnCells(fm, raw, col, self._widened) for fm, col in zip(formatters, self.ordered_columns)]
 
-    def set_rows(self, rows: list[list], labels: list[Text], cell_columns: list[ColumnCells]) -> None:
-        """Replace the (cleared) table's rows with ``rows`` of cells, all at once.
+    def set_rows(self, rows: list[tuple], labels: list[Text], cell_columns: list[ColumnCells]) -> None:
+        """Replace the (cleared) table's rows with ``rows`` of raw values, all at once.
 
-        Unlike ``add_row`` this measures no cells: column widths are the caller's
-        business (``ColumnCells`` widen their column as cells get formatted). Row
-        labels are measured here, since they're few."""
+        Each row becomes a ``CellRow``, which makes its cells when they're first
+        asked for. Unlike ``add_row`` this measures no cells: column widths are
+        the caller's business (``ColumnCells`` widen their column as cells get
+        formatted). Row labels are measured here, since they're few."""
         self.cell_columns = cell_columns
-        keys = [c.key for c in self.ordered_columns]
+        layout = ([c.key for c in self.ordered_columns][: len(cell_columns)], cell_columns)
         locations, data, rows_meta = self._row_locations, self._data, self.rows
-        for i, (cells, label) in enumerate(zip(rows, labels)):
+        for i, (values, label) in enumerate(zip(rows, labels)):
             key = RowKey()
             locations[key] = i
-            data[key] = dict(zip(keys, cells))
+            data[key] = CellRow(values, layout)
             rows_meta[key] = Row(key, 1, label)
         if labels:
             self._labelled_row_exists = True
@@ -354,12 +355,9 @@ class GridTable(DataTable):
         row_keys = [self._row_locations.get_key(r) for r in rows]
         for rk in row_keys:
             row = data.get(rk)
-            if row is None:
-                continue
-            for k in keys:
-                cell = row.get(k)
-                if isinstance(cell, Cell):
-                    cell.text  # noqa: B018  (formats and widens the column)
+            if isinstance(row, CellRow):
+                for k in keys:
+                    row[k].text  # noqa: B018  (formats and widens the column)
 
     def action_cursor_down(self) -> None:
         if self.cursor_row >= self.row_count - 1 and self.more_below():
@@ -934,18 +932,17 @@ class PqxApp(App):
         grid.offset = page.offset
         fm = [self.formatters.get(n) or F.CellFormatter(n, t) for n, t in zip(page.columns, page.types)]
         # cells format themselves when first drawn (pqx.cells); widths come from a sample, below
-        ccols = grid.column_cells(fm, self.raw)
-        rows = [list(map(Cell, row, ccols)) for row in page.rows]
         dim, off = self.dim, page.offset
         labels = [Text(f"{off + i if n is None else n:,}", style=dim) for i, n in enumerate(page.row_numbers)]
-        grid.set_rows(rows, labels, ccols)
+        grid.set_rows(page.rows, labels, grid.column_cells(fm, self.raw))
         self.page = page
         self._fit_columns()
         grid.update_dimensions_now()  # so the cursor scrolls into view now, not after a first draw at the top
         if page.rows:
             r = max(0, min(len(page.rows) - 1, cursor_abs - page.offset))
-            grid.move_cursor(row=r, column=min(col, max(0, len(self.cols_shown) - 1)), animate=False)
-            grid.scroll_x = scroll_x
+            with grid.sizing():  # fit what's on screen once, where the scrolling ends
+                grid.move_cursor(row=r, column=min(col, max(0, len(self.cols_shown) - 1)), animate=False)
+                grid.scroll_x = scroll_x
         grid.fit_visible()
         if self.total is None and len(page.rows) < grid.window:
             self.total = page.offset + len(page.rows)  # hit the end: we now know the size

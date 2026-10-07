@@ -7,6 +7,10 @@ rendered or read, then caches the result. The cells of one grid column share a
 :class:`ColumnCells`: bumping its ``gen`` (raw toggle, format override) makes
 every cell of the column re-format on its next draw, without touching the cells.
 
+Rows are :class:`CellRow` mappings that make a row's cells only when DataTable
+first asks for them: a window of 150 x 300 values then allocates cells for the
+rows drawn, not all 45,000.
+
 A column never narrows here: when a cell turns out wider than its column, the
 column grows (see :meth:`ColumnCells.fit`).
 """
@@ -48,9 +52,8 @@ class ColumnCells:
 
     def fit_values(self, values) -> None:
         """Grow the column to fit ``values`` formatted as its cells would be."""
-        fmt, raw = self.fmt, self.raw
-        for v in values:
-            self.fit(text_width(fmt(v, raw)))
+        plain, raw = self.fmt.plain, self.raw
+        self.fit(max((text_width(plain(v, raw)) for v in values), default=0))
 
     def fit(self, width: int) -> None:
         """Grow the column to ``width`` cells, if it is narrower."""
@@ -91,9 +94,11 @@ def widest_candidates(values, kind: str, raw: bool = False, k: int = 3) -> list 
     return vals[:k] + vals[max(0, neg - k):neg] + vals[pos:pos + k] + vals[-k:]
 
 
-def text_width(t: Text) -> int:
-    """Width a Text needs on one line: its widest line (as DataTable measures it)."""
-    s = t.plain
+def text_width(t: Text | str) -> int:
+    """Width a text needs on one line: its widest line (as DataTable measures it)."""
+    s = t if isinstance(t, str) else t.plain
+    if s.isascii() and s.isprintable():  # the usual case: one cell per character
+        return len(s)
     if "\n" not in s:
         return cell_len(s)
     return max(cell_len(line) for line in s.split("\n"))
@@ -133,3 +138,28 @@ class Cell:
 
     def __repr__(self) -> str:
         return f"Cell({self.value!r})"
+
+
+class CellRow(dict):
+    """One grid row as DataTable stores it (cells by column key), its cells made on first access.
+
+    DataTable reads a whole row at a time (``get_row_at``), so the first lookup
+    makes all of the row's cells at once. An unknown key raises KeyError, as a
+    plain row dict would."""
+
+    __slots__ = ("values", "layout")
+
+    def __init__(self, values: tuple, layout: tuple[list, list[ColumnCells]]):
+        super().__init__()
+        self.values = values
+        self.layout = layout  # (column keys, their ColumnCells), shared by all rows of a window
+
+    def __missing__(self, key) -> Cell:
+        if self:  # already made: not a column of this row
+            raise KeyError(key)
+        keys, ccols = self.layout
+        values = self.values
+        if len(values) < len(keys):
+            values = (*values, *[None] * (len(keys) - len(values)))
+        self.update(zip(keys, map(Cell, values, ccols)))
+        return dict.__getitem__(self, key)

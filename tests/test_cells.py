@@ -17,15 +17,15 @@ class FakeColumn:
 
 
 def test_cell_formats_once_and_again_after_invalidate():
-    fm = F.CellFormatter("x", pa.float64())
     calls = []
 
-    def counting(v, raw=False):
-        calls.append(v)
-        return fm(v, raw)
+    class Counting(F.CellFormatter):
+        def __call__(self, v, raw=False):
+            calls.append(v)
+            return super().__call__(v, raw)
 
     grown = []
-    cc = ColumnCells(counting, False, FakeColumn(), lambda: grown.append(1))
+    cc = ColumnCells(Counting("x", pa.float64()), False, FakeColumn(), lambda: grown.append(1))
     c = Cell(1.0 / 3, cc)
     assert not calls and not c.formatted       # nothing happens until the cell is used
     assert str(c) == "0.333333333" and isinstance(c.__rich__(), Text)
