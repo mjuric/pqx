@@ -962,6 +962,15 @@ class PqxApp(App):
         self.register_theme(pqx_theme(self.accent, border))
         self.theme = theme or f"pqx-{self.accent}"
 
+    def get_theme_variable_defaults(self) -> dict[str, str]:
+        # pqx's own variables, for themes that aren't pqx's (``--theme``): Textual's themes
+        # don't define them, and CSS that uses an undefined variable fails to parse.
+        try:
+            primary = self.current_theme.primary
+        except Exception:  # noqa: BLE001 - no theme yet
+            primary = "#808080"
+        return {"pqx-border": f"{primary} 45%"}
+
     # ------------------------------------------------------------------ layout
     def compose(self) -> ComposeResult:
         yield Static(id="titlebar")

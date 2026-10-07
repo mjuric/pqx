@@ -9,6 +9,7 @@ from textual.widgets import DataTable, Input, OptionList, Static, TabbedContent
 from textual.widgets.data_table import ColumnKey
 
 from pqx.app import GridTable, PlotControls, PqxApp
+from textual.color import Color
 from pqx.screens import ColumnPicker, ExportScreen, FormatScreen, GotoScreen, HelpScreen
 
 SIZE = (150, 42)
@@ -1177,3 +1178,14 @@ async def test_detail_pane_heights_follow_its_width_and_prompts(demo_path):
         await pilot.pause(0.05)
         assert lst._heights[0] == 3 and lst.virtual_size.height == 63
 
+
+
+@pytest.mark.parametrize("theme", ["tokyo-night", "solarized-light"])
+async def test_textual_theme_applies(demo_path, theme):
+    # --theme NAME: a Textual theme (not one of pqx's) loads, and its colours are used
+    app = PqxApp(demo_path, theme=theme)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        assert app.theme == theme and not app.current_theme.ansi
+        bg = app.query_one(GridTable).styles.background
+        assert bg.a > 0 and bg == Color.parse(app.current_theme.background)

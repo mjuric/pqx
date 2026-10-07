@@ -4,8 +4,8 @@
 
 Screen {
     layout: vertical;
-    background: ansi_default;
-    color: ansi_default;
+    background: $background;
+    color: $foreground;
     padding: 0 1;
 }
 
@@ -17,10 +17,10 @@ Screen {
 .panel {
     border: solid $pqx-border;
     border-title-align: left;
-    border-title-color: ansi_default;
+    border-title-color: $foreground;
     border-title-style: none;
-    border-subtitle-color: ansi_default;
-    background: ansi_default;
+    border-subtitle-color: $foreground;
+    background: $background;
     padding: 0 1;
 }
 
@@ -49,7 +49,7 @@ Screen {
     height: 1;
     border: none;
     padding: 0;
-    background: ansi_default;
+    background: $background;
 }
 
 #filter:focus {
@@ -58,18 +58,18 @@ Screen {
 }
 
 Input > .input--placeholder, Input > .input--suggestion {
-    color: ansi_default;
+    color: $foreground;
     text-style: dim;
 }
 
 Input > .input--selection {
-    background: ansi_default;
+    background: $background;
     text-style: reverse;
 }
 
 Input > .input--cursor {
-    background: ansi_default;
-    color: ansi_default;
+    background: $background;
+    color: $foreground;
     text-style: reverse;
 }
 
@@ -79,7 +79,7 @@ TabbedContent > ContentTabs {
 }
 
 TabbedContent, TabPane, ContentSwitcher {
-    background: ansi_default;
+    background: $background;
     padding: 0;
     height: 1fr;
 }
@@ -90,8 +90,8 @@ TabPane {
 
 /* ---- tables */
 DataTable {
-    background: ansi_default;
-    color: ansi_default;
+    background: $background;
+    color: $foreground;
     scrollbar-size: 1 1;
 }
 
@@ -99,24 +99,24 @@ DataTable > .datatable--header,
 DataTable > .datatable--header-hover,
 DataTable > .datatable--header-cursor,
 DataTable > .datatable--fixed {
-    background: ansi_default;
-    color: ansi_default;
+    background: $background;
+    color: $foreground;
     text-style: bold;
 }
 
 DataTable > .datatable--hover,
 DataTable > .datatable--even-row,
 DataTable > .datatable--odd-row {
-    background: ansi_default;
-    color: ansi_default;
+    background: $background;
+    color: $foreground;
     text-style: none;
 }
 
 DataTable > .datatable--cursor,
 DataTable > .datatable--fixed-cursor,
 DataTable:focus > .datatable--cursor {
-    background: ansi_default;
-    color: ansi_default;
+    background: $background;
+    color: $foreground;
     text-style: reverse;
 }
 
@@ -187,7 +187,7 @@ DataTable:blur > .datatable--cursor {
 
 OptionList {
     border: none;
-    background: ansi_default;
+    background: $background;
     padding: 0;
     scrollbar-size: 1 1;
 }
@@ -199,13 +199,13 @@ OptionList:focus {
 
 OptionList > .option-list--option-highlighted,
 OptionList:focus > .option-list--option-highlighted {
-    background: ansi_default;
-    color: ansi_default;
+    background: $background;
+    color: $foreground;
     text-style: reverse;
 }
 
 OptionList > .option-list--option-hover {
-    background: ansi_default;
+    background: $background;
     text-style: none;
 }
 
@@ -283,7 +283,7 @@ ModalScreen {
     height: auto;
     max-height: 90%;
     border: solid $primary;
-    background: ansi_default;
+    background: $background;
     padding: 1 2;
 }
 
@@ -306,7 +306,7 @@ ModalScreen {
 
 #picker-filter, #goto-input, #format-input, #export-path {
     border: solid $pqx-border;
-    background: ansi_default;
+    background: $background;
     height: 3;
 }
 
@@ -318,7 +318,7 @@ ModalScreen {
     height: 1fr;
     margin: 1 0;
     border: none;
-    background: ansi_default;
+    background: $background;
 }
 
 .buttons {
@@ -332,13 +332,13 @@ Button {
     height: 1;
     min-width: 10;
     margin-left: 2;
-    background: ansi_default;
-    color: ansi_default;
+    background: $background;
+    color: $foreground;
     text-style: bold;
 }
 
 Button:hover, Button:focus {
-    background: ansi_default;
+    background: $background;
     text-style: bold reverse;
 }
 
@@ -349,11 +349,11 @@ Button.-primary {
 #export-box RadioSet, #export-box Checkbox {
     margin-top: 1;
     border: none;
-    background: ansi_default;
+    background: $background;
 }
 
 Toast {
-    background: ansi_default;
+    background: $background;
     border-left: none;
     border: solid $pqx-border;
     padding: 0 1;
@@ -380,8 +380,8 @@ FieldDropdown {
     height: auto;
     border: solid $primary;
     border-title-align: left;
-    border-title-color: ansi_default;
-    background: ansi_default;
+    border-title-color: $foreground;
+    background: $background;
     padding: 0 1;
 }
 
@@ -389,7 +389,7 @@ FieldDropdown {
     height: 1;
     border: none;
     padding: 0;
-    background: ansi_default;
+    background: $background;
 }
 
 #dropdown-list {
