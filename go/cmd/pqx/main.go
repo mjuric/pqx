@@ -14,6 +14,8 @@ import (
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/ui"
 	"github.com/mjuric/pqx/go/internal/ui/app"
+	"github.com/mjuric/pqx/go/internal/ui/chrome"
+	"github.com/mjuric/pqx/go/internal/ui/dialogs"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
 
@@ -92,7 +94,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		State: &kit.State{Total: ds.NumRows(), Columns: ds.Columns(), FileRow: 0},
 		Tasks: kit.NewTasks(),
 	}
-	p := tea.NewProgram(app.New(env, app.Parts{Legacy: ui.Legacy{M: ui.New(ds)}}))
+	env.Dialogs = dialogs.New(env)
+	p := tea.NewProgram(app.New(env, app.Parts{Chrome: chrome.New(env), Legacy: ui.Legacy{M: ui.New(ds)}}))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(stderr, "pqx: %v\n", err)
 		return 1
