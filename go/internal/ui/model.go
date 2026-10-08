@@ -17,6 +17,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/mjuric/pqx/go/internal/data"
+	"github.com/mjuric/pqx/go/internal/fmtx"
 )
 
 // maxColWidth caps a column's width in cells; longer values end in "…".
@@ -527,7 +528,7 @@ func (m *Model) applyFilter(text string) tea.Cmd {
 		m.closeFilter()
 		return m.clearFilter()
 	}
-	if err := m.ds.CheckWhere(where); err != nil {
+	if _, err := m.ds.Validate(context.Background(), data.View{Where: where}); err != nil {
 		m.filterErr = err.Error()
 		return nil
 	}
@@ -857,13 +858,16 @@ func (m *Model) store(req fetchReq, w data.Window) {
 		if !ok {
 			continue
 		}
+		c := m.cols[ci]
+		kind := fmtx.KindFor(c.Name, c.Arrow, c.Unit)
 		col := d.cells[name]
 		if col == nil {
 			col = make(map[int64]string, len(vals))
 			d.cells[name] = col
 		}
 		cw := d.colW[ci]
-		for i, s := range vals {
+		for i, v := range vals {
+			s := fmtx.Format(v, kind, fmtx.Opts{Width: fmtx.DefaultWidth})
 			col[start+int64(i)] = s
 			if cw < maxColWidth {
 				cw = max(cw, min(maxColWidth, textWidth(s)))

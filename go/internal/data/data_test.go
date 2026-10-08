@@ -147,16 +147,16 @@ func TestPlainWindows(t *testing.T) {
 			t.Fatalf("%v: Start %d Len %d FileRows %d", w, got.Start, got.Len, len(got.FileRows))
 		}
 		for _, c := range cols {
-			if len(got.Cols[c]) != int(n) {
-				t.Fatalf("%v %s: %d cells", w, c, len(got.Cols[c]))
+			if len(textCols(got)[c]) != int(n) {
+				t.Fatalf("%v %s: %d cells", w, c, len(textCols(got)[c]))
 			}
 			for k := range int(n) {
 				i := int(w.start) + k
 				if got.FileRows[k] != int64(i) {
 					t.Fatalf("%v: FileRows[%d] = %d", w, k, got.FileRows[k])
 				}
-				if want := fixText(c, i); got.Cols[c][k] != want {
-					t.Fatalf("%v %s row %d: %q, want %q", w, c, i, got.Cols[c][k], want)
+				if want := fixText(c, i); textCols(got)[c][k] != want {
+					t.Fatalf("%v %s row %d: %q, want %q", w, c, i, textCols(got)[c][k], want)
 				}
 			}
 		}
@@ -171,7 +171,7 @@ func TestFetchColumnSubsetAndOrder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got.Cols) != 3 || got.Cols["id"][0] != "595" || got.Cols["name"][9] != "-604" || got.Cols["s"][1] != fixText("s", 596) {
+		if len(got.Cols) != 3 || textCols(got)["id"][0] != "595" || textCols(got)["name"][9] != "-604" || textCols(got)["s"][1] != fixText("s", 596) {
 			t.Fatalf("%v: %v", v, got.Cols)
 		}
 	}
@@ -233,8 +233,8 @@ func TestFiltered(t *testing.T) {
 	}
 	for k, r := range got.FileRows {
 		for _, c := range []string{"id", "name", "s"} {
-			if got.Cols[c][k] != fixText(c, int(r)) {
-				t.Fatalf("%s row %d: %q", c, r, got.Cols[c][k])
+			if textCols(got)[c][k] != fixText(c, int(r)) {
+				t.Fatalf("%s row %d: %q", c, r, textCols(got)[c][k])
 			}
 		}
 	}
@@ -244,7 +244,7 @@ func TestFiltered(t *testing.T) {
 		t.Fatalf("Len %d %v %v", got.Len, got.FileRows, err)
 	}
 	got, err = ds.Fetch(ctx, v, 334, 10, []string{"id"})
-	if err != nil || got.Len != 0 || len(got.Cols["id"]) != 0 {
+	if err != nil || got.Len != 0 || len(textCols(got)["id"]) != 0 {
 		t.Fatalf("Len %d %v", got.Len, err)
 	}
 	// NULLs and strings with control characters in a filter
@@ -264,7 +264,7 @@ func TestCaseDuplicateNames(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(got.Cols["Name"], []string{"7", "8"}) || !reflect.DeepEqual(got.Cols["name"], []string{"-7", "-8"}) {
+		if !reflect.DeepEqual(textCols(got)["Name"], []string{"7", "8"}) || !reflect.DeepEqual(textCols(got)["name"], []string{"-7", "-8"}) {
 			t.Fatalf("%v: %v", v, got.Cols)
 		}
 	}
@@ -295,12 +295,12 @@ func TestCheckWhere(t *testing.T) {
 	ctx := context.Background()
 	for _, w := range bad {
 		if w == "" {
-			if err := ds.CheckWhere(w); err != nil {
+			if err := checkWhere(ds, w); err != nil {
 				t.Errorf("blank filter refused: %v", err)
 			}
 			continue
 		}
-		err := ds.CheckWhere(w)
+		err := checkWhere(ds, w)
 		if err == nil {
 			t.Errorf("CheckWhere(%q) accepted it", w)
 			continue
@@ -318,10 +318,10 @@ func TestCheckWhere(t *testing.T) {
 	if _, err := os.Stat(pwn); err == nil {
 		t.Fatal("a smuggled COPY ran")
 	}
-	if err := ds.CheckWhere("i32 = 3) OR (s = 'b'"); !errors.Is(err, ErrFilter) || !strings.Contains(err.Error(), "unbalanced parentheses") {
+	if err := checkWhere(ds, "i32 = 3) OR (s = 'b'"); !errors.Is(err, ErrFilter) || !strings.Contains(err.Error(), "unbalanced parentheses") {
 		t.Errorf("unbalanced: %v", err)
 	}
-	if err := ds.CheckWhere("nosuchcolumn > 3"); err == nil || !strings.Contains(err.Error(), "nosuchcolumn") || strings.Contains(err.Error(), "LINE") {
+	if err := checkWhere(ds, "nosuchcolumn > 3"); err == nil || !strings.Contains(err.Error(), "nosuchcolumn") || strings.Contains(err.Error(), "LINE") {
 		t.Errorf("unknown column: %v", err)
 	}
 	good := []string{
@@ -337,7 +337,7 @@ func TestCheckWhere(t *testing.T) {
 		"id IN (SELECT 1)",
 	}
 	for _, w := range good {
-		if err := ds.CheckWhere(w); err != nil {
+		if err := checkWhere(ds, w); err != nil {
 			t.Errorf("CheckWhere(%q): %v", w, err)
 		}
 		if _, err := ds.Count(ctx, View{Where: w}); err != nil {
@@ -375,8 +375,8 @@ func TestGlobCharactersInFileName(t *testing.T) {
 		for _, x := range files[name] {
 			want = append(want, strconv.FormatInt(x, 10))
 		}
-		if err != nil || !reflect.DeepEqual(got.Cols["a"], want) {
-			t.Errorf("%s: %v %v", name, got.Cols["a"], err)
+		if err != nil || !reflect.DeepEqual(textCols(got)["a"], want) {
+			t.Errorf("%s: %v %v", name, textCols(got)["a"], err)
 		}
 		ds.Close()
 	}
@@ -489,7 +489,7 @@ func TestFileRowNumberColumn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got.Cols["b"], []string{"60", "70"}) || !reflect.DeepEqual(got.FileRows, []int64{-1, -1}) {
+	if !reflect.DeepEqual(textCols(got)["b"], []string{"60", "70"}) || !reflect.DeepEqual(got.FileRows, []int64{-1, -1}) {
 		t.Fatalf("%+v", got)
 	}
 }

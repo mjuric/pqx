@@ -91,7 +91,7 @@ func TestFormatCell(t *testing.T) {
 	defer a.Release()
 	want := []string{"1.5", "1.23457e+06", "1e-07", "NaN", "-Inf", "0", Null}
 	for i, w := range want {
-		if got := FormatCell(a, i); got != w {
+		if got := cellText(ValueAt(a, i)); got != w {
 			t.Errorf("float64 %d: %q, want %q", i, got, w)
 		}
 	}
@@ -99,7 +99,7 @@ func TestFormatCell(t *testing.T) {
 	f32.Append(0.1)
 	b := f32.NewArray()
 	defer b.Release()
-	if got := FormatCell(b, 0); got != "0.1" {
+	if got := cellText(ValueAt(b, 0)); got != "0.1" {
 		t.Errorf("float32: %q", got)
 	}
 	ts := array.NewTimestampBuilder(mem, &arrow.TimestampType{Unit: arrow.Nanosecond, TimeZone: "America/New_York"})
@@ -110,7 +110,7 @@ func TestFormatCell(t *testing.T) {
 	c := ts.NewArray()
 	defer c.Release()
 	for i, w := range []string{"2026-01-02 03:04:05Z", "2026-01-02 03:04:05.000001Z", "2026-01-02 03:04:05.000000001Z"} {
-		if got := FormatCell(c, i); got != w {
+		if got := cellText(ValueAt(c, i)); got != w {
 			t.Errorf("timestamp %d: %q, want %q", i, got, w)
 		}
 	}
@@ -119,10 +119,10 @@ func TestFormatCell(t *testing.T) {
 	bin.Append([]byte(strings.Repeat("x", 20)))
 	d := bin.NewArray()
 	defer d.Release()
-	if got := FormatCell(d, 0); got != "0x1b00ff (3 B)" {
+	if got := cellText(ValueAt(d, 0)); got != "0x1b00ff (3 B)" {
 		t.Errorf("binary: %q", got)
 	}
-	if got := FormatCell(d, 1); got != "0x"+strings.Repeat("78", 16)+"… (20 B)" {
+	if got := cellText(ValueAt(d, 1)); got != "0x"+strings.Repeat("78", 16)+"… (20 B)" {
 		t.Errorf("binary: %q", got)
 	}
 	lb := array.NewListBuilder(mem, arrow.BinaryTypes.String)
@@ -132,7 +132,7 @@ func TestFormatCell(t *testing.T) {
 	vb.Append("b")
 	e := lb.NewArray()
 	defer e.Release()
-	if got := FormatCell(e, 0); !noControls(got, false) || !strings.Contains(got, "\\u001b[31m") {
+	if got := cellText(ValueAt(e, 0)); !noControls(got, false) || !strings.Contains(got, "␛[31m") {
 		t.Errorf("list: %q", got)
 	}
 }

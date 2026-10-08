@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mjuric/pqx/go/internal/data"
+	"github.com/mjuric/pqx/go/internal/fmtx"
 )
 
 var border = lipgloss.RoundedBorder()
@@ -235,8 +236,8 @@ func (m *Model) renderGrid(b *strings.Builder) {
 			switch {
 			case !ok:
 				t, tw = faint("·"), 1
-			case v == data.Null:
-				t, tw = faint(data.Null), 1
+			case v == fmtx.Null:
+				t, tw = faint(fmtx.Null), 1
 			default:
 				t = fit(v, s.w)
 				tw = textWidth(t)
@@ -352,7 +353,7 @@ func filterHint(cols []data.Column, d *viewData, right []bool) string {
 	var num, text string
 	for i, c := range cols {
 		v, ok := d.cells[c.Name][0]
-		if !ok || v == data.Null || !plainIdent(c.Name) {
+		if !ok || v == fmtx.Null || !plainIdent(c.Name) {
 			continue
 		}
 		if num == "" && right[i] && isNumber(v) {

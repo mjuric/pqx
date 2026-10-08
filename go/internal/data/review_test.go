@@ -50,8 +50,8 @@ func agree(t *testing.T, path string) (Dataset, Window) {
 		t.Fatal(err)
 	}
 	for _, c := range cols {
-		if !reflect.DeepEqual(plain.Cols[c], all.Cols[c]) {
-			t.Errorf("%s: plain view %q, DuckDB %q", c, plain.Cols[c], all.Cols[c])
+		if !reflect.DeepEqual(textCols(plain)[c], textCols(all)[c]) {
+			t.Errorf("%s: plain view %q, DuckDB %q", c, textCols(plain)[c], textCols(all)[c])
 		}
 	}
 	return ds, plain
@@ -108,7 +108,7 @@ func TestTypesAgree(t *testing.T) {
 		tsCol(&arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"}),
 	})
 	ds, w := agree(t, p)
-	t.Logf("ns types: %v; tz %q", ds.Columns(), w.Cols["tz"])
+	t.Logf("ns types: %v; tz %q", ds.Columns(), textCols(w)["tz"])
 
 	// what DuckDB writes: ENUM, JSON, UUID, decimals, times, blobs, nested
 	ds = fixtureDS(t)
@@ -138,8 +138,8 @@ func TestTypesAgree(t *testing.T) {
 	for _, c := range ds2.Columns() {
 		types[c.Name] = c.Type
 	}
-	if types["e"] != "VARCHAR" || w.Cols["e"][1] != "ok" {
-		t.Errorf("enum: %s %q", types["e"], w.Cols["e"][:3])
+	if types["e"] != "VARCHAR" || textCols(w)["e"][1] != "ok" {
+		t.Errorf("enum: %s %q", types["e"], textCols(w)["e"][:3])
 	}
 	if types["j"] != "JSON" {
 		t.Errorf("json: %s", types["j"])
@@ -150,11 +150,11 @@ func TestTypesAgree(t *testing.T) {
 	writeLogicalStrings(t, p, map[string]schema.LogicalType{"e": schema.EnumLogicalType{}, "j": schema.JSONLogicalType{}},
 		[]string{`"sad"`, `["ok"]`, `7`, `{"x": 1}`}) // (JSON for both: DuckDB checks it)
 	ds3, w3 := agree(t, p)
-	if w3.Cols["e"][1] != `["ok"]` || w3.Cols["j"][3] != `{"x": 1}` {
+	if textCols(w3)["e"][1] != `["ok"]` || textCols(w3)["j"][3] != `{"x": 1}` {
 		t.Errorf("enum/json: %v %q", ds3.Columns(), w3.Cols)
 	}
-	if w.Cols["j"][1] != `{"a": 1, "s": "x\u001b"}` {
-		t.Errorf("json: %s %q", types["j"], w.Cols["j"][:2])
+	if textCols(w)["j"][1] != `{"a": 1, "s": "x\u001b"}` {
+		t.Errorf("json: %s %q", types["j"], textCols(w)["j"][:2])
 	}
 	t.Logf("DuckDB-written types: %v", types)
 }
@@ -229,17 +229,17 @@ func TestHivePath(t *testing.T) {
 	if len(ds.Columns()) != 1 {
 		t.Fatalf("columns %v", ds.Columns())
 	}
-	if err := ds.CheckWhere("a > 1"); err != nil {
+	if err := checkWhere(ds, "a > 1"); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := ds.Count(context.Background(), View{Where: "a > 1"}); err != nil || n != 2 {
 		t.Fatalf("Count %d %v", n, err)
 	}
 	w, err := ds.Fetch(context.Background(), View{Where: "a > 1"}, 0, 10, []string{"a"})
-	if err != nil || !reflect.DeepEqual(w.Cols["a"], []string{"2", "3"}) {
+	if err != nil || !reflect.DeepEqual(textCols(w)["a"], []string{"2", "3"}) {
 		t.Fatalf("%v %v", w.Cols, err)
 	}
-	if err := ds.CheckWhere("year = 2024"); err == nil {
+	if err := checkWhere(ds, "year = 2024"); err == nil {
 		t.Fatal("a column from the path")
 	}
 }
@@ -314,7 +314,7 @@ func TestEmptyFile(t *testing.T) {
 	}
 	for _, v := range []View{{}, {Where: "a > 0"}} {
 		w, err := ds.Fetch(ctx, v, 0, 10, []string{"a"})
-		if err != nil || w.Len != 0 || len(w.Cols["a"]) != 0 {
+		if err != nil || w.Len != 0 || len(textCols(w)["a"]) != 0 {
 			t.Fatalf("%v: %+v %v", v, w, err)
 		}
 		if n, err := ds.Count(ctx, v); err != nil || n != 0 {
@@ -354,7 +354,7 @@ func TestCheckWhereTimeout(t *testing.T) {
 	CheckWhereTimeout = 200 * time.Millisecond
 	defer func() { CheckWhereTimeout = old }()
 	t0 := time.Now()
-	err = ds.CheckWhere("id > 3")
+	err = checkWhere(ds, "id > 3")
 	if err == nil || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "check the filter") {
 		t.Fatalf("err = %v", err)
 	}

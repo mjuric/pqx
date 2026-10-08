@@ -15,8 +15,9 @@ import (
 // number; "name" holds "r<row>"; other columns hold "<col>:<row>". A filter
 // "id % K = 0" (any K) keeps every K-th row; "none" keeps no rows; "bad"
 // fails on read; anything
-// with an unbalanced parenthesis fails CheckWhere.
+// with an unbalanced parenthesis fails Validate.
 type fakeDS struct {
+	data.Unimplemented
 	rows int64
 	cols []data.Column
 
@@ -64,7 +65,11 @@ func (f *fakeDS) calls() []fetchCall {
 func (f *fakeDS) cancels() int      { f.mu.Lock(); defer f.mu.Unlock(); return f.cancelled }
 func (f *fakeDS) countCancels() int { f.mu.Lock(); defer f.mu.Unlock(); return f.countsCan }
 
-func (f *fakeDS) CheckWhere(w string) error {
+func (f *fakeDS) Validate(ctx context.Context, v data.View) ([]data.Column, error) {
+	return f.Columns(), f.checkWhere(v.Where)
+}
+
+func (f *fakeDS) checkWhere(w string) error {
 	if strings.Count(w, "(") != strings.Count(w, ")") {
 		return errors.New("unbalanced parentheses")
 	}
@@ -123,7 +128,7 @@ func (f *fakeDS) Fetch(ctx context.Context, v data.View, start int64, n int, col
 		return data.Window{}, err
 	}
 	end := min(start+int64(n), total)
-	w := data.Window{Start: start, Cols: map[string][]string{}}
+	w := data.Window{Start: start, Cols: map[string][]data.Value{}}
 	if end > start {
 		w.Len = int(end - start)
 	}
@@ -131,11 +136,11 @@ func (f *fakeDS) Fetch(ctx context.Context, v data.View, start int64, n int, col
 		w.FileRows = append(w.FileRows, (start+int64(i))*k)
 	}
 	for _, c := range cols {
-		vals := make([]string, w.Len)
+		vals := make([]data.Value, w.Len)
 		for i, fr := range w.FileRows {
 			switch c {
 			case "id":
-				vals[i] = strconv.FormatInt(fr, 10)
+				vals[i] = fr
 			case "name":
 				vals[i] = "r" + strconv.FormatInt(fr, 10)
 			default:
