@@ -16,7 +16,10 @@ import (
 	"github.com/mjuric/pqx/go/internal/ui/app"
 	"github.com/mjuric/pqx/go/internal/ui/chrome"
 	"github.com/mjuric/pqx/go/internal/ui/dialogs"
+	"github.com/mjuric/pqx/go/internal/ui/footer"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
+	"github.com/mjuric/pqx/go/internal/ui/meta"
+	"github.com/mjuric/pqx/go/internal/ui/schema"
 )
 
 var version = "0.0.0-proto" // set with -ldflags "-X main.version=..."
@@ -95,7 +98,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Tasks: kit.NewTasks(),
 	}
 	env.Dialogs = dialogs.New(env)
-	p := tea.NewProgram(app.New(env, app.Parts{Chrome: chrome.New(env), Legacy: ui.Legacy{M: ui.New(ds)}}))
+	parts := app.Parts{
+		Chrome: chrome.New(env),
+		Legacy: ui.Legacy{M: ui.New(ds)},
+		Schema: schema.New(env, footer.New(env)),
+		Meta:   meta.New(env),
+	}
+	p := tea.NewProgram(app.New(env, parts))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(stderr, "pqx: %v\n", err)
 		return 1
