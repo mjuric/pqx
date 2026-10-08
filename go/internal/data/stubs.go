@@ -7,12 +7,6 @@ import (
 // Stubs for the contract's methods that wave 1 builds (docs/design/go-port.md:
 // WP1 views, WP2 analysis and footer). Each WP replaces its stubs.
 
-func (d *dataset) Info() FileInfo {
-	return FileInfo{Path: d.path, Size: d.size, NumLeaves: d.md.Schema.NumColumns()} // WP2: the rest
-}
-
-func (d *dataset) KeyValueMetadata() []KeyValue { return nil } // WP2
-
 // SetupErr is DuckDB's error binding the file, if any.
 func (d *dataset) SetupErr() error {
 	<-d.bound
@@ -47,33 +41,3 @@ func (d *dataset) FindRow(ctx context.Context, v View, fileRow int64) (int64, bo
 func (d *dataset) FetchAround(ctx context.Context, v View, fileRow, pos, start int64, n int, cols []string) (Window, error) {
 	return Window{}, ErrNotImplemented // WP1
 }
-
-func (d *dataset) ColumnStats(ctx context.Context, v View, col string, s Sample) (ColumnStats, error) {
-	return ColumnStats{}, ErrNotImplemented // WP2
-}
-
-func (d *dataset) Histogram(ctx context.Context, v View, col string, o HistOptions) (Histogram, error) {
-	return Histogram{}, ErrNotImplemented // WP2
-}
-
-func (d *dataset) SkyCounts(ctx context.Context, v View, lon, lat string, resDeg float64, s Sample) (Grid2D, error) {
-	return Grid2D{}, ErrNotImplemented // WP2
-}
-
-func (d *dataset) XYCounts(ctx context.Context, v View, x, y string, nx, ny int, s Sample, xlim, ylim *[2]float64) (Grid2D, error) {
-	return Grid2D{}, ErrNotImplemented // WP2
-}
-
-func (d *dataset) Export(ctx context.Context, v View, path string, f ExportFormat, cols []string) (int64, error) {
-	return 0, ErrNotImplemented // WP2
-}
-
-func (d *dataset) FooterSummary(ctx context.Context) ([]ChunkSummary, error) {
-	return nil, ErrNotImplemented // WP2
-}
-
-func (d *dataset) RowGroupInfo(ctx context.Context) ([]RowGroup, error) {
-	return nil, ErrNotImplemented // WP2
-}
-
-func (d *dataset) Encodings(path string) []string { return nil } // WP2
