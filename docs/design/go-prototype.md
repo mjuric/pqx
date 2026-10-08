@@ -1,8 +1,8 @@
 # Go prototype: plan
 
-Status: approved by the user 2026-10-08; agents A and B at work. Background and the
-open questions are in [native-port.md](native-port.md); results go there too,
-under "Prototype results".
+Status: done 2026-10-08 (PRs #28–#31). Results and the recommendation are in
+[native-port.md](native-port.md#prototype-results), with the background and
+the open questions.
 
 The prototype answers the open questions with the least code. It is not the
 start of the full port: code may be thrown away, and nothing here touches the
