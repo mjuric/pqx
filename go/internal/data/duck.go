@@ -143,6 +143,11 @@ var CheckWhereTimeout = 10 * time.Second
 // filter naming a column that isn't there, or with a syntax error, gets
 // DuckDB's message. It gives up after CheckWhereTimeout.
 func (d *dataset) CheckWhere(where string) error {
+	return d.checkWhere(context.Background(), where)
+}
+
+// checkWhere is CheckWhere, also stopped by ctx.
+func (d *dataset) checkWhere(ctx context.Context, where string) error {
 	if strings.TrimSpace(where) == "" {
 		return nil
 	}
@@ -150,7 +155,7 @@ func (d *dataset) CheckWhere(where string) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), CheckWhereTimeout)
+	ctx, cancel := context.WithTimeout(ctx, CheckWhereTimeout)
 	defer cancel()
 	err = d.waitBound(ctx)
 	if err == nil {
@@ -260,8 +265,8 @@ func (d *dataset) fetchPlainDuck(ctx context.Context, start int64, n int, cols [
 // windowFromQuery runs q, whose first column is the file row number and the
 // others cols in order, into a Window.
 func (d *dataset) windowFromQuery(ctx context.Context, q string, start int64, cols []string) (Window, error) {
-	win := Window{Start: start, FileRows: []int64{}, Cols: make(map[string][]string, len(cols))}
-	text := make([][]string, len(cols))
+	win := Window{Start: start, FileRows: []int64{}, Cols: make(map[string][]Value, len(cols))}
+	vals := make([][]Value, len(cols))
 	err := d.query(ctx, q, func(rec arrow.RecordBatch) error {
 		if int(rec.NumCols()) != len(cols)+1 {
 			return fmt.Errorf("DuckDB returned %d columns, not %d", rec.NumCols(), len(cols)+1)
@@ -275,7 +280,7 @@ func (d *dataset) windowFromQuery(ctx context.Context, q string, start int64, co
 			win.FileRows = append(win.FileRows, rn.Value(i))
 		}
 		for k := range cols {
-			text[k] = append(text[k], formatColumn(rec.Column(k+1), 0, m)...)
+			vals[k] = append(vals[k], valueColumn(rec.Column(k+1), 0, m, duckValueFunc(d.duckTypeOf(cols[k])))...)
 		}
 		return nil
 	})
@@ -284,10 +289,10 @@ func (d *dataset) windowFromQuery(ctx context.Context, q string, start int64, co
 	}
 	win.Len = len(win.FileRows)
 	for k, c := range cols {
-		if text[k] == nil {
-			text[k] = []string{}
+		if vals[k] == nil {
+			vals[k] = []Value{}
 		}
-		win.Cols[c] = text[k]
+		win.Cols[c] = vals[k]
 	}
 	return win, nil
 }

@@ -58,7 +58,7 @@ func (d *dataset) fetchPlain(ctx context.Context, start int64, n int, cols []str
 	if end <= start {
 		return emptyWindow(start, cols), nil
 	}
-	w := Window{Start: start, Len: int(end - start), FileRows: make([]int64, end-start), Cols: make(map[string][]string, len(cols))}
+	w := Window{Start: start, Len: int(end - start), FileRows: make([]int64, end-start), Cols: make(map[string][]Value, len(cols))}
 	for i := range w.FileRows {
 		w.FileRows[i] = start + int64(i)
 	}
@@ -72,9 +72,9 @@ func (d *dataset) fetchPlain(ctx context.Context, start int64, n int, cols []str
 		}
 	}
 	sort.Ints(fields)
-	text := make(map[int][]string, len(fields))
+	vals := make(map[int][]Value, len(fields))
 	for _, j := range fields {
-		text[j] = make([]string, 0, w.Len)
+		vals[j] = make([]Value, 0, w.Len)
 	}
 
 	props := parquet.NewReaderProperties(memory.DefaultAllocator)
@@ -101,23 +101,23 @@ func (d *dataset) fetchPlain(ctx context.Context, start int64, n int, cols []str
 			return Window{}, d.readErr(ctx, err)
 		}
 		for k, j := range fields {
-			text[j] = append(text[j], got[k]...)
+			vals[j] = append(vals[j], got[k]...)
 		}
 	}
 	for i, c := range cols {
-		w.Cols[c] = text[idx[i]]
+		w.Cols[c] = vals[idx[i]]
 	}
 	return w, nil
 }
 
 // readRowGroup reads rows [lo, hi) of row group rg, for the given top-level
-// columns, as cell text; up to ReadParallel columns at once.
-func (d *dataset) readRowGroup(ctx context.Context, pf *file.Reader, rg int, lo, hi int64, fields []int) ([][]string, error) {
+// columns, as Values; up to ReadParallel columns at once.
+func (d *dataset) readRowGroup(ctx context.Context, pf *file.Reader, rg int, lo, hi int64, fields []int) ([][]Value, error) {
 	fr, err := pqarrow.NewFileReader(pf, pqarrow.ArrowReadProperties{BatchSize: hi - lo}, memory.DefaultAllocator)
 	if err != nil {
 		return nil, err
 	}
-	out := make([][]string, len(fields))
+	out := make([][]Value, len(fields))
 	errs := make([]error, len(fields))
 	sem := make(chan struct{}, max(1, ReadParallel))
 	var wg sync.WaitGroup
@@ -130,9 +130,9 @@ func (d *dataset) readRowGroup(ctx context.Context, pf *file.Reader, rg int, lo,
 				errs[k] = ctx.Err()
 				return
 			}
-			cell := FormatCell
-			if d.cellText != nil && d.cellText[j] != nil {
-				cell = d.cellText[j]
+			cell := ValueAt
+			if d.conv != nil && d.conv[j] != nil {
+				cell = d.conv[j]
 			}
 			out[k], errs[k] = readColumn(ctx, fr, rg, d.leaves[j], lo, hi, cell)
 		}()
@@ -147,7 +147,7 @@ func (d *dataset) readRowGroup(ctx context.Context, pf *file.Reader, rg int, lo,
 }
 
 // readColumn reads rows [lo, hi) of one top-level column (its leaves) in row group rg.
-func readColumn(ctx context.Context, fr *pqarrow.FileReader, rg int, leaves []int, lo, hi int64, cell func(arrow.Array, int) string) ([]string, error) {
+func readColumn(ctx context.Context, fr *pqarrow.FileReader, rg int, leaves []int, lo, hi int64, cell func(arrow.Array, int) Value) ([]Value, error) {
 	rr, err := fr.GetRecordReader(ctx, leaves, []int{rg})
 	if err != nil {
 		return nil, err
@@ -158,7 +158,7 @@ func readColumn(ctx context.Context, fr *pqarrow.FileReader, rg int, leaves []in
 			return nil, err
 		}
 	}
-	out := make([]string, 0, hi-lo)
+	out := make([]Value, 0, hi-lo)
 	for int64(len(out)) < hi-lo {
 		if !rr.Next() {
 			if err := rr.Err(); err != nil {

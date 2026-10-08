@@ -42,9 +42,9 @@ type dataset struct {
 	bindErr   error
 	duckNames []string
 	duckTypes []string
-	// cellText formats the plain view's cells of each column so they read as
-	// DuckDB's do (see plainCellFunc); nil entries use FormatCell.
-	cellText  []func(arrow.Array, int) string
+	// conv converts the plain view's values of each column so they are
+	// DuckDB's (see plainValueFunc); nil entries use ValueAt.
+	conv      []func(arrow.Array, int) Value
 	hasRowNum bool // the file has no column of its own named file_row_number
 	closeOnce sync.Once
 }
@@ -109,7 +109,7 @@ func open(path string, f *os.File, opts Options) (_ *dataset, err error) {
 	}
 	d.byName = make(map[string]int, sc.NumFields())
 	for i, fld := range sc.Fields() {
-		d.cols = append(d.cols, Column{Name: fld.Name, Type: duckType(fld.Type)})
+		d.cols = append(d.cols, Column{Name: fld.Name, Type: duckType(fld.Type), Arrow: fld.Type, Nullable: fld.Nullable, SQLName: fld.Name})
 		if _, dup := d.byName[fld.Name]; !dup {
 			d.byName[fld.Name] = i
 		}
@@ -152,11 +152,12 @@ func open(path string, f *os.File, opts Options) (_ *dataset, err error) {
 	// If DuckDB can't read the file, the plain view still works.
 	<-d.bound
 	if d.bindErr == nil && len(d.duckTypes) == len(d.cols) {
-		d.cellText = make([]func(arrow.Array, int) string, len(d.cols))
+		d.conv = make([]func(arrow.Array, int) Value, len(d.cols))
 		for i := range d.cols {
 			d.cols[i].Type = d.duckTypes[i]
+			d.cols[i].SQLName = d.duckNames[i]
 			int96 := len(d.leaves[i]) == 1 && d.md.Schema.Column(d.leaves[i][0]).PhysicalType() == parquet.Types.Int96
-			d.cellText[i] = plainCellFunc(sc.Field(i).Type, d.duckTypes[i], int96)
+			d.conv[i] = plainValueFunc(sc.Field(i).Type, d.duckTypes[i], int96)
 		}
 	}
 	return d, nil
@@ -253,6 +254,9 @@ func (d *dataset) Fetch(ctx context.Context, v View, start int64, n int, cols []
 	if isPlain(v) {
 		return d.fetchPlain(ctx, start, n, cols, idx)
 	}
+	if v.IsSQL() || len(v.OrderBy) > 0 {
+		return Window{}, ErrNotImplemented // WP1
+	}
 	return d.fetchFiltered(ctx, v.Where, start, n, cols, idx)
 }
 
@@ -263,6 +267,9 @@ func (d *dataset) Count(ctx context.Context, v View) (int64, error) {
 	}
 	if isPlain(v) {
 		return d.numRows, nil
+	}
+	if v.IsSQL() || len(v.OrderBy) > 0 {
+		return 0, ErrNotImplemented // WP1
 	}
 	return d.countFiltered(ctx, v.Where)
 }
@@ -282,9 +289,9 @@ func (d *dataset) columnIndices(cols []string) ([]int, error) {
 }
 
 func emptyWindow(start int64, cols []string) Window {
-	w := Window{Start: start, FileRows: []int64{}, Cols: make(map[string][]string, len(cols))}
+	w := Window{Start: start, FileRows: []int64{}, Cols: make(map[string][]Value, len(cols))}
 	for _, c := range cols {
-		w.Cols[c] = []string{}
+		w.Cols[c] = []Value{}
 	}
 	return w
 }
@@ -362,4 +369,12 @@ func duckType(t arrow.DataType) string {
 		return duckType(t.StorageType())
 	}
 	return strings.ToUpper(Sanitize(t.String()))
+}
+
+// duckTypeOf is DuckDB's type of column name ("" if DuckDB didn't bind the file).
+func (d *dataset) duckTypeOf(name string) string {
+	if j, ok := d.byName[name]; ok && j < len(d.duckTypes) {
+		return d.duckTypes[j]
+	}
+	return ""
 }
