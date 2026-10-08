@@ -4,11 +4,13 @@ description: |
 covers:
   - "native-port.md: Keep the viewport (filtering, sorting or changing columns keeps the leftmost column)"
 fixture: wide
+quiet: 1.0
 steps:
   - keys: pgdn down down down
   - keys: right right right right right right right right right right right right right right
   - check: before
   - keys: s
+    wait: "sorted c13 ↑"
   - check: sorted
   - keys: s s
   - check: sort-off

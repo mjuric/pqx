@@ -11,6 +11,8 @@ steps:
   - keys: right right right right right right right
   - check: before
   - keys: "="
+    wait: "% of 20k"
   - check: after-equals
   - keys: x
+    wait: "✓ 20,000 rows  ·  row"
   - check: after-clear

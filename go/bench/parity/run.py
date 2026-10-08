@@ -57,7 +57,8 @@ NORMALIZE = [
     # timings: "0.12 s", "1.5s", "120 ms", "35µs", "in 2.0 s"
     (r"\b\d+(?:\.\d+)?\s?(?:ms|µs|us)\b", "<T>"),
     (r"\b\d+\.\d+\s?s\b", "<T>"),
-    (r"\b\d+:\d\d(?::\d\d)?\s?elapsed\b", "<T> elapsed"),
+    # the elapsed time of a running count ("·  00:03 elapsed"), shown only after a while
+    (r"\s+·\s+\d+:\d\d(?::\d\d)?\s?elapsed\b", ""),
     # a spinner frame in front of a word ("⠹ counting…")
     (rf"[{SPINNER}](?= \S)", "*"),
 ]
@@ -191,6 +192,7 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
             where = f"step {i + 1} {json.dumps(st, ensure_ascii=False)[:80]}"
             quiet = st.get("quiet", sc.get("quiet", QUIET))
             sends = "keys" in st or "text" in st
+            raw_mark = len(s.raw)
             if sends:
                 before = (s.text(), s.styles())
             if "keys" in st:
@@ -212,9 +214,12 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
                 if not s.wait_gone(fill(st["wait_gone"]), st.get("timeout", 20) * T):
                     raise StepError(f"{where}: still showing {st['wait_gone']!r}")
             if "toast" in st:
-                # a notification: wait for it, check it while it shows, then let it go
-                if not s.wait(fill(st["toast"]), st.get("timeout", 10) * T, norm=norm):
-                    raise StepError(f"{where}: notification {st['toast']!r} never shown")
+                # a notification: wait for it, check it while it shows, then let it go.
+                # One that came and went before the screen was looked at counts as shown
+                # if its text went through the terminal (the checkpoint then lacks it).
+                if not s.wait(fill(st["toast"]), st.get("timeout", 10) * T, norm=norm) and not re.search(
+                        fill(st["toast"]), plain_text(bytes(s.raw[raw_mark:]))):
+                    res["errors"].append(f"{where}: notification {st['toast']!r} never shown")
                 quiet = min(quiet, 0.25)
             if st.get("settle", True) is not False and (sends or "wait" in st or "check" in st or "toast" in st):
                 q = st["settle"] if not isinstance(st.get("settle", True), bool) else quiet
@@ -261,6 +266,14 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
         if not res["errors"]:
             shutil.rmtree(work, ignore_errors=True)
     return res
+
+
+def plain_text(b: bytes) -> str:
+    """Terminal output without its escape sequences (other than SGR, they become spaces)."""
+    b = re.sub(rb"\x1b\[[0-?]*m", b"", b)
+    b = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b" ", b)
+    b = re.sub(rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", b"", b)
+    return b.decode("utf-8", "replace")
 
 
 def describe_file(path):
@@ -572,8 +585,10 @@ def write_xfail(path, summary, old):
             continue
         name = key.split("@")[0]
         why = old.get(key) or old.get(name)
-        if not why:
-            why = s["errors"][0][:150] if s["errors"] else f"{s['raw_status']}: {s['text_diffs']} checkpoints differ"
+        if not why:  # the first error past startup says most
+            mine = [e for e in s["errors"] if e.startswith(summary["b"] + ":")]
+            errs = [e for e in mine if ": startup:" not in e] or mine
+            why = errs[0][:160] if errs else f"{s['raw_status']}: {s['text_diffs']} checkpoints differ"
         entries[name] = why  # by scenario: both sizes
     with open(path, "w") as fh:
         fh.write("# Known gaps of Go pqx against Python pqx, by scenario (optionally NAME@WxH).\n"

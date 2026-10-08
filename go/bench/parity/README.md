@@ -109,7 +109,7 @@ Before comparing, and before deciding a screen has settled, each line goes throu
 (see `NORMALIZE` in `run.py`):
 
 - the version after `pqx ` → `<VER>`;
-- timings (`0.12 s`, `120 ms`, `35µs`) → `<T>`;
+- timings (`0.12 s`, `120 ms`, `35µs`) → `<T>`, and a running count's `·  00:03 elapsed` is dropped;
 - a spinner frame before a word → `*`;
 - the run's output directory → `<OUT>`, the fixture directory → `<FIX>`, the slot
   letter in `runs/a/…` → `_`;
