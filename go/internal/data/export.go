@@ -45,30 +45,40 @@ func (d *dataset) Export(ctx context.Context, v View, path string, f ExportForma
 	if err != nil {
 		return 0, err
 	}
-	copySQL := "COPY (\n" + base + "\n) TO " + quoteStr(out) + " (" + opts + ")"
+	// DuckDB writes to a file of ours in the target's directory, which then
+	// replaces the target: a failed or cancelled export leaves the target
+	// as it was, and DuckDB's own temporary file (tmp_<name>, which could be
+	// the file being explored or someone else's) never comes into it.
+	tmp, err := d.exportTemp(out)
+	if err != nil {
+		return 0, err
+	}
+	copySQL := "COPY (\n" + base + "\n) TO " + quoteStr(tmp) + " (" + opts + ", USE_TMP_FILE false)"
 	var n int64
-	err = d.withConn(ctx, func(c *duckdbConn) error {
+	err = d.withConn(ctx, func(c *duckdbConn) (err error) {
+		// (this runs to the end even when Export has returned on a cancel:
+		// the temporary file is removed here, never renamed after a cancel)
+		defer func() {
+			if err == nil {
+				err = ctx.Err()
+			}
+			if err == nil {
+				err = finishExport(tmp, out)
+			}
+			if err != nil {
+				os.Remove(tmp)
+			}
+		}()
 		// the query, parenthesized as COPY has it, must be one SELECT…
 		if err := checkSelect(c, "SELECT * FROM (\n"+base+"\n)"); err != nil {
 			return err
 		}
-		// …and the whole one COPY statement (duckdb-go's Prepare refuses more than one)
-		st, err := c.Prepare(copySQL)
+		st, err := prepareCopy(c, copySQL)
 		if err != nil {
-			if strings.Contains(err.Error(), "multiple statements") || strings.Contains(err.Error(), "PrepareContext") {
-				return errNotOneSelect
-			}
-			return duckError(err)
+			return err
 		}
 		defer st.Close()
-		ds, ok := st.(*duckdb.Stmt)
-		if !ok {
-			return errors.New("not a DuckDB statement")
-		}
-		if typ, err := ds.StatementType(); err != nil || typ != duckdb.STATEMENT_TYPE_COPY {
-			return errNotOneSelect
-		}
-		rows, err := ds.QueryContext(ctx, nil)
+		rows, err := st.QueryContext(ctx, nil)
 		if err != nil {
 			return duckError(err)
 		}
@@ -89,7 +99,61 @@ func (d *dataset) Export(ctx context.Context, v View, path string, f ExportForma
 		}
 		return nil
 	})
+	if err != nil {
+		os.Remove(tmp) // (if the connection never came, nothing else removes it)
+	}
 	return n, err
+}
+
+// prepareCopy prepares copySQL, which must be exactly one COPY statement
+// (duckdb-go's Prepare refuses more than one).
+func prepareCopy(c *duckdbConn, copySQL string) (*duckdb.Stmt, error) {
+	st, err := c.Prepare(copySQL)
+	if err != nil {
+		if strings.Contains(err.Error(), "multiple statements") || strings.Contains(err.Error(), "PrepareContext") {
+			return nil, errNotOneSelect
+		}
+		return nil, duckError(err)
+	}
+	ds, ok := st.(*duckdb.Stmt)
+	if !ok {
+		st.Close()
+		return nil, errors.New("not a DuckDB statement")
+	}
+	if typ, err := ds.StatementType(); err != nil || typ != duckdb.STATEMENT_TYPE_COPY {
+		st.Close()
+		return nil, errNotOneSelect
+	}
+	return ds, nil
+}
+
+// exportTemp makes an empty file of our own next to out, for DuckDB to
+// write the export into.
+func (d *dataset) exportTemp(out string) (string, error) {
+	f, err := os.CreateTemp(filepath.Dir(out), "."+filepath.Base(out)+".pqx-*.tmp")
+	if err != nil {
+		return "", safeErr(err)
+	}
+	tmp := f.Name()
+	f.Close()
+	if d.isSource(tmp) { // (it can't be: CreateTemp makes a new file)
+		os.Remove(tmp)
+		return "", ErrOverwriteSource
+	}
+	return tmp, nil
+}
+
+// finishExport puts the written temporary file in out's place, with out's
+// permissions if it exists (else rw-r--r--).
+func finishExport(tmp, out string) error {
+	mode := os.FileMode(0o644)
+	if fi, err := os.Stat(out); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	if err := os.Chmod(tmp, mode); err != nil {
+		return safeErr(err)
+	}
+	return safeErr(os.Rename(tmp, out))
 }
 
 // exportPath is path expanded and absolute, unless it is the file being
@@ -107,18 +171,26 @@ func (d *dataset) exportPath(path string) (string, error) {
 	if err != nil {
 		return "", safeErr(err)
 	}
-	if out == d.path {
+	if out == d.path || d.isSource(out) {
 		return "", ErrOverwriteSource
 	}
-	if fi, err := os.Stat(out); err == nil {
-		if src, err := d.f.Stat(); err == nil && os.SameFile(fi, src) {
-			return "", ErrOverwriteSource
-		}
-		if src, err := os.Stat(d.path); err == nil && os.SameFile(fi, src) {
-			return "", ErrOverwriteSource
-		}
-	}
 	return out, nil
+}
+
+// isSource reports whether path is the file being explored: the file Open
+// opened, or the file now at its path.
+func (d *dataset) isSource(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	if src, err := d.f.Stat(); err == nil && os.SameFile(fi, src) {
+		return true
+	}
+	if src, err := os.Stat(d.path); err == nil && os.SameFile(fi, src) {
+		return true
+	}
+	return false
 }
 
 // exportSQL is the query Export writes: a SQL view's (relationSQL), or the

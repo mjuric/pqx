@@ -65,6 +65,9 @@ func (d *dataset) Histogram(ctx context.Context, v View, col string, o HistOptio
 	if bins <= 0 {
 		bins = 40
 	}
+	if bins > MaxCells {
+		return Histogram{}, fmt.Errorf("%d bins are too many (at most %d)", bins, MaxCells)
+	}
 	q, err := d.colRef(v, col)
 	if err != nil {
 		return Histogram{}, err
@@ -112,13 +115,14 @@ func (d *dataset) Histogram(ctx context.Context, v View, col string, o HistOptio
 	if err := finite("histogram's range", lo, hi); err != nil {
 		return Histogram{}, err
 	}
-	if hi <= lo {
-		hi = lo + 1
+	hi = widen(lo, hi)
+	bn, err := newBinning(lo, hi, bins)
+	if err != nil {
+		return Histogram{}, err
 	}
-	w := (hi - lo) / float64(bins)
 	counts := make([]int64, bins)
-	sql := fmt.Sprintf("SELECT least(greatest(floor((v - %s) / %s), 0), %d)::INT AS b, count(*) FROM %s AND v >= %s AND v <= %s GROUP BY b",
-		pyRepr(lo), pyRepr(w), bins-1, rel, pyRepr(lo), pyRepr(hi))
+	sql := fmt.Sprintf("SELECT least(greatest(%s, 0), %d)::INT AS b, count(*) FROM %s AND v >= %s AND v <= %s GROUP BY b",
+		bn.sql("v"), bins-1, rel, pyRepr(lo), pyRepr(hi))
 	err = d.query(ctx, sql, func(rec arrow.RecordBatch) error {
 		for i := range int(rec.NumRows()) {
 			b, ok1 := int64At(rec.Column(0), i)
@@ -134,7 +138,7 @@ func (d *dataset) Histogram(ctx context.Context, v View, col string, o HistOptio
 	}
 	edges := make([]float64, bins+1)
 	for i := range edges {
-		edges[i] = lo + float64(i)*w
+		edges[i] = bn.edge(i)
 	}
 	return Histogram{Edges: edges, Counts: counts}, nil
 }
@@ -147,8 +151,11 @@ func (d *dataset) SkyCounts(ctx context.Context, v View, lon, lat string, resDeg
 	if !(resDeg > 0) || math.IsInf(resDeg, 0) {
 		return Grid2D{}, errors.New("the sky map's resolution must be a positive number of degrees")
 	}
-	nlon := int(math.RoundToEven(360 / resDeg))
-	nlat := int(math.RoundToEven(180 / resDeg))
+	fl, fa := math.RoundToEven(360/resDeg), math.RoundToEven(180/resDeg)
+	if fl*fa > MaxCells {
+		return Grid2D{}, fmt.Errorf("a resolution of %s° makes %.3g cells (at most %d)", pyRepr(resDeg), fl*fa, MaxCells)
+	}
+	nlon, nlat := int(fl), int(fa)
 	if nlon < 1 || nlat < 1 {
 		return Grid2D{}, fmt.Errorf("a resolution of %s° leaves no cells", pyRepr(resDeg))
 	}
@@ -197,6 +204,9 @@ func (d *dataset) SkyCounts(ctx context.Context, v View, lon, lat string, resDeg
 func (d *dataset) XYCounts(ctx context.Context, v View, x, y string, nx, ny int, s Sample, xlim, ylim *[2]float64) (Grid2D, error) {
 	if nx < 1 || ny < 1 {
 		return Grid2D{}, fmt.Errorf("a %d × %d grid has no cells", nx, ny)
+	}
+	if float64(nx)*float64(ny) > MaxCells {
+		return Grid2D{}, fmt.Errorf("a %d × %d grid has too many cells (at most %d)", nx, ny, MaxCells)
 	}
 	for _, l := range []*[2]float64{xlim, ylim} {
 		if l != nil {
@@ -256,23 +266,26 @@ func (d *dataset) XYCounts(ctx context.Context, v View, x, y string, nx, ny int,
 			y0, y1 = r[6], r[7]
 		}
 		if xlim == nil {
-			if !(x1 > x0) {
-				x1 = x0 + 1
-			}
+			x1 = widen(x0, x1)
 			xlim = &[2]float64{x0, x1}
 		}
 		if ylim == nil {
-			if !(y1 > y0) {
-				y1 = y0 + 1
-			}
+			y1 = widen(y0, y1)
 			ylim = &[2]float64{y0, y1}
 		}
 	}
 	x0, x1, y0, y1 := xlim[0], xlim[1], ylim[0], ylim[1]
-	wx, wy := (x1-x0)/float64(nx), (y1-y0)/float64(ny)
-	sql := fmt.Sprintf("SELECT floor((x - %s) / %s)::INT AS i, floor((y - %s) / %s)::INT AS j, count(*) AS n "+
+	bx, err := newBinning(x0, x1, nx)
+	if err != nil {
+		return Grid2D{}, err
+	}
+	by, err := newBinning(y0, y1, ny)
+	if err != nil {
+		return Grid2D{}, err
+	}
+	sql := fmt.Sprintf("SELECT %s::INT AS i, %s::INT AS j, count(*) AS n "+
 		"FROM %s AND x >= %s AND x < %s AND y >= %s AND y < %s GROUP BY i, j",
-		pyRepr(x0), pyRepr(wx), pyRepr(y0), pyRepr(wy), rel, pyRepr(x0), pyRepr(x1), pyRepr(y0), pyRepr(y1))
+		bx.sql("x"), by.sql("y"), rel, pyRepr(x0), pyRepr(x1), pyRepr(y0), pyRepr(y1))
 	grid := newGrid(ny, nx)
 	err = d.query(ctx, sql, func(rec arrow.RecordBatch) error {
 		for k := range int(rec.NumRows()) {
@@ -291,6 +304,56 @@ func (d *dataset) XYCounts(ctx context.Context, v View, x, y string, nx, ny int,
 		return Grid2D{}, err
 	}
 	return Grid2D{Counts: grid, X: [2]float64{x0, x1}, Y: [2]float64{y0, y1}}, nil
+}
+
+// MaxCells bounds the bins of a histogram and the cells of a 2-D grid.
+const MaxCells = 16 << 20
+
+// widen is hi, or when the range is empty, lo + 1 (pqx's), or for an lo so
+// large that adding 1 changes nothing, a little more than lo.
+func widen(lo, hi float64) float64 {
+	if hi > lo {
+		return hi
+	}
+	if lo+1 > lo {
+		return lo + 1
+	}
+	return lo + math.Abs(lo)*0x1p-40
+}
+
+// binning is how SQL numbers the n equal bins from lo to hi: as pqx does,
+// floor((v - lo) / w), unless the range is wider than a float64 holds (as
+// from -1.7e308 to 1.7e308); then in halves, floor((v/2 - lo/2) / (w/2)).
+type binning struct {
+	lo, w float64 // w is half the width for a halved binning
+	half  bool
+}
+
+func newBinning(lo, hi float64, n int) (binning, error) {
+	b := binning{lo: lo, w: (hi - lo) / float64(n)}
+	if math.IsInf(hi-lo, 0) {
+		b = binning{lo: lo, w: (hi*0.5 - lo*0.5) / float64(n), half: true}
+	}
+	if !(b.w > 0) || math.IsInf(b.w, 0) {
+		return binning{}, fmt.Errorf("can't make %d bins from %s to %s", n, pyRepr(lo), pyRepr(hi))
+	}
+	return b, nil
+}
+
+// sql is the bin of v (a SQL expression), before clipping.
+func (b binning) sql(v string) string {
+	if b.half {
+		return fmt.Sprintf("floor((%s * 0.5 - %s) / %s)", v, pyRepr(b.lo*0.5), pyRepr(b.w))
+	}
+	return fmt.Sprintf("floor((%s - %s) / %s)", v, pyRepr(b.lo), pyRepr(b.w))
+}
+
+// edge is the lower edge of bin i (the upper edge of the last for i = n).
+func (b binning) edge(i int) float64 {
+	if b.half {
+		return (b.lo*0.5 + float64(i)*b.w) * 2
+	}
+	return b.lo + float64(i)*b.w
 }
 
 func newGrid(rows, cols int) [][]int64 {

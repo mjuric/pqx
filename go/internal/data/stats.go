@@ -115,9 +115,9 @@ func (d *dataset) relationSQL(v View, cols []string, s Sample) (string, error) {
 	return q, nil
 }
 
-// selectCols is cols (all of the file's if nil), quoted, for a select list.
+// selectCols is cols (all of the file's if none), quoted, for a select list.
 func (d *dataset) selectCols(v View, cols []string) (string, error) {
-	if cols == nil {
+	if len(cols) == 0 {
 		if v.IsSQL() {
 			return "*", nil
 		}

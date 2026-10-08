@@ -30,7 +30,12 @@ func (d *dataset) FooterSummary(ctx context.Context) ([]ChunkSummary, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append([]ChunkSummary(nil), fs.summary...), nil
+	out := make([]ChunkSummary, len(fs.summary))
+	for i, c := range fs.summary {
+		c.Min, c.Max = ownValue(c.Min), ownValue(c.Max)
+		out[i] = c
+	}
+	return out, nil
 }
 
 // RowGroupInfo is each row group's rows and sizes: compressed as the sum of
@@ -192,17 +197,15 @@ func (d *dataset) scanFooter(ctx context.Context) (*footerScan, error) {
 			if hasMin && hasMax {
 				lo, ok1 := lf.conv(minB)
 				hi, ok2 := lf.conv(maxB)
-				if ok1 && ok2 {
-					if a.lo == nil {
-						a.lo = lo
-					} else if less(lo, a.lo) {
-						a.lo = lo
-					}
-					if a.hi == nil {
-						a.hi = hi
-					} else if less(a.hi, hi) {
-						a.hi = hi
-					}
+				if !ok1 || !ok2 {
+					a.has = false // malformed: as if the chunk had no statistics
+					continue
+				}
+				if a.lo == nil || less(lo, a.lo) {
+					a.lo = lo
+				}
+				if a.hi == nil || less(a.hi, hi) {
+					a.hi = hi
 				}
 				if hasNulls {
 					a.nulls += st.GetNullCount()
@@ -262,10 +265,17 @@ func logicalString(t schema.LogicalType) string {
 	return t.String()
 }
 
-// ownValue copies a []byte that points into the footer's buffers.
+// ownValue is a copy of a statistic that shares nothing with v: bytes that
+// point into the footer's buffers, or a decimal's big.Int.
 func ownValue(v Value) Value {
-	if b, ok := v.([]byte); ok {
-		return cloneBytes(b)
+	switch x := v.(type) {
+	case []byte:
+		return cloneBytes(x)
+	case Decimal:
+		if x.Unscaled != nil {
+			x.Unscaled = new(big.Int).Set(x.Unscaled)
+		}
+		return x
 	}
 	return v
 }
