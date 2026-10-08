@@ -249,6 +249,33 @@ async def test_detail_pane_placeholder_while_loading(lazy_path, lazy):
         assert items[app.cols_shown[-1]] == str(truth(app.cols_shown[-1], 0))
 
 
+async def test_esc_closes_the_pane_while_its_columns_load(lazy_path, lazy):
+    """pqx's own loading doesn't make Esc a cancel: it closes the pane on the first press,
+    from the grid or from the pane, and the load carries on."""
+    app = PqxApp(lazy_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = app.query_one(GridTable)
+        real = app.ds.fetch_columns
+        release = threading.Event()
+
+        def fetch_columns(rows, columns):
+            release.wait(10)
+            return real(rows, columns)
+        app.ds.fetch_columns = fetch_columns
+        for keys in (("d",), ("d", "tab")):
+            await pilot.press(*keys)
+            await pilot.pause(0.3)
+            assert any(k.startswith("columns-") for k in app._busy)
+            await pilot.press("escape")
+            await pilot.pause(0.05)
+            assert not app.query_one("#detail").display and app.focused is g
+            assert app._busy and not app._cols_cancelled  # still loading, not cancelled
+        release.set()
+        await settle(pilot, app)
+        assert not app._busy
+
+
 async def test_actions_get_values_of_unloaded_columns(lazy_path, lazy):
     """y, = and the format dialog's sample load the cursor's column first if need be."""
     app = PqxApp(lazy_path)

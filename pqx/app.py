@@ -2090,11 +2090,16 @@ class PqxApp(App):
         self._update_detail()
         self._render_keys()
 
+    def _busy_with_user_work(self) -> bool:
+        """Is something running that the user asked for (a lookup, stats, a plot, an
+        export), rather than pqx's own loading of rows, columns or the row count?"""
+        return any(k not in ("page", "count") and not k.startswith("columns-") for k in self._busy)
+
     def action_detail_to_grid(self, close: bool = False) -> None:
         """Enter or Tab in the pane: back to the grid, on the selected column. Esc
-        (``close``) does the same and closes the pane, unless queries are running:
-        then, as everywhere else, it only cancels them."""
-        if close and self._busy:
+        (``close``) does the same and closes the pane, unless something the user
+        asked for is running: then, as everywhere else, it only cancels that."""
+        if close and self._busy_with_user_work():
             self.action_escape()
             return
         name = self.query_one(DetailList).selected
@@ -2605,6 +2610,12 @@ class PqxApp(App):
         self.push_screen(HelpScreen())
 
     def action_escape(self) -> None:
+        # the detail pane closes first, unless the user is waiting on something to cancel;
+        # pqx's own row/column/count loading carries on (the pane's columns are wanted later)
+        if isinstance(self.focused, GridTable) and self.query_one("#detail").display \
+                and not self._busy_with_user_work():
+            self.action_toggle_detail()
+            return
         if self._busy:
             self.ds.interrupt()
             self.notify("Cancelled running queries", timeout=2)
@@ -2613,7 +2624,7 @@ class PqxApp(App):
             self.query_one(GridTable).focus() if self.query_one(TabbedContent).active == "tab-data" \
                 else self.set_focus(None)
         elif isinstance(self.focused, GridTable) and self.query_one("#detail").display:
-            self.action_toggle_detail()
+            self.action_toggle_detail()  # (reached when the user's work had just finished)
 
     def action_toggle_sample(self) -> None:
         self.sampling = not self.sampling
