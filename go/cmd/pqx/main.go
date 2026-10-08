@@ -13,6 +13,8 @@ import (
 
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/ui"
+	"github.com/mjuric/pqx/go/internal/ui/app"
+	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
 
 var version = "0.0.0-proto" // set with -ldflags "-X main.version=..."
@@ -83,7 +85,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer ds.Close()
-	p := tea.NewProgram(ui.New(ds))
+	env := &kit.Env{
+		DS:    ds,
+		Opts:  kit.Options{Version: version},
+		Look:  app.BasicLook{},
+		State: &kit.State{Total: ds.NumRows(), Columns: ds.Columns(), FileRow: 0},
+		Tasks: kit.NewTasks(),
+	}
+	p := tea.NewProgram(app.New(env, app.Parts{Legacy: ui.Legacy{M: ui.New(ds)}}))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(stderr, "pqx: %v\n", err)
 		return 1
