@@ -455,16 +455,18 @@ class GridTable(DataTable):
             return (0, -1, hl, hr)
         return (vis[0], vis[-1], hl, hr)
 
-    def columns_near(self, column: int | None = None, screens: float = 1.0, width: int = 0) -> list[int]:
+    def columns_near(self, column: int | None = None, screens: float = 1.0, width: int = 0,
+                     left: int | None = None) -> list[int]:
         """Indices of the pinned columns and of the scrollable ones within ``screens``
         screens of the view, or of where scrolling the cursor to ``column`` would
-        bring the view. ``width``: the widget's width, if it isn't laid out yet."""
+        bring the view. ``width``: the widget's width, if it isn't laid out yet.
+        ``left``: a scrollable column the view will start at (instead of where it is now)."""
         cols = self.ordered_columns
         n = len(cols)
         fixed = min(self.fixed_columns, n)
         starts = list(accumulate((c.get_render_width(self) for c in cols), initial=0))
         view = max(1, (self.size.width or width) - self._row_label_column_width - starts[fixed])
-        x1 = self.scroll_x + starts[fixed]
+        x1 = starts[left] if left is not None and fixed <= left < n else self.scroll_x + starts[fixed]
         x2 = x1 + view
         if column is not None and fixed <= column < n:
             if starts[column] < x1:  # the view will scroll left until the column is its first
@@ -473,6 +475,28 @@ class GridTable(DataTable):
                 x1, x2 = starts[column + 1] - view, starts[column + 1]
         lo, hi = x1 - screens * view, x2 + screens * view
         return list(range(fixed)) + [i for i in range(fixed, n) if starts[i + 1] > lo and starts[i] < hi]
+
+    def scroll_x_for(self, column: int) -> float:
+        """The scroll_x that shows scrollable column ``column`` leftmost (the current one for a pinned one)."""
+        cols = self.ordered_columns
+        fixed = min(self.fixed_columns, len(cols))
+        if not fixed <= column < len(cols):
+            return self.scroll_x
+        return sum(c.get_render_width(self) for c in cols[fixed:column])
+
+    def screen_row(self) -> int:
+        """The cursor's row on screen (0: the top row below the header)."""
+        return self.cursor_row - int(self.scroll_y)
+
+    def show_cursor_at(self, screen_row: int) -> None:
+        """Scroll so the cursor row is ``screen_row`` rows from the top, or as near as the rows
+        above and below it allow (never past the first row or leaving space after the last)."""
+        r = self.cursor_row
+        self.scroll_to(y=r - max(0, min(screen_row, r)), animate=False, force=True, immediate=True)
+
+    def visible_rows(self) -> int:
+        """How many rows the screen shows."""
+        return max(1, self.scrollable_content_region.height - (self.header_height if self.show_header else 0))
 
     offset: int = 0
     total: int | None = None  # rows in the whole view, when known
@@ -1003,6 +1027,11 @@ class PqxApp(App):
         self._keep_values: dict[str, object] = {}
         self._keep_queue: list[tuple[str, tuple, str, str]] = []  # (action, args, column, key)
         self._locate_seq = 0
+        #: the viewport a new view of the same columns keeps (see _rebuild_columns): the column to
+        #: show leftmost when its first page is shown, and the screen row (from the grid's top) to
+        #: show the kept record on once it's there (_land_keep; _apply_page in a plain view)
+        self._anchor_left: str | None = None
+        self._anchor_row: int | None = None
         self.total: int | None = self.ds.num_rows if self.view.is_trivial else None
         big = self.ds.num_rows > AUTO_SAMPLE_ROWS or self.ds.file_size > AUTO_SAMPLE_BYTES
         self.sampling = big if sample is None else sample
@@ -1336,7 +1365,16 @@ class PqxApp(App):
             self.formatters[name] = F.CellFormatter(name, typ, unit, self.col_formats.get(name))
 
     def _rebuild_columns(self) -> None:
+        """Rebuild the grid's columns for ``cols_shown``. If they're the columns shown, the view
+        keeps its horizontal place: the leftmost wholly visible scrollable column is remembered
+        (by name: widths are refit for the new rows) and shown leftmost again by the next page
+        (_apply_page). Clearing resets the scroll, so it's taken now."""
         grid = self.query_one(GridTable)
+        self._anchor_left, self._anchor_row = None, None
+        if [c.key.value for c in grid.ordered_columns] == list(self.cols_shown) and grid.row_count:
+            first, last, hidden_left, _ = grid.column_window()
+            if hidden_left and first <= last:
+                self._anchor_left = self.cols_shown[first]
         grid.clear(columns=True)
         for name in self.cols_shown:
             grid.add_column(self._column_label(name), key=name)
@@ -1380,7 +1418,8 @@ class PqxApp(App):
         grid = self.query_one(GridTable)
         if self.ds.has_row_ids(self.view) and len(grid.ordered_columns) == len(shown):
             target = grid.cursor_column if column is None else column
-            near = grid.columns_near(min(target, len(shown) - 1), width=self.size.width)
+            left = shown.index(self._anchor_left) if self._anchor_left in shown else None
+            near = grid.columns_near(min(target, len(shown) - 1), width=self.size.width, left=left)
             if len(near) < len(shown):
                 cols = [shown[i] for i in near]
             if cols and self.view.is_trivial:  # (a filter or sort scans whatever columns it reads: always worth it)
@@ -1424,6 +1463,7 @@ class PqxApp(App):
         """A window load came to nothing (failed, cancelled, or its view changed meanwhile). If it
         was the newest, the page on screen stays, and its columns load as before."""
         if gen == self._page_gen:
+            self._anchor_left = None
             if self._keep is not None:
                 self._drop_keep("its page didn't load")  # (the page on the way to it didn't come)
             self._page_gen += 1
@@ -1445,6 +1485,12 @@ class PqxApp(App):
             return
         col = grid.cursor_column if column is None else column
         scroll_x = grid.scroll_x
+        # a new view of the same columns: back to its leftmost column, and its record to its screen
+        # row (a record that's looked up goes there when it's found: _land_keep)
+        left, self._anchor_left = self._anchor_left, None
+        row_at = None
+        if self._keep is None:
+            row_at, self._anchor_row = self._anchor_row, None
         grid.clear()
         grid.offset = page.offset
         fm = [self.formatters.get(n) or F.CellFormatter(n, t) for n, t in zip(page.columns, page.types)]
@@ -1461,10 +1507,19 @@ class PqxApp(App):
         grid.update_dimensions_now()  # so the cursor scrolls into view now, not after a first draw at the top
         if page.rows:
             r = max(0, min(len(page.rows) - 1, cursor_abs - page.offset))
+            if left is not None and left in page.columns:
+                scroll_x = grid.scroll_x_for(page.columns.index(left))
             with grid.sizing():  # fit what's on screen once, where the scrolling ends
-                grid.scroll_x = scroll_x  # first: the cursor must end up in view, wherever this was
-                grid.move_cursor(row=r, column=min(col, max(0, len(self.cols_shown) - 1)), animate=False)
+                # first: the cursor must end up in view, wherever this was (if its column doesn't
+                # fit beside the leftmost one, the view scrolls just enough to show it). No scroll
+                # from move_cursor itself: it would first scroll to the cleared cursor's cell (0, 0),
+                # losing the place, before scrolling to the new one.
+                grid.scroll_x = scroll_x
+                grid.move_cursor(row=r, column=min(col, max(0, len(self.cols_shown) - 1)), animate=False,
+                                 scroll=False)
             grid.scroll_cursor_fitted()
+            if row_at is not None:
+                grid.show_cursor_at(row_at)
         else:
             grid.fit_visible()
         if self.total is None and len(page.rows) < grid.window:
@@ -1501,8 +1556,10 @@ class PqxApp(App):
             r = page.row_numbers.index(file_row)
         except ValueError:
             r = None
-        if r is not None:
+        if r is not None and (self._keep_phase == "seeking" or self._room_around(r)):
             self._land_keep(r)
+        elif r is not None:  # on the page, but too near its edge to show it where it was on screen
+            self._seek_record(page.offset + r)
         elif self._keep_phase == "first" and len(page.rows) >= self.query_one(GridTable).window:
             self._keep_phase = "locating"
             self._locate_seq += 1
@@ -1516,7 +1573,11 @@ class PqxApp(App):
         pressed while it was on its way act on it."""
         self._keep, self._keep_phase, self._keep_values = None, "", {}
         queue, self._keep_queue = self._keep_queue, []
-        self.query_one(GridTable).move_cursor(row=r, animate=False)
+        grid = self.query_one(GridTable)
+        grid.move_cursor(row=r, animate=False)
+        if self._anchor_row is not None:  # on the screen row it was on (or as near as the view allows)
+            grid.show_cursor_at(self._anchor_row)
+            self._anchor_row = None
         self._update_detail()
         for item in queue:
             if self._keep is not None:  # an = among them is making a new view: the rest wait for it
@@ -1533,6 +1594,7 @@ class PqxApp(App):
         must not take it back."""
         phase, queue = self._keep_phase, self._keep_queue
         self._keep, self._keep_phase, self._keep_values, self._keep_queue = None, "", {}, []
+        self._anchor_row = None
         if phase == "locating":
             self.ds.interrupt("locate")
         elif phase == "seeking" and moved:
@@ -1585,9 +1647,25 @@ class PqxApp(App):
             self._drop_keep(why)
             return
         grid = self.query_one(GridTable)
-        if grid.offset <= pos < grid.offset + grid.row_count:
+        if grid.offset <= pos < grid.offset + grid.row_count and self._room_around(pos - grid.offset):
             self._land_keep(pos - grid.offset)
             return
+        self._seek_record(pos)
+
+    def _room_around(self, r: int) -> bool:
+        """Whether the window holds the rows to show its row ``r`` (the kept record) on its screen
+        row (``_anchor_row``): those above it, and a screen's worth below unless the view ends."""
+        grid = self.query_one(GridTable)
+        want = self._anchor_row
+        if want is None:
+            return True
+        above = r >= want or grid.offset == 0
+        below = grid.row_count - r >= grid.visible_rows() - want or not grid.more_below()
+        return above and below
+
+    def _seek_record(self, pos: int) -> None:
+        """Load the window around the kept record, at position ``pos`` of the view."""
+        grid = self.query_one(GridTable)
         self._keep_phase = "seeking"
         offset = max(0, pos - grid.window // 2)
         if self.total is not None:
@@ -2134,6 +2212,10 @@ class PqxApp(App):
         was_sql = bool(self.view.sql)
         self.view = view
         grid = self.query_one(GridTable)
+        # the record's screen row (of a record still on its way, where it's to go)
+        row_at = self._anchor_row if self._keep is not None and self._keep[1] == keep_file_row else None
+        if row_at is None and keep_file_row is not None and grid.row_count:
+            row_at = grid.screen_row()
         if view.sql or was_sql:
             self.result_schema = schema
             self._setup_formatters(schema)
@@ -2158,9 +2240,11 @@ class PqxApp(App):
         if keep_file_row is not None:
             if view.is_trivial:
                 target = keep_file_row
+                self._anchor_row = row_at
             elif self.ds.has_row_ids(view):
                 self._keep, self._keep_phase = (view, keep_file_row), "first"
                 self._keep_queue, self._keep_values = queue, values
+                self._anchor_row = row_at
                 queue = []
         if queue:
             self.notify(f"{' '.join(k for *_, k in queue)} not applied: the record isn't kept in this view",
