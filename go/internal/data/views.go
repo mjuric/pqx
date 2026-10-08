@@ -42,31 +42,57 @@ type viewState struct {
 
 	fb fallback
 
-	kwOnce   sync.Once
-	keywords map[string]bool
+	viewMu   sync.Mutex
+	viewDone bool
 }
 
-// bindTypes has DuckDB name the type of each column (its TypeInfo and its
-// Arrow type), and creates the view t over the file that SQL views query.
-// It runs in bind, after DESCRIBE.
+// DuckDB's keywords (lower case), for writing type names: the same for
+// every dataset.
+var (
+	kwMu     sync.Mutex
+	keywords map[string]bool
+)
+
+// bindTypes has DuckDB bind the file: its names for the columns, their
+// types (TypeInfo, and the type names as DESCRIBE spells them) and DuckDB's
+// Arrow types for them. Preparing the query parses the footer (into DuckDB's
+// cache); then DuckDB's Arrow types (a LIMIT 0 query) and its keywords (to
+// spell the type names) are asked for at once, on two connections.
 func (d *dataset) bindTypes(ctx context.Context) error {
-	return d.withConn(ctx, func(c *duckdbConn) error {
-		q := "SELECT * FROM " + readParquet(d.duckPath, false)
+	q := "SELECT * FROM " + readParquet(d.duckPath, false)
+	err := d.withConn(ctx, func(c *duckdbConn) error {
 		st, err := c.Prepare(q)
 		if err != nil {
 			return err
 		}
+		defer st.Close()
 		ds := st.(*duckdb.Stmt)
 		n, err := ds.ColumnCount()
-		if err == nil {
-			d.duckInfos = make([]duckdb.TypeInfo, n)
-			for i := range n {
-				if d.duckInfos[i], err = ds.ColumnTypeInfo(i); err != nil {
-					d.duckInfos[i] = nil
-				}
+		if err != nil {
+			return err
+		}
+		d.duckInfos = make([]duckdb.TypeInfo, n)
+		d.duckNames = make([]string, n)
+		for i := range n {
+			if d.duckNames[i], err = ds.ColumnName(i); err != nil {
+				return err
+			}
+			if d.duckInfos[i], err = ds.ColumnTypeInfo(i); err != nil {
+				d.duckInfos[i] = nil
 			}
 		}
-		st.Close()
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	var kw map[string]bool
+	kwDone := make(chan struct{})
+	go func() {
+		defer close(kwDone)
+		kw = d.duckKeywords(ctx)
+	}()
+	err = d.withConn(ctx, func(c *duckdbConn) error {
 		ar, err := duckdb.NewArrowFromConn(c)
 		if err != nil {
 			return err
@@ -75,13 +101,56 @@ func (d *dataset) bindTypes(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		defer rr.Release()
 		for _, f := range rr.Schema().Fields() {
 			d.duckArrow = append(d.duckArrow, f.Type)
 		}
-		rr.Release()
-		_, err = c.ExecContext(ctx, "CREATE OR REPLACE VIEW "+TableName+" AS "+q, nil)
+		return nil
+	})
+	<-kwDone
+	if err != nil {
+		return err
+	}
+	d.duckTypes = make([]string, len(d.duckInfos))
+	unknown := false
+	for i, ti := range d.duckInfos {
+		d.duckTypes[i] = duckTypeName(ti, kw)
+		unknown = unknown || strings.Contains(d.duckTypes[i], "UNKNOWN")
+	}
+	if !unknown {
+		return nil
+	}
+	// a type duckTypeName doesn't know: DuckDB's own names
+	var types []string
+	err = d.query(ctx, "SELECT column_type FROM (DESCRIBE "+q+")", func(rec arrow.RecordBatch) error {
+		for i := range int(rec.NumRows()) {
+			s, _ := ValueAt(rec.Column(0), i).(string)
+			types = append(types, s)
+		}
+		return nil
+	})
+	if err == nil && len(types) == len(d.duckTypes) {
+		d.duckTypes = types
+	}
+	return nil
+}
+
+// tableView creates (once) the view t over the file, which SQL views query.
+func (d *dataset) tableView(ctx context.Context) error {
+	d.viewMu.Lock()
+	defer d.viewMu.Unlock()
+	if d.viewDone {
+		return nil
+	}
+	err := d.withConn(ctx, func(c *duckdbConn) error {
+		_, err := c.ExecContext(ctx, "CREATE OR REPLACE VIEW "+TableName+" AS SELECT * FROM "+readParquet(d.duckPath, false), nil)
 		return err
 	})
+	if err != nil {
+		return duckError(err)
+	}
+	d.viewDone = true
+	return nil
 }
 
 // setupConversions decides, once DuckDB has bound the file, how the plain
@@ -108,24 +177,25 @@ func (d *dataset) setupConversions(sc *arrow.Schema) {
 
 // duckKeywords are DuckDB's keywords (lower case), for writing type names.
 func (d *dataset) duckKeywords(ctx context.Context) map[string]bool {
-	d.kwOnce.Do(func() {
-		kw := map[string]bool{}
-		err := d.query(ctx, "SELECT keyword_name FROM duckdb_keywords()", func(rec arrow.RecordBatch) error {
-			for i := range int(rec.NumRows()) {
-				if s, ok := ValueAt(rec.Column(0), i).(string); ok {
-					kw[strings.ToLower(s)] = true
-				}
+	kwMu.Lock()
+	defer kwMu.Unlock()
+	if keywords != nil {
+		return keywords
+	}
+	kw := map[string]bool{}
+	err := d.query(ctx, "SELECT keyword_name FROM duckdb_keywords()", func(rec arrow.RecordBatch) error {
+		for i := range int(rec.NumRows()) {
+			if s, ok := ValueAt(rec.Column(0), i).(string); ok {
+				kw[strings.ToLower(s)] = true
 			}
-			return nil
-		})
-		if err == nil {
-			d.keywords = kw
 		}
+		return nil
 	})
-	if d.keywords == nil {
+	if err != nil {
 		return map[string]bool{}
 	}
-	return d.keywords
+	keywords = kw
+	return kw
 }
 
 // sqlBodyChecked is a SQL view's query as it goes inside pqx's queries (pqx's
@@ -252,6 +322,9 @@ func (d *dataset) validateSQL(ctx context.Context, v View) ([]Column, error) {
 	if err := d.waitBound(ctx); err != nil {
 		return nil, duckError(err)
 	}
+	if err := d.tableView(ctx); err != nil {
+		return nil, err
+	}
 	kw := d.duckKeywords(ctx)
 	q := "SELECT * FROM (" + body + "\n) LIMIT 0"
 	var cols []Column
@@ -311,6 +384,9 @@ func (d *dataset) fetchSQL(ctx context.Context, v View, start int64, n int, cols
 	if err := d.waitBound(ctx); err != nil {
 		return Window{}, duckError(err)
 	}
+	if err := d.tableView(ctx); err != nil {
+		return Window{}, err
+	}
 	win := Window{Start: start, Cols: make(map[string][]Value, len(cols))}
 	if n == 0 {
 		for _, c := range cols {
@@ -360,6 +436,9 @@ func (d *dataset) countSQL(ctx context.Context, v View) (int64, error) {
 	}
 	if err := d.waitBound(ctx); err != nil {
 		return 0, duckError(err)
+	}
+	if err := d.tableView(ctx); err != nil {
+		return 0, err
 	}
 	return d.queryCount(ctx, "SELECT count(*) FROM ("+body+"\n)")
 }

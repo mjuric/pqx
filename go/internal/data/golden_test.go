@@ -261,6 +261,13 @@ func TestGoldenData(t *testing.T) {
 			d := openFixture(t, fx+".parquet")
 			all := colNames(d)
 
+			for i, r := range f.Section(t, "columns") {
+				c := d.Columns()[i]
+				if c.Name != r.String(t, "name") || c.SQLName != r.String(t, "sql_name") || c.Type != r.String(t, "duckdb_type") {
+					t.Errorf("%s: %q %q %q, Python %q %q %q", r.ID(), c.Name, c.SQLName, c.Type, r.String(t, "name"), r.String(t, "sql_name"), r.String(t, "duckdb_type"))
+				}
+			}
+
 			for _, r := range f.Section(t, "count") {
 				var gv gView
 				r.Decode(t, "view", &gv)

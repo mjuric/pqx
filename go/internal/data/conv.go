@@ -8,6 +8,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/duckdb/duckdb-go/v2"
+	"github.com/duckdb/duckdb-go/v2/mapping"
 )
 
 // cellFunc converts cell i of an array to a Value.
@@ -552,6 +553,8 @@ func duckTypeName(ti duckdb.TypeInfo, keywords map[string]bool) string {
 		return "DATE"
 	case duckdb.TYPE_TIME:
 		return "TIME"
+	case mapping.TypeTimeNS: // (duckdb-go has no name for it yet)
+		return "TIME_NS"
 	case duckdb.TYPE_INTERVAL:
 		return "INTERVAL"
 	case duckdb.TYPE_HUGEINT:

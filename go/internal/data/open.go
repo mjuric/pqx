@@ -158,6 +158,11 @@ func open(path string, f *os.File, opts Options) (_ *dataset, err error) {
 	<-d.bound
 	if d.bindErr == nil && len(d.duckTypes) == len(d.cols) {
 		for i := range d.cols {
+			if strings.ContainsRune(d.cols[i].Name, 0) {
+				// (DuckDB's C API cuts names at a NUL: keep the whole
+				// name, which SQL can't refer to; quoteIdent says so)
+				d.duckNames[i] = d.cols[i].Name
+			}
 			d.cols[i].Type = d.duckTypes[i]
 			d.cols[i].SQLName = d.duckNames[i]
 		}
@@ -190,28 +195,9 @@ func readParquet(path string, rowNumbers bool) string {
 }
 
 // bind has DuckDB read the footer (into its cache), and name the columns
-// and their types.
+// and their types (bindTypes).
 func (d *dataset) bind() {
 	defer close(d.bound)
-	rows, err := d.db.QueryContext(context.Background(), "SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM "+readParquet(d.duckPath, false)+")")
-	if err != nil {
-		d.bindErr = duckError(err)
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var name, typ string
-		if err := rows.Scan(&name, &typ); err != nil {
-			d.bindErr = duckError(err)
-			return
-		}
-		d.duckNames = append(d.duckNames, name)
-		d.duckTypes = append(d.duckTypes, typ)
-	}
-	if err := rows.Err(); err != nil {
-		d.bindErr = duckError(err)
-		return
-	}
 	if err := d.bindTypes(context.Background()); err != nil {
 		d.bindErr = duckError(err)
 	}
