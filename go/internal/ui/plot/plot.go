@@ -32,9 +32,9 @@ const (
 	resizeDelay = 300 * time.Millisecond
 	// padX: #plot-panel has padding 0 2; the root's frame pads one cell.
 	padX = 1
-	// OriginX and OriginY are the default place of the pane until the root
-	// says (kit.Placed); where the root draws a tab's body (the
-	// drop-down opens under a field, in screen cells).
+	// OriginX and OriginY are where a tab's body is drawn (in screen cells)
+	// before the root first places the pane (kit.Placed); the drop-down
+	// opens under a field.
 	OriginX, OriginY = 2, 5
 )
 
@@ -306,8 +306,6 @@ func (p *Pane) onKey(k tea.KeyPressMsg) tea.Cmd {
 		}
 		p.ctl.set("centre", c)
 		return p.debounced(changeDelay)
-	case "m":
-		return analysis.ToggleSampling(p.env)
 	}
 	return nil
 }

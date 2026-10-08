@@ -17,6 +17,7 @@ import (
 	"github.com/mjuric/pqx/go/internal/styled"
 	"github.com/mjuric/pqx/go/internal/ui/analysis"
 	"github.com/mjuric/pqx/go/internal/ui/cursorlist"
+	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
 
 // Layout of the body (#stats-body has padding 0 2; the root's frame pads
@@ -319,23 +320,28 @@ func epochLabel(v float64) string {
 	return time.Unix(int64(s), int64((v-s)*1e9)).UTC().Format("2006-01-02 15:04")
 }
 
-// View implements kit.Pane: the body, and the column list in its own
-// panel at the right. (Until the root draws side panels, the pane draws
-// the list's border itself inside the tab's frame.)
-func (p *Pane) View(w, h int) string {
+// View implements kit.Pane: the profile alone (the root draws the tab
+// through Panels).
+func (p *Pane) View(w, h int) string { return p.bodyView(w, h) }
+
+// Panels implements kit.Paneled: the profile on the left, the column list
+// in its own panel at the right, one column apart (Python's #stats-body
+// and #stats-cols-panel). The list has focus.
+func (p *Pane) Panels(w, h int) []kit.Panel {
 	p.paneW = w
-	bw := max(1, w-SideWidth-1)
-	if w < SideWidth+20 {
-		return p.BodyView(w, h)
+	if !p.sided(w) {
+		return []kit.Panel{{X: 0, Y: 0, W: w, H: h, Content: p.bodyView(max(1, w-4), max(0, h-2))}}
 	}
-	body := strings.Split(p.BodyView(bw, h), "\n")
-	side := strings.Split(p.sideBox(h), "\n")
-	out := make([]string, h)
-	for i := range out {
-		out[i] = body[i] + " " + side[i]
+	bw := w - SideWidth - 1
+	return []kit.Panel{
+		{X: 0, Y: 0, W: bw, H: h, Content: p.bodyView(bw-4, max(0, h-2))},
+		{X: w - SideWidth, Y: 0, W: SideWidth, H: h, Focused: true, Title: p.sideTitle(),
+			Content: p.list.View(SideWidth-4, max(0, h-2), p.env.Look.Render)},
 	}
-	return strings.Join(out, "\n")
 }
+
+// sided reports whether a body w wide has room for the column list.
+func (p *Pane) sided(w int) bool { return w >= SideWidth+20 }
 
 // bodyLines is everything in the body, unclipped, for content width cw.
 func (p *Pane) bodyLines(cw int) []styled.Text {
@@ -348,8 +354,8 @@ func (p *Pane) bodyLines(cw int) []styled.Text {
 	return out
 }
 
-// BodyView draws the profile in w × h cells (the panel's inside).
-func (p *Pane) BodyView(w, h int) string {
+// bodyView draws the profile in w × h cells (the panel's inside).
+func (p *Pane) bodyView(w, h int) string {
 	cw := max(1, w-2*padX)
 	p.bodyW, p.bodyH = cw, h
 	lines := p.bodyLines(cw)
@@ -366,45 +372,13 @@ func (p *Pane) BodyView(w, h int) string {
 	return strings.Join(out, "\n")
 }
 
-// SideTitle is the column list panel's title: "columns  N".
-func (p *Pane) SideTitle() styled.Text {
+// sideTitle is the column list panel's title: "columns  N".
+func (p *Pane) sideTitle() styled.Text {
 	return styled.New("columns  "+strconv.Itoa(p.list.Len()), p.env.Look.Style("dim"))
 }
 
-// SideView draws the column list in w × h cells (the panel's inside,
-// padding included).
-func (p *Pane) SideView(w, h int) string {
-	lines := strings.Split(p.list.View(max(1, w-2), h, p.env.Look.Render), "\n")
-	for i, l := range lines {
-		lines[i] = " " + l + " "
-	}
-	return strings.Join(lines, "\n")
-}
-
-// sideBox is the column list with its border, SideWidth × h.
-func (p *Pane) sideBox(h int) string {
-	look := p.env.Look
-	bs := look.Style("border")
-	if p.focused {
-		bs = look.Style("border-focus")
-	}
-	edge := func(s string) string { return look.Render(styled.New(s, bs)) }
-	iw := SideWidth - 2
-	title := p.SideTitle()
-	var top styled.Text
-	top.Append("╭─ ", bs)
-	top.AppendText(title)
-	top.Append(" "+strings.Repeat("─", max(0, iw-3-ansi.StringWidth(title.Plain)))+"╮", bs)
-	out := []string{look.Render(top)}
-	inner := strings.Split(p.SideView(iw, max(0, h-2)), "\n")
-	for i := 0; i < h-2; i++ {
-		out = append(out, edge("│")+inner[i]+edge("│"))
-	}
-	out = append(out, edge("╰"+strings.Repeat("─", iw)+"╯"))
-	return strings.Join(out[:h], "\n")
-}
-
-func (p *Pane) inSide(x, w int) bool { return w >= SideWidth+20 && x >= w-SideWidth }
+// inSide reports whether body column x is in the column list's panel.
+func (p *Pane) inSide(x, w int) bool { return p.sided(w) && x >= w-SideWidth }
 
 func (p *Pane) onWheel(m tea.MouseWheelMsg) tea.Cmd {
 	d := 3

@@ -61,7 +61,7 @@ type Pane struct {
 	scroll  int           // the body's scroll offset
 	bodyW   int           // the body's content width at the last View
 	bodyH   int
-	paneW   int // the pane's width at the last View
+	paneW   int // the body's width at the last Panels
 }
 
 // result is a profile, as the task returns it.
@@ -261,8 +261,6 @@ func (p *Pane) onKey(k tea.KeyPressMsg) tea.Cmd {
 		return p.setBins(-1)
 	case "]":
 		return p.setBins(1)
-	case "m":
-		return analysis.ToggleSampling(p.env)
 	}
 	if used, moved := p.list.Key(k); used && moved {
 		return p.highlighted()

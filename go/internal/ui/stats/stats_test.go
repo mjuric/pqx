@@ -466,3 +466,26 @@ func TestEpochLabel(t *testing.T) {
 		t.Fatalf("intText = %q", got)
 	}
 }
+
+// The column list is its own panel beside the profile's, one column apart,
+// with the accent border while Stats has focus.
+func TestPanels(t *testing.T) {
+	d, p, _ := setup(t)
+	d.Press("3")
+	ps := p.Panels(150, 30)
+	if len(ps) != 2 || ps[1].X != 150-SideWidth || ps[0].W != 150-SideWidth-1 || !ps[1].Focused || ps[0].Focused {
+		t.Fatalf("panels %+v", ps)
+	}
+	scr := d.Screen()
+	x, y := d.Find("╭─ columns  16")
+	if y < 0 || x != 150-SideWidth || !strings.HasSuffix(scr[y][:strings.Index(scr[y], "╭─ columns")], "╮ ") {
+		t.Fatalf("list panel at %d,%d:\n%s", x, y, text(scr))
+	}
+	if r := string([]rune(scr[y+1])[x:]); !strings.HasPrefix(r, "│ diaSourceId ") {
+		t.Fatalf("first item %q", r)
+	}
+	// narrow: the profile alone
+	if ps := p.Panels(40, 20); len(ps) != 1 {
+		t.Fatalf("narrow panels %d", len(ps))
+	}
+}
