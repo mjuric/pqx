@@ -235,18 +235,20 @@ func (t *Theme) Primary() color.Color { return t.primary }
 // BorderColor is the colour of unfocused borders.
 func (t *Theme) BorderColor() color.Color { return t.border }
 
-// ParseBorder parses a --border colour: an ANSI name with or without the
-// "ansi_" prefix (bright_black, ansi_white, default) or #rgb/#rrggbb (an
-// alpha, #rgba or #rrggbbaa, is ignored), as Textual accepts them for
-// Python pqx's border variable.
+// ParseBorder parses a --border colour as Textual parsed Python pqx's
+// border variable: an ANSI name in lower case with or without the "ansi_"
+// prefix (bright_black, ansi_white, default), or #rgb, #rgba, #rrggbb or
+// #rrggbbaa in either case (an alpha is blended over black, as Textual draws
+// it). Trailing spaces are ignored; anything else is an error.
 func ParseBorder(s string) (color.Color, error) {
+	s = strings.TrimRight(s, " ")
 	if strings.HasPrefix(s, "#") {
-		if c, ok := parseHex(s); ok {
+		if c, ok := parseHexAlpha(s); ok {
 			return c.color(), nil
 		}
 		return nil, fmt.Errorf("invalid colour %q (use #rgb or #rrggbb)", s)
 	}
-	name := strings.TrimPrefix(strings.ToLower(s), "ansi_")
+	name := strings.TrimPrefix(s, "ansi_")
 	if name == "default" {
 		return nil, nil
 	}
@@ -254,6 +256,26 @@ func ParseBorder(s string) (color.Color, error) {
 		return ansi.BasicColor(i), nil
 	}
 	return nil, fmt.Errorf("unknown colour %q (use an ANSI name such as bright_black or white, or #rrggbb)", s)
+}
+
+// parseHexAlpha is parseHex with the alpha blended over black.
+func parseHexAlpha(s string) (rgb, bool) {
+	c, ok := parseHex(s)
+	h := s[1:]
+	if !ok || (len(h) != 4 && len(h) != 8) {
+		return c, ok
+	}
+	var a uint64
+	var err error
+	if len(h) == 4 {
+		a, err = strconv.ParseUint(h[3:4]+h[3:4], 16, 8)
+	} else {
+		a, err = strconv.ParseUint(h[6:8], 16, 8)
+	}
+	if err != nil {
+		return rgb{}, false
+	}
+	return blend(rgb{}, c, float64(a)/255), true
 }
 
 // Lip is the lipgloss style for a styled.Style. Colours are "" (the

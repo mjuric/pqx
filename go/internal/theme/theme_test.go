@@ -81,7 +81,22 @@ func TestAccentDimBorder(t *testing.T) {
 			t.Errorf("border %s: %s, want %s", border, sgr(got), sgr(want))
 		}
 	}
-	for _, bad := range []string{"orange", "bogus", "ansi_orange", "#12", "#ggg"} {
+	// as Textual parsed Python pqx's border: trailing spaces are fine, case
+	// matters for names, an alpha is blended over black
+	for border, want := range map[string]string{
+		"red ": "#800000", "ansi_red  ": "#800000", "#FF000080": "#800000", "#ff000080": "#800000",
+		"#f008": "#880000", "#123 ": "#112233", "#ABCDEF": "#abcdef",
+	} {
+		c, err := ParseBorder(border)
+		if err != nil {
+			t.Errorf("%q: %v", border, err)
+			continue
+		}
+		if r, g, b, _ := c.RGBA(); strings.HasPrefix(border, "#") && fmt.Sprintf("#%02x%02x%02x", r>>8, g>>8, b>>8) != want {
+			t.Errorf("%q: %s, want %s", border, hexOf(c), want)
+		}
+	}
+	for _, bad := range []string{"orange", "bogus", "ansi_orange", "#12", "#ggg", " red", "RED", "ansi_RED", "Red", "white\t", "#12345678zz", "#1234567g"} {
 		if _, err := New("", "", bad, ""); err == nil {
 			t.Errorf("border %q accepted", bad)
 		}
