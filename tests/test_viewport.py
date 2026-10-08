@@ -73,10 +73,11 @@ async def test_equals_from_the_pane_keeps_the_viewport(demo_path, demo):
         lst = app.query_one(DetailList)
         assert app.focused is lst and lst.selected == "detector"
         # (the pane narrows the grid)
-        g.scroll_to(x=g.scroll_x_for(app.cols_shown.index("trailLength")), animate=False, immediate=True)
+        before = app.cols_shown[app.cols_shown.index("detector") - 1]  # (fits beside the pane at any pane width)
+        g.scroll_to(x=g.scroll_x_for(app.cols_shown.index(before)), animate=False, immediate=True)
         await pilot.pause(0.05)
         left, row = leftmost(app), g.screen_row()
-        assert left == "trailLength" and g.cursor_cell_in_view() and row == 15
+        assert left == before and g.cursor_cell_in_view() and row == 15
         await pilot.press("equals_sign")
         await settle(pilot, app)
         assert app.view.where == f"detector = {int(demo.detector[15_000])}"

@@ -4,6 +4,7 @@ import os
 import pyarrow.parquet as pq
 import pytest
 from rich.styled import Styled
+from rich.text import Text
 from textual.worker import WorkerState
 from textual.widgets import DataTable, Input, OptionList, Static, TabbedContent
 from textual.widgets.data_table import ColumnKey
@@ -1189,3 +1190,37 @@ async def test_textual_theme_applies(demo_path, theme):
         assert app.theme == theme and not app.current_theme.ansi
         bg = app.query_one(GridTable).styles.background
         assert bg.a > 0 and bg == Color.parse(app.current_theme.background)
+
+
+async def test_detail_pane_fits_full_precision_numbers(tmp_path):
+    # Any double at full precision (up to 24 characters) and any 64-bit integer fit on the
+    # name's line, with the pane's scrollbar showing (many columns) and the longest name.
+    import pyarrow as pa
+    from rich.console import Console
+    from pqx.widgets import DetailList, EntryGrid
+
+    values = {
+        "midpointMjdTai_flag_degraded": [True],
+        "ra": [348.11223041553035],
+        "tiny": [-1.2345678901234567e-123],
+        "id_min": pa.array([-9223372036854775808], pa.int64()),
+        "diaSourceId": pa.array([745504140635930649], pa.int64()),
+    }
+    values.update({f"c{i:02d}": [float(i)] for i in range(60)})  # enough entries for a scrollbar
+    path = tmp_path / "wide_numbers.parquet"
+    pq.write_table(pa.table(values), path)
+    app = PqxApp(str(path))
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        await pilot.press("d")
+        await settle(pilot, app)
+        lst = app.query_one(DetailList)
+        assert lst.show_vertical_scrollbar
+        width = lst.scrollable_content_region.width
+        items = dict(lst._items)
+        for name in ("ra", "tiny", "id_min", "diaSourceId"):
+            value = items[name]
+            assert len(value.plain.split("\n")[0]) <= 24
+            console = Console(width=width, color_system=None, legacy_windows=False)
+            lines = console.render_lines(EntryGrid(Text(name), value, lst._name_width), pad=False)
+            assert len(lines) == value.plain.count("\n") + 1, (name, value.plain, width)  # (+ derived line)
