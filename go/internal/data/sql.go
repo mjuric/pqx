@@ -83,12 +83,23 @@ func whereSQL(where string) (string, error) {
 // the line, /* */, which nest), following DuckDB's (Postgres's) lexer. An
 // unterminated literal, name or comment is an error.
 func scanSQL(s string, fn func(pos int, c byte) error) error {
+	return scanSQLTokens(s, func(pos int, tok string) error {
+		if len(tok) == 1 && (tok[0] == '(' || tok[0] == ')' || tok[0] == ';') {
+			return fn(pos, tok[0])
+		}
+		return nil
+	})
+}
+
+// scanSQLTokens is scanSQL, also calling fn with each word (unquoted
+// identifier, keyword or number) outside literals and comments.
+func scanSQLTokens(s string, fn func(pos int, tok string) error) error {
 	n := len(s)
 	for i := 0; i < n; {
 		c := s[i]
 		switch {
 		case c == '(' || c == ')' || c == ';':
-			if err := fn(i, c); err != nil {
+			if err := fn(i, s[i:i+1]); err != nil {
 				return err
 			}
 			i++
@@ -138,8 +149,12 @@ func scanSQL(s string, fn func(pos int, c byte) error) error {
 			}
 			i += 2*len(tag) + end
 		case identByte(s, i):
+			j := i
 			for i < n && identByte(s, i) {
 				i++
+			}
+			if err := fn(j, s[j:i]); err != nil {
+				return err
 			}
 		default:
 			i++

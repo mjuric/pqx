@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -89,50 +88,16 @@ func (d *dataset) withConn(ctx context.Context, fn func(c *duckdbConn) error) er
 // than one statement (unlike its QueryContext, which runs all but the last
 // and returns the last one's rows).
 func checkSelect(c *duckdbConn, query string) error {
-	st, err := c.Prepare(query)
-	if err != nil {
-		if strings.Contains(err.Error(), "multiple statements") || strings.Contains(err.Error(), "PrepareContext") {
-			return errNotOneSelect
-		}
-		return duckError(err)
+	st, err := prepareSelect(context.Background(), c, query)
+	if st != nil {
+		st.Close()
 	}
-	defer st.Close()
-	ds, ok := st.(*duckdb.Stmt)
-	if !ok {
-		return errors.New("not a DuckDB statement")
-	}
-	typ, err := ds.StatementType()
-	if err != nil {
-		return duckError(err)
-	}
-	if typ != duckdb.STATEMENT_TYPE_SELECT {
-		return errNotOneSelect
-	}
-	return nil
+	return err
 }
 
 // query runs query (after checkSelect) and calls fn with each record batch of its result.
 func (d *dataset) query(ctx context.Context, query string, fn func(rec arrow.RecordBatch) error) error {
-	return d.withConn(ctx, func(c *duckdb.Conn) error {
-		if err := checkSelect(c, query); err != nil {
-			return err
-		}
-		ar, err := duckdb.NewArrowFromConn(c)
-		if err != nil {
-			return err
-		}
-		rr, err := ar.QueryContext(ctx, query)
-		if err != nil {
-			return duckError(err)
-		}
-		defer rr.Release()
-		for rr.Next() {
-			if err := fn(rr.RecordBatch()); err != nil {
-				return err
-			}
-		}
-		return duckError(rr.Err())
-	})
+	return d.queryTyped(ctx, query, func(rec arrow.RecordBatch, _ []cellFunc) error { return fn(rec) })
 }
 
 // CheckWhereTimeout bounds how long CheckWhere waits for DuckDB.
@@ -160,7 +125,11 @@ func (d *dataset) checkWhere(ctx context.Context, where string) error {
 	err = d.waitBound(ctx)
 	if err == nil {
 		err = d.withConn(ctx, func(c *duckdb.Conn) error {
-			return checkSelect(c, "SELECT count(*) FROM "+d.src+" WHERE "+w)
+			st, err := prepareSelect(ctx, c, "SELECT count(*) FROM "+d.src+" WHERE "+w)
+			if st != nil {
+				st.Close()
+			}
+			return err
 		})
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
@@ -216,29 +185,6 @@ func (d *dataset) selectList(idx []int) (string, error) {
 	return strings.Join(parts, ", "), nil
 }
 
-// fetchFiltered reads rows [start, start+n) of the filtered view in DuckDB.
-// Like pqx, it relies on DuckDB keeping the file's order for a filtered scan
-// (preserve_insertion_order is on by default), so there is no ORDER BY.
-func (d *dataset) fetchFiltered(ctx context.Context, where string, start int64, n int, cols []string, idx []int) (Window, error) {
-	w, err := whereSQL(where)
-	if err != nil {
-		return Window{}, err
-	}
-	if err := d.waitBound(ctx); err != nil {
-		return Window{}, err
-	}
-	if n == 0 {
-		return emptyWindow(start, cols), nil
-	}
-	sel, err := d.selectList(idx)
-	if err != nil {
-		return Window{}, err
-	}
-	q := "SELECT " + sel + " FROM " + d.src + " WHERE " + w +
-		" LIMIT " + strconv.Itoa(n) + " OFFSET " + strconv.FormatInt(start, 10)
-	return d.windowFromQuery(ctx, q, start, cols)
-}
-
 // fetchPlainDuck reads file rows [start, start+n) in DuckDB, which skips to
 // them through its file_row_number filter (pqx's other reader for the plain
 // view; kept for comparing the two).
@@ -267,7 +213,7 @@ func (d *dataset) fetchPlainDuck(ctx context.Context, start int64, n int, cols [
 func (d *dataset) windowFromQuery(ctx context.Context, q string, start int64, cols []string) (Window, error) {
 	win := Window{Start: start, FileRows: []int64{}, Cols: make(map[string][]Value, len(cols))}
 	vals := make([][]Value, len(cols))
-	err := d.query(ctx, q, func(rec arrow.RecordBatch) error {
+	err := d.queryTyped(ctx, q, func(rec arrow.RecordBatch, conv []cellFunc) error {
 		if int(rec.NumCols()) != len(cols)+1 {
 			return fmt.Errorf("DuckDB returned %d columns, not %d", rec.NumCols(), len(cols)+1)
 		}
@@ -280,7 +226,7 @@ func (d *dataset) windowFromQuery(ctx context.Context, q string, start int64, co
 			win.FileRows = append(win.FileRows, rn.Value(i))
 		}
 		for k := range cols {
-			vals[k] = append(vals[k], valueColumn(rec.Column(k+1), 0, m, duckValueFunc(d.duckTypeOf(cols[k])))...)
+			vals[k] = append(vals[k], valueColumn(rec.Column(k+1), 0, m, conv[k+1])...)
 		}
 		return nil
 	})

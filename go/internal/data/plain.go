@@ -8,7 +8,6 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/apache/arrow-go/v18/parquet"
 	"github.com/apache/arrow-go/v18/parquet/file"
@@ -49,10 +48,9 @@ func (r ctxReader) ReadAt(p []byte, off int64) (int, error) {
 // beforeRead, if set (by tests), runs before every read of the plain view.
 var beforeRead func()
 
-// fetchPlain reads file rows [start, start+n) straight from the row groups
-// that hold them, only the requested columns. In each row group, arrow-go's
-// SeekToRow skips to the first row wanted: with no page index it still reads
-// and decompresses the pages before it, but doesn't decode their values.
+// fetchPlain reads file rows [start, start+n) of the plain view, each column
+// with the reader that can (readRows): arrow-go, straight from the row
+// groups that hold them, for the columns it reads exactly as DuckDB does.
 func (d *dataset) fetchPlain(ctx context.Context, start int64, n int, cols []string, idx []int) (Window, error) {
 	end := min(start+int64(n), d.numRows)
 	if end <= start {
@@ -62,60 +60,74 @@ func (d *dataset) fetchPlain(ctx context.Context, start int64, n int, cols []str
 	for i := range w.FileRows {
 		w.FileRows[i] = start + int64(i)
 	}
-	// distinct columns, in file order
-	fields := make([]int, 0, len(idx))
-	seen := make(map[int]bool, len(idx))
-	for _, j := range idx {
-		if !seen[j] {
-			seen[j] = true
-			fields = append(fields, j)
-		}
+	vals, failed, err := d.readRows(ctx, w.FileRows, distinct(idx))
+	if err != nil {
+		return Window{}, err
 	}
-	sort.Ints(fields)
-	vals := make(map[int][]Value, len(fields))
-	for _, j := range fields {
-		vals[j] = make([]Value, 0, w.Len)
-	}
+	d.fillWindow(&w, cols, idx, vals, failed)
+	return w, nil
+}
 
+// readDirect reads the file rows rows (sorted, distinct) of the top-level
+// columns fields with arrow-go, converted by d.direct: out[k] holds column
+// fields[k]'s values, one per row. In each row group, arrow-go's SeekToRow
+// skips to the first row wanted: with no page index it still reads and
+// decompresses the pages before it, but doesn't decode their values; rows
+// between the first and last wanted are decoded and dropped.
+func (d *dataset) readDirect(ctx context.Context, rows []int64, fields []int) ([][]Value, error) {
+	out := make([][]Value, len(fields))
+	for k := range out {
+		out[k] = make([]Value, 0, len(rows))
+	}
+	if len(rows) == 0 {
+		return out, nil
+	}
 	props := parquet.NewReaderProperties(memory.DefaultAllocator)
 	props.BufferedStreamEnabled = BufferedStream
 	props.BufferSize = ReadBufferSize
 	src := ctxReader{ctx, io.NewSectionReader(d.f, 0, d.size)}
 	pf, err := file.NewParquetReader(src, file.WithMetadata(d.md), file.WithReadProps(props))
 	if err != nil {
-		return Window{}, d.readErr(ctx, err)
+		return nil, d.readErr(ctx, err)
 	}
-
-	rg := sort.Search(len(d.rgRows), func(i int) bool { return d.rgStart[i+1] > start })
-	for ; rg < len(d.rgRows) && d.rgStart[rg] < end; rg++ {
+	for i := 0; i < len(rows); {
 		if err := ctx.Err(); err != nil {
-			return Window{}, err
+			return nil, err
 		}
-		lo := max(start, d.rgStart[rg]) - d.rgStart[rg]
-		hi := min(end, d.rgStart[rg+1]) - d.rgStart[rg]
-		if hi <= lo {
-			continue
+		rg := sort.Search(len(d.rgRows), func(k int) bool { return d.rgStart[k+1] > rows[i] })
+		base, end := d.rgStart[rg], d.rgStart[rg+1]
+		j := i
+		for j < len(rows) && rows[j] < end {
+			j++
 		}
-		got, err := d.readRowGroup(ctx, pf, rg, lo, hi, fields)
+		local := make([]int64, j-i)
+		for k := range local {
+			local[k] = rows[i+k] - base
+		}
+		got, err := d.readRowGroup(ctx, pf, rg, local, fields)
 		if err != nil {
-			return Window{}, d.readErr(ctx, err)
+			return nil, d.readErr(ctx, err)
 		}
-		for k, j := range fields {
-			vals[j] = append(vals[j], got[k]...)
+		for k := range fields {
+			out[k] = append(out[k], got[k]...)
 		}
+		i = j
 	}
-	for i, c := range cols {
-		w.Cols[c] = vals[idx[i]]
-	}
-	return w, nil
+	return out, nil
 }
 
-// readRowGroup reads rows [lo, hi) of row group rg, for the given top-level
-// columns, as Values; up to ReadParallel columns at once.
-func (d *dataset) readRowGroup(ctx context.Context, pf *file.Reader, rg int, lo, hi int64, fields []int) ([][]Value, error) {
-	fr, err := pqarrow.NewFileReader(pf, pqarrow.ArrowReadProperties{BatchSize: hi - lo}, memory.DefaultAllocator)
+// readRowGroup reads the rows local (sorted, distinct, relative to the row
+// group) of row group rg, for the given top-level columns, as Values; up to
+// ReadParallel columns at once.
+func (d *dataset) readRowGroup(ctx context.Context, pf *file.Reader, rg int, local []int64, fields []int) ([][]Value, error) {
+	lo, hi := local[0], local[len(local)-1]+1
+	fr, err := pqarrow.NewFileReader(pf, pqarrow.ArrowReadProperties{BatchSize: min(hi-lo, maxBatch)}, memory.DefaultAllocator)
 	if err != nil {
 		return nil, err
+	}
+	pick := local
+	if int64(len(local)) == hi-lo {
+		pick = nil // every row of [lo, hi)
 	}
 	out := make([][]Value, len(fields))
 	errs := make([]error, len(fields))
@@ -131,10 +143,10 @@ func (d *dataset) readRowGroup(ctx context.Context, pf *file.Reader, rg int, lo,
 				return
 			}
 			cell := ValueAt
-			if d.conv != nil && d.conv[j] != nil {
-				cell = d.conv[j]
+			if d.direct != nil && d.direct[j] != nil {
+				cell = d.direct[j]
 			}
-			out[k], errs[k] = readColumn(ctx, fr, rg, d.leaves[j], lo, hi, cell)
+			out[k], errs[k] = readColumn(ctx, fr, rg, d.leaves[j], lo, hi, pick, cell)
 		}()
 	}
 	wg.Wait()
@@ -146,8 +158,22 @@ func (d *dataset) readRowGroup(ctx context.Context, pf *file.Reader, rg int, lo,
 	return out, nil
 }
 
-// readColumn reads rows [lo, hi) of one top-level column (its leaves) in row group rg.
-func readColumn(ctx context.Context, fr *pqarrow.FileReader, rg int, leaves []int, lo, hi int64, cell func(arrow.Array, int) Value) ([]Value, error) {
+// maxBatch bounds the rows arrow-go decodes at once when it reads a long
+// stretch of a row group for a few rows.
+const maxBatch = 64 << 10
+
+// readHook, if set (by tests), runs before each column's read in a row
+// group; an error it returns is the read's.
+var readHook func(rg int, leaves []int) error
+
+// readColumn reads rows [lo, hi) of one top-level column (its leaves) in row
+// group rg, keeping only the rows pick (sorted, in [lo, hi)) unless it is nil.
+func readColumn(ctx context.Context, fr *pqarrow.FileReader, rg int, leaves []int, lo, hi int64, pick []int64, cell cellFunc) ([]Value, error) {
+	if readHook != nil {
+		if err := readHook(rg, leaves); err != nil {
+			return nil, err
+		}
+	}
 	rr, err := fr.GetRecordReader(ctx, leaves, []int{rg})
 	if err != nil {
 		return nil, err
@@ -158,23 +184,37 @@ func readColumn(ctx context.Context, fr *pqarrow.FileReader, rg int, leaves []in
 			return nil, err
 		}
 	}
-	out := make([]Value, 0, hi-lo)
-	for int64(len(out)) < hi-lo {
+	want := hi - lo
+	if pick != nil {
+		want = int64(len(pick))
+	}
+	out := make([]Value, 0, want)
+	at := lo // row (in the row group) of the next batch's first row
+	p := 0   // next of pick
+	for at < hi {
 		if !rr.Next() {
 			if err := rr.Err(); err != nil {
 				return nil, err
 			}
-			return nil, fmt.Errorf("row group %d ended %d rows early", rg, hi-lo-int64(len(out)))
+			return nil, fmt.Errorf("row group %d ended %d rows early", rg, hi-at)
 		}
 		rec := rr.RecordBatch()
 		if rec.NumCols() != 1 {
 			return nil, fmt.Errorf("arrow-go read %d columns for one", rec.NumCols())
 		}
-		k := min(int(rec.NumRows()), int(hi-lo)-len(out))
+		m := min(rec.NumRows(), hi-at)
 		col := rec.Column(0)
-		for i := range k {
-			out = append(out, cell(col, i))
+		if pick == nil {
+			for i := range int(m) {
+				out = append(out, cell(col, i))
+			}
+		} else {
+			for p < len(pick) && pick[p] < at+m {
+				out = append(out, cell(col, int(pick[p]-at)))
+				p++
+			}
 		}
+		at += m
 	}
 	return out, nil
 }
