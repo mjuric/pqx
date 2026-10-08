@@ -17,6 +17,7 @@ import (
 
 	"github.com/mjuric/pqx/go/internal/fmtx"
 	"github.com/mjuric/pqx/go/internal/styled"
+	"github.com/mjuric/pqx/go/internal/ui/analysis"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
 
@@ -127,7 +128,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmd, a.broadcast(msg))
 	case tea.KeyPressMsg:
-		return a, a.onKey(msg)
+		// the chrome sees input too: a key may start a task, and its
+		// spinner starts at once
+		return a, tea.Batch(a.onKey(msg), a.p.Chrome.Update(msg))
 	case tea.PasteMsg:
 		if len(a.dialogs) > 0 {
 			return a, a.dialogs[len(a.dialogs)-1].Update(msg)
@@ -137,7 +140,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 	case tea.MouseMsg:
-		return a, a.onMouse(msg)
+		return a, tea.Batch(a.onMouse(msg), a.p.Chrome.Update(msg))
 	case kit.DoneMsg:
 		if !a.env.Tasks.Done(msg) {
 			return a, nil
@@ -191,6 +194,8 @@ func (a *App) onKey(k tea.KeyPressMsg) tea.Cmd {
 		switch s {
 		case "q":
 			return a.quit()
+		case "m":
+			return analysis.ToggleSampling(a.env)
 		case "/":
 			return a.setFocus("filter")
 		case "?":
@@ -208,7 +213,7 @@ func (a *App) onKey(k tea.KeyPressMsg) tea.Cmd {
 			if s == "shift+tab" {
 				d = -1
 			}
-			if f, ok := a.focused().(InnerFocus); ok && f.CycleFocus(d) {
+			if f, ok := a.focused().(kit.InnerFocus); ok && f.CycleFocus(d) {
 				return nil
 			}
 			return a.cycleFocus(d)
@@ -255,7 +260,7 @@ func (a *App) quit() tea.Cmd {
 	// Bubble Tea leaves the alternate screen without erasing it; the last
 	// frame is blank so nothing stays behind (GNU screen with altscreen off).
 	a.quitting = true
-	a.env.Tasks.CancelAll()
+	a.env.Tasks.Stop()
 	return tea.Quit
 }
 
@@ -264,8 +269,14 @@ func tabPane(t kit.Tab) string {
 }
 
 func (a *App) switchTab(t kit.Tab) tea.Cmd {
+	changed := t != a.tab
 	a.tab = t
-	return a.setFocus(tabPane(t))
+	a.env.State.Tab = t
+	cmd := a.setFocus(tabPane(t))
+	if !changed {
+		return cmd
+	}
+	return tea.Batch(cmd, a.broadcast(kit.TabChangedMsg{Tab: t}))
 }
 
 // focusOrder is the Tab key's order on each tab.
@@ -444,6 +455,9 @@ func (a *App) render() (string, *tea.Cursor) {
 			p = placeholder(name)
 		}
 		a.regions = append(a.regions, region{name, p, x, y, w, h})
+		if pl, ok := p.(kit.Placed); ok {
+			pl.Place(x, y)
+		}
 		if c, ok := p.(kit.Cursored); ok && a.focus == name {
 			if cc := c.Cursor(); cc != nil {
 				cc.Position.X += x
@@ -483,7 +497,7 @@ func (a *App) render() (string, *tea.Cursor) {
 	default:
 		name := tabPane(a.tab)
 		p := a.parts()[name]
-		if pp, ok := p.(Paneled); ok {
+		if pp, ok := p.(kit.Paneled); ok {
 			a.regions = append(a.regions, region{name, p, 0, top, a.w, bodyH})
 			lines := strings.Split(a.panels(pp, a.w, bodyH, tabs, a.focus == name), "\n")
 			for i := range lines {
@@ -497,7 +511,9 @@ func (a *App) render() (string, *tea.Cursor) {
 	}
 	b.WriteString("\n")
 	var hints []kit.KeyHint
-	if p := a.focused(); p != nil {
+	if n := len(a.dialogs); n > 0 {
+		hints = a.dialogs[n-1].Keys()
+	} else if p := a.focused(); p != nil {
 		hints = p.Keys()
 	}
 	b.WriteString(fitLine(ch.KeyBar(a.w, hints), a.w))

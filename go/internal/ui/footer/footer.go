@@ -100,7 +100,7 @@ func (r *Reader) start() tea.Cmd {
 	}
 	r.state = running
 	ds := r.env.DS
-	return r.env.Tasks.Run(Tag, "", false, func(ctx context.Context) tea.Msg {
+	return r.env.Tasks.RunBackground(Tag, func(ctx context.Context) tea.Msg {
 		summ, err := ds.FooterSummary(ctx)
 		if err != nil {
 			return Result{Err: err}

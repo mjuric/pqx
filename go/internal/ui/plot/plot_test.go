@@ -45,8 +45,14 @@ func lastCall(ds *uitest.FakeDS) uitest.Call {
 
 // key sends a key to the pane itself: the root takes Tab for its focus
 // cycle (a contract change is pending), so Tab goes straight to the pane.
+// key sends keys to the pane; Tab and Shift+Tab go through the root, which
+// gives them to the pane (kit.InnerFocus).
 func key(d *uitest.Driver, p *Pane, keys ...string) {
 	for _, k := range keys {
+		if k == "tab" || k == "shift+tab" {
+			d.Press(k)
+			continue
+		}
 		d.SendTo(p, uitest.Key(k))
 	}
 }

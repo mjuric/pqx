@@ -222,16 +222,20 @@ func TestQuitWhileReadingFooter(t *testing.T) {
 	}
 }
 
-// Esc cancels everything running, the footer pass too: it starts again.
-func TestEscRestartsFooter(t *testing.T) {
+// Esc leaves the footer pass running: it is background work, as in Python
+// pqx (it isn't busy work there), so Esc doesn't cancel or restart it.
+func TestEscLeavesFooterRunning(t *testing.T) {
 	tb := open(t, "demo", true)
 	tb.Until(func() bool { return tb.ds.Calls.Load() == 1 })
 	tb.Press("2", "esc")
-	tb.Until(func() bool { return tb.ds.Calls.Load() == 2 })
+	tb.Settle()
+	if !tb.env.Tasks.Running(footer.Tag) || tb.env.Tasks.Busy() {
+		t.Fatalf("running %v busy %v", tb.env.Tasks.Running(footer.Tag), tb.env.Tasks.Busy())
+	}
 	tb.release()
 	tb.read()
-	if tb.schema.Rows() != len(tb.ds.Columns()) {
-		t.Fatalf("%d rows", tb.schema.Rows())
+	if tb.ds.Calls.Load() != 1 || tb.schema.Rows() != len(tb.ds.Columns()) {
+		t.Fatalf("%d calls, %d rows", tb.ds.Calls.Load(), tb.schema.Rows())
 	}
 }
 

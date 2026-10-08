@@ -32,7 +32,8 @@ const (
 	resizeDelay = 300 * time.Millisecond
 	// padX: #plot-panel has padding 0 2; the root's frame pads one cell.
 	padX = 1
-	// OriginX and OriginY are where the root draws a tab's body (the
+	// OriginX and OriginY are the default place of the pane until the root
+	// says (kit.Placed); where the root draws a tab's body (the
 	// drop-down opens under a field, in screen cells).
 	OriginX, OriginY = 2, 5
 )
@@ -44,6 +45,8 @@ type Pane struct {
 
 	visible, focused bool
 	gen, seq         int
+	// originX and originY are where the root draws the pane (kit.Placed).
+	originX, originY int
 
 	status  styled.Text
 	body    []styled.Text
@@ -74,7 +77,7 @@ type result struct {
 
 // New makes the Plot pane.
 func New(env *kit.Env) *Pane {
-	p := &Pane{env: env, ctl: newControls()}
+	p := &Pane{env: env, ctl: newControls(), originX: OriginX, originY: OriginY}
 	p.initControls(false)
 	return p
 }
@@ -224,6 +227,8 @@ func (p *Pane) replot() tea.Cmd {
 // Update implements kit.Pane.
 func (p *Pane) Update(msg tea.Msg) tea.Cmd {
 	switch m := msg.(type) {
+	case kit.TabChangedMsg:
+		return p.setVisible(m.Tab == kit.TabPlot)
 	case kit.DoneMsg:
 		if r, ok := m.Msg.(*result); ok && m.Tag == "plot" {
 			if r.err != nil {
@@ -292,10 +297,6 @@ func (p *Pane) onKey(k tea.KeyPressMsg) tea.Cmd {
 		if p.ctl.step(1) {
 			return p.debounced(changeDelay)
 		}
-	case "tab":
-		p.ctl.field(1)
-	case "shift+tab":
-		p.ctl.field(-1)
 	case "enter", "space":
 		return p.open()
 	case "r":
@@ -318,8 +319,8 @@ func (p *Pane) open() tea.Cmd {
 	if len(opts) == 0 {
 		return nil
 	}
-	x := OriginX + padX + p.ctl.spanStart(key)
-	y := OriginY + 1
+	x := p.originX + padX + p.ctl.spanStart(key)
+	y := p.originY + 1
 	d := NewDropdown(p.env.Look, p.ctl.labels()[key], opts, p.ctl.value(key), x, y,
 		func(v string) tea.Msg { return pickedMsg{p, key, v} })
 	return kit.Send(kit.OpenDialogMsg{Dialog: d})
@@ -342,18 +343,30 @@ func (p *Pane) setVisible(v bool) tea.Cmd {
 	return p.replot()
 }
 
-// Focus implements kit.Focusable. Until the root tells panes which tab is
-// shown, focus stands for it: the tab's body gets focus when it is shown.
+// CycleFocus implements kit.InnerFocus: Tab and Shift+Tab step through the
+// settings fields and stay in the pane (Python's PlotControls).
+func (p *Pane) CycleFocus(d int) bool {
+	p.ctl.field(d)
+	return true
+}
+
+// Place implements kit.Placed: where the root draws the pane, for placing
+// the drop-down under its field.
+func (p *Pane) Place(x, y int) { p.originX, p.originY = x, y }
+
+// Focus implements kit.Focusable. The pane has focus only while its tab
+// shows (visibility itself follows kit.TabChangedMsg).
 func (p *Pane) Focus() tea.Cmd {
 	p.focused = true
+	if p.visible {
+		return nil
+	}
 	return p.setVisible(true)
 }
 
-// Blur implements kit.Focusable.
-func (p *Pane) Blur() {
-	p.focused = false
-	p.setVisible(false)
-}
+// Blur implements kit.Focusable: the tab may still show (focus on the
+// filter), so the pane stays visible.
+func (p *Pane) Blur() { p.focused = false }
 
 // Keys implements kit.Pane.
 func (p *Pane) Keys() []kit.KeyHint {

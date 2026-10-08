@@ -94,6 +94,9 @@ type State struct {
 
 	// DetailOpen is whether the details pane shows (the root sets it).
 	DetailOpen bool
+
+	// Tab is the tab shown (the root sets it): TabChangedMsg.
+	Tab Tab
 }
 
 // Sample is the Sample for stats and plots under the current setting.
@@ -237,3 +240,40 @@ type FormatSetMsg struct {
 
 // ColumnsPickedMsg: the column picker's result, the columns to show.
 type ColumnsPickedMsg struct{ Visible []string }
+
+// Panel is one bordered panel of a tab body that has several (Paneled).
+type Panel struct {
+	X, Y, W, H int // the border box, relative to the body's top left corner
+	// Title goes in the top border; the first panel's is the tab strip.
+	Title styled.Text
+	// Focused panels have the accent border while the pane has focus.
+	Focused bool
+	// Content is the inside: lines of W-4 cells (border and one cell of
+	// padding on each side), H-2 of them or fewer.
+	Content string
+}
+
+// Paneled is a tab body drawn as several bordered panels, as Python pqx's
+// Schema (the table, the column's description below it), Stats (the
+// profile beside the column list) and Metadata (the file beside its row
+// groups). The root draws the borders; mouse messages reach the pane with
+// coordinates relative to the body's top left corner.
+type Paneled interface {
+	Pane
+	Panels(w, h int) []Panel
+}
+
+// InnerFocus is a pane that takes Tab and Shift+Tab itself before the root
+// moves focus on (Metadata's panels, Plot's fields). CycleFocus moves d
+// steps (1 for Tab, -1 for Shift+Tab) and reports false, moving nothing,
+// when the root should move focus instead.
+type InnerFocus interface {
+	CycleFocus(d int) bool
+}
+
+// Placed panes are told where on the screen they are drawn (the top left
+// corner of their area), before each View; a pane that positions a dialog
+// (the Plot drop-down) needs it.
+type Placed interface {
+	Place(x, y int)
+}

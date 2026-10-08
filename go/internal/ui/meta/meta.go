@@ -17,7 +17,6 @@ import (
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/fmtx"
 	"github.com/mjuric/pqx/go/internal/styled"
-	"github.com/mjuric/pqx/go/internal/ui/app"
 	"github.com/mjuric/pqx/go/internal/ui/footer"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
@@ -61,8 +60,8 @@ type batchMsg struct {
 }
 
 var (
-	_ app.Paneled    = (*Pane)(nil)
-	_ app.InnerFocus = (*Pane)(nil)
+	_ kit.Paneled    = (*Pane)(nil)
+	_ kit.InnerFocus = (*Pane)(nil)
 	_ kit.Focusable  = (*Pane)(nil)
 )
 
@@ -90,7 +89,7 @@ func (p *Pane) Focus() tea.Cmd { p.focused = true; return nil }
 // Blur implements kit.Focusable.
 func (p *Pane) Blur() { p.focused = false }
 
-// CycleFocus implements app.InnerFocus: Tab goes from the file to the row
+// CycleFocus implements kit.InnerFocus: Tab goes from the file to the row
 // groups, then on to the filter (and comes back to the file); Shift+Tab the
 // other way.
 func (p *Pane) CycleFocus(d int) bool {
@@ -425,9 +424,9 @@ func (p *Pane) status() styled.Text {
 // View implements kit.Pane; the root draws Panels instead.
 func (p *Pane) View(w, h int) string { return p.Panels(w+4, h+2)[0].Content }
 
-// Panels implements app.Paneled: the file on the left, the row groups on
+// Panels implements kit.Paneled: the file on the left, the row groups on
 // the right, one column apart (Python's #meta-file and #meta-rg-panel).
-func (p *Pane) Panels(w, h int) []app.Panel {
+func (p *Pane) Panels(w, h int) []kit.Panel {
 	p.w, p.h = w, h
 	look := p.env.Look
 	lw := p.leftW()
@@ -456,7 +455,7 @@ func (p *Pane) Panels(w, h int) []app.Panel {
 	if p.read {
 		nrg = len(p.rgs)
 	}
-	return []app.Panel{
+	return []kit.Panel{
 		{X: 0, Y: 0, W: lw, H: h, Focused: p.inner == 0, Content: strings.Join(left, "\n")},
 		{X: lw + 1, Y: 0, W: rw, H: h, Focused: p.inner == 1,
 			Title:   styled.New("row groups  "+footer.Commas(int64(nrg)), p.dim()),

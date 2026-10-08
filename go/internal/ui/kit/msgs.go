@@ -52,7 +52,9 @@ const (
 )
 
 // NotifyMsg asks for a toast (Python's notify). Title and Text are shown as
-// given: sanitize anything from the file first (fmtx.Sanitize).
+// given: sanitize anything from the file first (fmtx.Sanitize). A task may
+// also return a NotifyMsg as its result; the chrome shows it from the
+// DoneMsg.
 type NotifyMsg struct {
 	Severity Severity
 	Title    string
@@ -66,7 +68,9 @@ func Notify(sev Severity, text string) tea.Cmd {
 }
 
 // StatusMsg sets the status line's message (the part after the row
-// counts), replacing the previous one; an empty Text clears it.
+// counts), replacing the previous one; an empty Text clears it. An Error
+// StatusMsg's Text is the reason, then optionally "\n" and a hint
+// (`did you mean "mag"?`); chrome.QueryError builds one.
 type StatusMsg struct {
 	Severity Severity
 	Text     string
@@ -75,6 +79,10 @@ type StatusMsg struct {
 // OpenDialogMsg pushes a dialog; CloseDialogMsg pops the top one.
 type OpenDialogMsg struct{ Dialog Dialog }
 type CloseDialogMsg struct{}
+
+// TabChangedMsg: the root shows Tab (State.Tab); panes that compute only
+// while visible start or stop.
+type TabChangedMsg struct{ Tab Tab }
 
 // SwitchTabMsg shows a tab.
 type SwitchTabMsg struct{ Tab Tab }

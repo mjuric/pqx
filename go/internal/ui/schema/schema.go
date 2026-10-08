@@ -16,7 +16,6 @@ import (
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/fmtx"
 	"github.com/mjuric/pqx/go/internal/styled"
-	"github.com/mjuric/pqx/go/internal/ui/app"
 	"github.com/mjuric/pqx/go/internal/ui/footer"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
@@ -47,7 +46,7 @@ type Pane struct {
 }
 
 var (
-	_ app.Paneled   = (*Pane)(nil)
+	_ kit.Paneled   = (*Pane)(nil)
 	_ kit.Focusable = (*Pane)(nil)
 )
 
@@ -370,8 +369,8 @@ func (p *Pane) View(w, h int) string {
 	return ps[0].Content
 }
 
-// Panels implements app.Paneled.
-func (p *Pane) Panels(w, h int) []app.Panel {
+// Panels implements kit.Paneled.
+func (p *Pane) Panels(w, h int) []kit.Panel {
 	p.w, p.h = w, h
 	look := p.env.Look
 	tableH, descH := p.split()
@@ -385,7 +384,7 @@ func (p *Pane) Panels(w, h int) []app.Panel {
 		dl = append(dl, look.Render(l))
 	}
 	_, title := p.desc()
-	return []app.Panel{
+	return []kit.Panel{
 		{X: 0, Y: 0, W: w, H: tableH, Focused: true, Content: strings.Join(lines, "\n")},
 		{X: 0, Y: h - descH, W: w, H: descH, Title: title, Content: strings.Join(dl, "\n")},
 	}

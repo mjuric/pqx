@@ -221,6 +221,13 @@ func TestDialogOverlayKeepsScreen(t *testing.T) {
 	x, y := a.dialogPos(d)
 	changed := 0
 	for i := range before {
+		if i == len(before)-1 {
+			// the key bar shows the dialog's keys
+			if !strings.Contains(after[i], "Zdialog keys") {
+				t.Fatalf("key bar %q", after[i])
+			}
+			continue
+		}
 		if before[i] != after[i] {
 			changed++
 			if i < y || i >= y+3 {
@@ -319,5 +326,84 @@ func TestHelpAndExportKeys(t *testing.T) {
 	run(a, key("e"))
 	if len(a.dialogs) != 0 || strings.Join(ps["filter"].keys, "") != "?e" {
 		t.Fatalf("dialogs %v filter keys %v", a.dialogs, ps["filter"].keys)
+	}
+}
+
+// chrome records what it gets (for the spinner, it must see keys).
+type recChrome struct {
+	basicChrome
+	keys int
+}
+
+func (c *recChrome) Update(msg tea.Msg) tea.Cmd {
+	if _, ok := msg.(tea.KeyPressMsg); ok {
+		c.keys++
+	}
+	return c.basicChrome.Update(msg)
+}
+
+type placedPane struct {
+	pane
+	x, y int
+}
+
+func (p *placedPane) Place(x, y int) { p.x, p.y = x, y }
+
+func TestRootV2(t *testing.T) {
+	a, ps := setup(t)
+	ch := &recChrome{basicChrome: basicChrome{env: a.env}}
+	a.p.Chrome = ch
+	run(a, key("s"))
+	if ch.keys != 1 {
+		t.Fatalf("chrome saw %d keys", ch.keys)
+	}
+	// m toggles sampling from any tab, and announces it
+	run(a, key("3"))
+	run(a, key("m"))
+	if !a.env.State.Sampling {
+		t.Fatal("m didn't toggle sampling")
+	}
+	got := false
+	for _, m := range ps["plot"].msgs {
+		if _, ok := m.(kit.SamplingChangedMsg); ok {
+			got = true
+		}
+	}
+	if !got {
+		t.Fatal("no SamplingChangedMsg")
+	}
+	// the tab shown is announced
+	var tabs []kit.Tab
+	for _, m := range ps["grid"].msgs {
+		if tc, ok := m.(kit.TabChangedMsg); ok {
+			tabs = append(tabs, tc.Tab)
+		}
+	}
+	if len(tabs) != 1 || tabs[0] != kit.TabStats || a.env.State.Tab != kit.TabStats {
+		t.Fatalf("tabs %v state %d", tabs, a.env.State.Tab)
+	}
+	// background work survives Esc and isn't busy; quit stops it
+	a.env.Tasks.RunBackground("footer", func(ctx context.Context) tea.Msg { <-ctx.Done(); return nil })
+	if a.env.Tasks.Busy() {
+		t.Fatal("background work counts as busy")
+	}
+	run(a, key("esc"))
+	if !a.env.Tasks.Running("footer") {
+		t.Fatal("esc cancelled background work")
+	}
+	a.quit()
+	if a.env.Tasks.Running("footer") {
+		t.Fatal("quit left background work running")
+	}
+}
+
+func TestPlacedAndInnerFocus(t *testing.T) {
+	a, _ := setup(t)
+	pp := &placedPane{pane: pane{name: "plot"}}
+	a.p.Plot = pp
+	run(a, key("4"))
+	screen(a)
+	if pp.x != 2 || pp.y != titleRows+filterRows+1 {
+		t.Fatalf("placed at %d,%d", pp.x, pp.y)
 	}
 }
