@@ -86,7 +86,7 @@ lines of tests (265 tests, about 6 minutes). Dependencies: `textual>=8.2,<9`,
 | `pqx/config.py` | 132 | `~/.config/pqx/formats.yaml` (remembered column formats; honours `XDG_CONFIG_HOME`) | Keep the file format compatible |
 | `pqx/cli.py` | 115 | GNU-style `--help`/`--version`, options (`-w`, `--format`, `--theme`, `--accent`, `--dim`, `--border`) | Keep the option names; `--version` output is plain ASCII and credits "Mario Juric" |
 | `pqx/_terminal.py` | 122 | Mouse workarounds: X10/urxvt mouse from GNU screen, lenient input decoding, pixel-mouse mode (1016) kept off for iTerm2 over ssh. Clears the alternate screen before leaving it (intended) | Check what the Go terminal stack does here |
-| `pqx/demo.py` | 108 | `python -m pqx.demo` writes a synthetic LSST-like file | Could stay a Python script for generating test data |
+| `pqx/demo.py` | 114 | `python -m pqx.demo` writes a synthetic LSST-like file | Could stay a Python script for generating test data |
 
 ### How the data layer is fast (keep these designs)
 
