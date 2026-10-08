@@ -179,7 +179,7 @@ func (d *dataset) readRows(ctx context.Context, rows []int64, fields []int) (map
 	contiguous := rows[len(rows)-1]-rows[0]+1 == int64(len(rows))
 	noDuck := d.bindErr != nil || d.direct == nil
 	bad := d.fb.anyBad(rgs)
-	cheap := contiguous || d.directCheaper(rows, fields)
+	cheap := !forceDuck && (contiguous || d.directCheaper(rows, fields))
 	var direct, duck []int
 	for _, j := range fields {
 		switch {
@@ -254,6 +254,9 @@ func (d *dataset) readRows(ctx context.Context, rows []int64, fields []int) (map
 	}
 	return vals, failed, nil
 }
+
+// forceDuck, set by tests, has DuckDB read every column it can.
+var forceDuck bool
 
 // rowGroupsOf is the row groups holding rows (sorted).
 func (d *dataset) rowGroupsOf(rows []int64) []int {

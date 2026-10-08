@@ -22,7 +22,7 @@ const (
 
 // hostile strings, as in pqx's tests: escape sequences, C1, bidi, zero-width, newlines
 var hostile = []string{
-	"\x1b]0;pwned\x07", "a\u009bb\x7f\x00", "abc‮dcba", "x​y", "tab\tnew\nline", "plain", "é ✓ 漢字",
+	"\x1b]0;pwned\x07", "a\u009bb\x7f\x00", "abc\u202edcba", "x\u200by", "tab\tnew\nline", "plain", "é ✓ 漢字",
 }
 
 var fixEpoch = time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)

@@ -386,11 +386,3 @@ func duckType(t arrow.DataType) string {
 	}
 	return strings.ToUpper(Sanitize(t.String()))
 }
-
-// duckTypeOf is DuckDB's type of column name ("" if DuckDB didn't bind the file).
-func (d *dataset) duckTypeOf(name string) string {
-	if j, ok := d.byName[name]; ok && j < len(d.duckTypes) {
-		return d.duckTypes[j]
-	}
-	return ""
-}
