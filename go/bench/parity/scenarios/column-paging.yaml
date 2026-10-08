@@ -1,0 +1,16 @@
+description: |
+  A 60-column file: ‹ › markers beside the header and the "‹ N · columns a–b of M · K ›"
+  readout as the cursor moves right, End and Home.
+covers:
+  - "help: Home / End | first / last column. ‹ › beside the header mean more columns that way"
+  - "README Big files: Wide is fine. columns load as they come into view."
+fixture: wide
+steps:
+  - keys: right right right right right right right right right right right right right right right right
+  - check: scrolled
+  - keys: end
+  - check: end
+  - keys: left left left
+  - check: back
+  - keys: home
+  - check: home

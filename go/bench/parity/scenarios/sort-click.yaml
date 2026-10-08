@@ -1,0 +1,11 @@
+description: |
+  Clicking a header sorts by that column, as `s` does.
+covers:
+  - "README All keys: clicking a header does the same"
+fixture: demo
+sizes: [[120, 40]]
+steps:
+  - keys: "click:38,8"
+  - check: click-1
+  - keys: "click:38,8"
+  - check: click-2

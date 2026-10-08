@@ -1,0 +1,13 @@
+description: |
+  A whole query over the table t (GROUP BY) shown as a table.
+covers:
+  - "README Filter: or a whole query over the table t"
+  - "README tour: pqx trips.parquet -w \"select vendor, count(*) from t group by 1\""
+fixture: demo
+steps:
+  - keys: /
+  - text: "select band, count(*) as n, avg(mag) as mean_mag from t group by 1 order by 1"
+  - keys: enter
+  - check: result
+  - keys: down down
+  - check: moved

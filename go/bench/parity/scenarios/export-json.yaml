@@ -1,0 +1,19 @@
+description: |
+  `e` to newline-delimited JSON, chosen by the file's extension, of a SQL query's result.
+covers:
+  - "README Export: to Parquet, CSV or JSON"
+  - "help: **e** | export the current view (filter + sort) to Parquet / CSV / JSON"
+fixture: demo
+steps:
+  - keys: /
+  - text: "select band, count(*) as n from t group by 1 order by 1"
+  - keys: enter
+  - keys: e
+    wait: "Export current view"
+  - check: dialog
+  - keys: ctrl+u
+  - text: "bands.json"
+  - keys: enter
+    toast: "Wrote"
+    check: done
+  - file: "{out}/bands.json"

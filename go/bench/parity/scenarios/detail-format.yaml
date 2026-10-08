@@ -1,0 +1,25 @@
+description: |
+  `<`, `>` and `F` in the detail panel change the selected field's column format in the
+  grid (the panel itself keeps full precision).
+covers:
+  - "README Keys: d · Esc | row detail panel (= y i F < > work there too, on the selected field)"
+fixture: demo
+steps:
+  - keys: d
+    wait: "file row"
+  - keys: tab down down
+  - keys: "<"
+    toast: "✓ ra:"
+  - keys: "<"
+    toast: "✓ ra:"
+    check: fewer
+  - keys: ">"
+    toast: "✓ ra:"
+    check: more
+  - keys: F
+    wait: "Format of[\\s\\S]*enter apply"
+  - check: dialog
+  - text: ".1f"
+  - keys: enter
+    toast: "✓ ra:"
+    check: set

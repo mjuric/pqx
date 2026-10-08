@@ -1,0 +1,14 @@
+description: |
+  Plot tab: a sky map of RA/Dec found automatically; r rotates the centre between RA 0°
+  and 180°.
+covers:
+  - "README Astronomy: Sky maps. Mollweide maps of any lon/lat pair, with RA/Dec found automatically"
+  - "README All keys: r | Plot: rotate the sky-map centre between RA 0° and 180°"
+fixture: demo
+threads: 1
+quiet: 1.0
+steps:
+  - keys: "4"
+  - check: sky
+  - keys: r
+  - check: rotated

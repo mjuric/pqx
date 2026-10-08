@@ -1,0 +1,15 @@
+description: |
+  `=` on a cell narrows the filter to that value, and the cursor stays on the same
+  record; `=` on a second column narrows further.
+covers:
+  - "README Filter: Press = on any cell to keep only rows with that value."
+  - "help: **=** | narrow the filter to rows equal to the cursor cell; the cursor stays on the same record"
+fixture: demo
+steps:
+  - keys: down down down down down right right right right right right right
+  - check: on-band
+  - keys: "="
+  - check: band-filter
+  - keys: left left left left left left
+  - keys: "="
+  - check: second

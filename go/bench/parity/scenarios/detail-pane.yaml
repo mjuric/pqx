@@ -1,0 +1,17 @@
+description: |
+  `d` opens the row detail panel (full precision, sexagesimal, MJD as UTC, AB mag);
+  moving in the grid updates it; Esc closes it.
+covers:
+  - "README Browse: Press d to see the current row as a list, every column at full precision."
+  - "README Keys: d · Esc | row detail panel · close it"
+fixture: demo
+steps:
+  - keys: d
+    wait: "file row"
+  - check: open
+  - keys: down down
+  - check: row-2
+  - keys: esc
+  - check: closed
+  - keys: enter
+  - check: enter-opens

@@ -1,0 +1,19 @@
+description: |
+  `e` with the default format (Parquet) after hiding a column: the export has the
+  visible columns and the filtered rows.
+covers:
+  - "README Export: write the current view (filter, sort and visible columns) to Parquet"
+fixture: demo
+steps:
+  - keys: "-"
+  - keys: /
+  - text: "mag < 18"
+  - keys: enter
+  - keys: e
+    wait: "Export current view"
+  - keys: ctrl+u
+  - text: "view.parquet"
+  - keys: enter
+    toast: "Wrote"
+    check: done
+  - file: "{out}/view.parquet"

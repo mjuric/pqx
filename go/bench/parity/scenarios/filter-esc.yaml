@@ -1,0 +1,20 @@
+description: |
+  Esc leaves the filter box without applying what was typed; Ctrl+X clears the box,
+  even while typing.
+covers:
+  - "help: **Esc** returns to the grid"
+  - "README All keys: x / Ctrl+X | clear filter (Ctrl+X also works while typing in the filter box)"
+fixture: demo
+steps:
+  - keys: /
+  - text: "band = 'u'"
+  - keys: esc
+    wait: "/ filter"
+  - check: left-box
+  - keys: /
+  - check: back-in-box
+  - keys: enter
+  - check: applied
+  - keys: /
+  - keys: ctrl+x
+  - check: ctrl-x

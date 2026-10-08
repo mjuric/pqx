@@ -1,0 +1,16 @@
+description: |
+  `=` in the detail panel acts on the selected field; the panel keeps focus on the same
+  field and record, so `=` on a second field narrows again.
+covers:
+  - "README All keys: = y i F < > | detail panel: ... after = the panel keeps focus on the same field and record"
+fixture: demo
+steps:
+  - keys: down down down
+  - keys: d
+    wait: "file row"
+  - keys: tab down down down down down down down down down
+  - keys: "="
+  - check: first-equals
+  - keys: up up up up up up up up
+  - keys: "="
+  - check: second-equals

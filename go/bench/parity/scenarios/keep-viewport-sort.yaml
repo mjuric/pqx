@@ -1,0 +1,18 @@
+description: |
+  Sorting keeps the leftmost column; a filter keeps the record when it is still in the
+  view.
+covers:
+  - "native-port.md: Keep the viewport (filtering, sorting or changing columns keeps the leftmost column)"
+fixture: wide
+steps:
+  - keys: pgdn down down down
+  - keys: right right right right right right right right right right right right right right
+  - check: before
+  - keys: s
+  - check: sorted
+  - keys: s s
+  - check: sort-off
+  - keys: /
+  - text: "id >= 0"
+  - keys: enter
+  - check: filtered

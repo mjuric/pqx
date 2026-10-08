@@ -1,0 +1,21 @@
+description: |
+  `c` opens the column picker; Tab into the list, space toggles,
+  Apply applies; typing narrows the list; Esc cancels.
+covers:
+  - "README Keys: c · - · p | choose columns · hide this column · pin columns"
+  - "help: **c** | choose visible columns"
+fixture: demo
+steps:
+  - keys: c
+    wait: "Visible columns"
+  - check: dialog
+  - keys: tab space down space
+  - check: toggled
+  - keys: tab enter
+  - check: applied
+  - keys: c
+    wait: "Visible columns"
+  - text: "err"
+  - check: narrowed
+  - keys: esc
+  - check: cancelled

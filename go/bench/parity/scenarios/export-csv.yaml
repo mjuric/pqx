@@ -1,0 +1,23 @@
+description: |
+  `e` exports the current view (filter, sort, visible columns) to CSV, a path
+  relative to the working directory.
+covers:
+  - "README Export: Press e to write the current view (filter, sort and visible columns) to Parquet, CSV or JSON."
+fixture: demo
+steps:
+  - keys: /
+  - text: "detector = 7 and band = 'r'"
+  - keys: enter
+  - keys: right right right right right right right right right right
+  - keys: s
+  - keys: e
+    wait: "Export current view"
+  - check: dialog
+  - keys: ctrl+u
+  - text: "view.csv"
+  - keys: tab down space
+  - check: csv-chosen
+  - keys: shift+tab enter
+    toast: "Wrote"
+    check: done
+  - file: "{out}/view.csv"

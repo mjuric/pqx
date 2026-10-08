@@ -1,0 +1,10 @@
+description: |
+  `--format COL=SPEC` sets a column's format for the session (a spec and a digit count).
+covers:
+  - "README Column formats: --format COL=SPEC sets a format for one session without saving it."
+fixture: demo
+args: ["--format", "ra=.2f", "--format", "mag=3", "--format", "diaSourceId=,d"]
+steps:
+  - check: first
+  - keys: end
+  - check: end

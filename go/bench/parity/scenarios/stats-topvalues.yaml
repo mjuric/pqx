@@ -1,0 +1,12 @@
+description: |
+  Stats on a string column shows the most frequent values instead of a histogram.
+covers:
+  - "README Profile: a histogram (or the most frequent values)"
+fixture: demo
+threads: 1
+quiet: 1.0
+steps:
+  - keys: right right right right right right right
+  - keys: i
+    wait: "Profiled"
+  - check: band

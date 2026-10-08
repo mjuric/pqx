@@ -1,0 +1,22 @@
+description: |
+  Moving the cursor: arrows, PgDn/PgUp, Home/End (first/last column), Ctrl+End/Ctrl+Home
+  (last/first row).
+covers:
+  - "README Keys: arrows, PgUp/PgDn, Home/End | move around; Ctrl+Home/End for first/last row"
+  - "help: Home / End | first / last column"
+fixture: demo
+steps:
+  - keys: down down right right
+  - check: arrows
+  - keys: pgdn
+  - check: pgdn
+  - keys: pgdn pgup
+  - check: pgup
+  - keys: end
+  - check: end
+  - keys: home
+  - check: home
+  - keys: ctrl+end
+  - check: ctrl-end
+  - keys: ctrl+home
+  - check: ctrl-home

@@ -1,0 +1,10 @@
+description: |
+  `f` toggles smart and raw number formatting.
+covers:
+  - "help: **f** | toggle smart / raw number formatting"
+fixture: demo
+steps:
+  - keys: f
+  - check: raw
+  - keys: f
+  - check: smart

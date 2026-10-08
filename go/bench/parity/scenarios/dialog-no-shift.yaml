@@ -1,0 +1,18 @@
+description: |
+  A dialog over the grid doesn't shift the screen behind it: the rows and columns
+  around the dialog stay where they were.
+covers:
+  - "native-port.md: Dialogs don't shift the screen behind them (PR #25)."
+fixture: demo
+steps:
+  - keys: pgdn down down right right right
+  - check: before
+  - keys: g
+    wait: "(?i)go to row"
+  - check: goto
+  - keys: esc
+  - keys: F
+    wait: "(?i)format"
+  - check: format
+  - keys: esc
+  - check: after

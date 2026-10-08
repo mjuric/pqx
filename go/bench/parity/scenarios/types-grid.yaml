@@ -1,0 +1,16 @@
+description: |
+  The grid on a file with one column per type: integers, floats, bools, strings with
+  wide characters, binary, dates, timestamps (UTC), durations, decimals (also wider
+  than 38 digits), lists, structs, maps, nulls (∅).
+covers:
+  - "native-port.md: UTC; wide decimals; emoji and CJK widths"
+fixture: types
+steps:
+  - check: first
+  - keys: right right right right right right right right right right right
+  - check: middle
+  - keys: end
+  - check: end
+  - keys: down down down d
+    wait: "file row"
+  - check: detail-null-row

@@ -1,0 +1,16 @@
+description: |
+  After `=` on the band column, the record keeps its screen row and the leftmost column stays (viewport
+  kept); after clearing with x, the same record is still under the cursor at the same
+  screen row.
+covers:
+  - "native-port.md: Keep the viewport. Filtering, sorting or changing columns keeps the leftmost column, and a record still in the view keeps its screen row."
+  - "help: the cursor stays on the same record"
+fixture: demo
+steps:
+  - keys: pgdn pgdn down down down down down down down
+  - keys: right right right right right right right
+  - check: before
+  - keys: "="
+  - check: after-equals
+  - keys: x
+  - check: after-clear

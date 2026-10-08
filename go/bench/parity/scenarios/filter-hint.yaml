@@ -1,0 +1,10 @@
+description: |
+  The filter box hint is built from the file's own columns (here a file with nested
+  types, NaN/inf and a quoted column name).
+covers:
+  - "native-port.md: Filter hint is built from the file's own columns."
+fixture: odd
+steps:
+  - check: first
+  - keys: end
+  - check: end

@@ -1,0 +1,16 @@
+description: |
+  `m` toggles sampling for stats and plots.
+covers:
+  - "README All keys: m | toggle sampling for stats and plots"
+fixture: demo
+threads: 1
+quiet: 1.0
+steps:
+  - keys: "3"
+    wait: "Profiled"
+  - keys: m
+    toast: "Sampling on"
+    check: sampling-on
+  - keys: m
+    toast: "Sampling off"
+    check: sampling-off

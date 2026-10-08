@@ -1,0 +1,17 @@
+description: |
+  `i` opens statistics for the cursor column: counts, nulls, distinct values,
+  quantiles and a histogram.
+covers:
+  - "README Keys: y · i · e | stats for this column"
+  - "README Profile: Stats gives counts, nulls, distinct values, quantiles and a histogram"
+fixture: demo
+threads: 1
+quiet: 1.0
+steps:
+  - keys: right right right right right right right right right right right
+  - keys: i
+    wait: "Profiled"
+  # Python pqx sometimes draws the first histogram at a stale width (seen at 120x40);
+  # toggling log counts twice redraws it at the panel's width
+  - keys: l l
+  - check: stats-snr

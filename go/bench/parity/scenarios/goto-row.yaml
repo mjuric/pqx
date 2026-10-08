@@ -1,0 +1,26 @@
+description: |
+  `g` opens the go-to-row dialog (it shows the row count); 1234, 50% and -1 jump there.
+covers:
+  - "README Keys: g | go to a row: 1234, 1.5M, 50%, -1"
+  - "help: **g** | go to row — 1234, 1.5M, 50%, -1"
+fixture: demo
+steps:
+  - keys: g
+    wait: "(?i)go to row"
+  - check: dialog
+  - text: "1234"
+  - keys: enter
+    wait: "1,?234 "
+  - check: row-1234
+  - keys: g
+    wait: "(?i)go to row"
+  - text: "50%"
+  - keys: enter
+    wait: "10,?000 "
+  - check: half
+  - keys: g
+    wait: "(?i)go to row"
+  - text: "-1"
+  - keys: enter
+    wait: "19,?999 "
+  - check: last

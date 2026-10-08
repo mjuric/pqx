@@ -1,0 +1,20 @@
+description: |
+  ↑/↓ in the filter box browse earlier filters.
+covers:
+  - "help: **↑/↓** browse history"
+fixture: demo
+steps:
+  - keys: /
+  - text: "band = 'g'"
+  - keys: enter
+  - keys: /
+  - text: " and mag < 20"
+  - keys: enter
+  - check: second
+  - keys: / ctrl+x
+  - keys: up
+  - check: up-1
+  - keys: up
+  - check: up-2
+  - keys: down
+  - check: down-1

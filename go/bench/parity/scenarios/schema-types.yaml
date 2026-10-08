@@ -1,0 +1,8 @@
+description: |
+  Schema tab on a file with one column per type (nested, decimal, temporal, binary).
+covers:
+  - "README Schema: Every column with its type"
+fixture: types
+steps:
+  - keys: "2"
+  - check: schema

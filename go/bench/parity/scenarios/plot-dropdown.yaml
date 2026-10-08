@@ -1,0 +1,22 @@
+description: |
+  Plot settings: tab moves between fields, ← → step a field, Enter opens a drop-down
+  that narrows as you type.
+covers:
+  - "README All keys: click · enter | Plot: open a settings field's drop-down (type to narrow the column list)"
+  - "README All keys: tab · ← → | Plot: move between settings fields · step the field's value"
+fixture: demo
+threads: 1
+quiet: 1.0
+steps:
+  - keys: "4"
+  - keys: right
+  - check: stepped-mode
+  - keys: tab
+  - keys: enter
+    wait: "type to filter"
+  - check: dropdown
+  - text: "mag"
+  - check: narrowed
+  - keys: enter
+    wait: "Binned mag"
+  - check: chosen

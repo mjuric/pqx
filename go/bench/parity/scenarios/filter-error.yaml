@@ -1,0 +1,16 @@
+description: |
+  A filter naming a column that doesn't exist shows its error inline and keeps the
+  current view and place.
+covers:
+  - "README Filter: errors show inline without losing your place"
+fixture: demo
+steps:
+  - keys: pgdn down down
+  - keys: /
+  - text: "nosuchcolumn > 3"
+  - keys: enter
+    toast: "Query failed"
+    toast_gone: false  # (it stays 8 s; the status line says the same)
+    check: error
+  - keys: esc
+  - check: back-in-grid

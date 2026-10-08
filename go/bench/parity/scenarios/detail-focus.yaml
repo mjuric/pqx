@@ -1,0 +1,20 @@
+description: |
+  Tab goes into the detail panel; ↑/↓ pick a field and the grid follows on the same
+  row; Enter returns to the grid on that column; Esc from inside closes the panel.
+covers:
+  - "README All keys: tab / click | into the open detail panel"
+  - "README All keys: ↑ ↓ · enter tab · esc | detail panel: pick a column (the grid follows on the same row) · back to the grid on that column · the same, closing the panel"
+fixture: demo
+steps:
+  - keys: d
+    wait: "file row"
+  - keys: tab
+  - check: focused
+  - keys: down down down down down down down
+  - check: field-8
+  - keys: enter
+  - check: back-to-grid
+  - keys: tab
+  - keys: down
+  - keys: esc
+  - check: esc-closes

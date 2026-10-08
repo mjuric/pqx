@@ -1,0 +1,14 @@
+description: |
+  `s` sorts by the cursor column: ascending, descending, then off (header arrow,
+  status line).
+covers:
+  - "README All keys: s | sort by the cursor column (asc → desc → off)"
+fixture: demo
+steps:
+  - keys: right right right
+  - keys: s
+  - check: asc
+  - keys: s
+  - check: desc
+  - keys: s
+  - check: off

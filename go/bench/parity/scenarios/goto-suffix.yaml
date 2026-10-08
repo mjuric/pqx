@@ -1,0 +1,16 @@
+description: |
+  `g` with a suffixed count (1.5M) on a 2,000,000-row file, then Ctrl+Home back.
+covers:
+  - "README Keys: g | go to a row: 1234, 1.5M, 50%, -1"
+  - "README Big files: Jumps anywhere."
+fixture: slow
+sizes: [[120, 40]]
+steps:
+  - keys: g
+    wait: "(?i)go to row"
+  - text: "1.5M"
+  - keys: enter
+    wait: "1,?500,?000 "
+  - check: row-1.5M
+  - keys: ctrl+home
+  - check: first

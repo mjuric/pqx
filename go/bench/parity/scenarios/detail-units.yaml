@@ -1,0 +1,13 @@
+description: |
+  Derived readings in the detail panel: RA in hours, Dec and other longitudes in
+  degrees (VizieR names RAJ2000/DEJ2000 recognised), MJD as UTC, errors in mas, flux as AB mag.
+covers:
+  - "README Astronomy: in the detail panel MJD → UTC, RA/Dec → sexagesimal, errors in mas and flux → AB mag"
+  - "native-port.md: Longitudes are shown in degrees and RA in hours. VizieR names (RAJ2000) are recognised."
+fixture: units
+steps:
+  - keys: d
+    wait: "file row"
+  - check: open
+  - keys: down
+  - check: row-1

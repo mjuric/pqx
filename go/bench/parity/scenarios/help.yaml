@@ -1,0 +1,13 @@
+description: |
+  `?` opens the help; it scrolls; Esc closes it.
+covers:
+  - "README Keys: Press ? in pqx for the full list."
+fixture: demo
+steps:
+  - keys: "?"
+    wait: "Parquet explorer"
+  - check: help
+  - keys: pgdn
+  - check: help-pgdn
+  - keys: esc
+  - check: closed

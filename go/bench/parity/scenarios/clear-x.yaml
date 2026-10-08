@@ -1,0 +1,12 @@
+description: |
+  `x` clears the filter from the grid.
+covers:
+  - "README Keys: / · x | filter · clear filter"
+fixture: demo
+steps:
+  - keys: /
+  - text: "detector < 10"
+  - keys: enter
+  - check: filtered
+  - keys: x
+  - check: cleared

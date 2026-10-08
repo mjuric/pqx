@@ -1,0 +1,9 @@
+description: |
+  The first screen: title bar, filter box with its hint, tab strip, grid headers with
+  type and unit, the status line once the count is in, and the key bar.
+covers:
+  - "README Browse: Headers show each column's type and unit."
+  - "native-port.md: Filter hint is built from the file's own columns."
+fixture: demo
+steps:
+  - check: first
