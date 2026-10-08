@@ -4,8 +4,6 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
-
-	"github.com/mjuric/pqx/go/internal/fmtx"
 )
 
 // MaxCopy is the most bytes of text Copy puts on the clipboard. Terminals
@@ -24,11 +22,12 @@ type Copied struct {
 }
 
 // Copy returns the command that puts text on the system clipboard with OSC
-// 52, after showing its control and invisible characters as visible symbols
-// (fmtx.Sanitize, keeping tab and newline): an ESC pasted into a terminal
-// could end a bracketed paste and run what follows.
-func Copy(text string) (tea.Cmd, Copied) {
-	s := fmtx.Sanitize(text, true)
+// 52, after sanitize has shown its control and invisible characters as
+// visible symbols (the UI passes fmtx.Sanitize keeping tab and newline): an
+// ESC pasted into a terminal could end a bracketed paste and run what
+// follows.
+func Copy(text string, sanitize func(string) string) (tea.Cmd, Copied) {
+	s := sanitize(text)
 	c := Copied{Sanitized: s != text}
 	if len(s) > MaxCopy {
 		n := MaxCopy

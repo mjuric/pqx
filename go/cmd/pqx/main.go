@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"syscall"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -141,7 +142,12 @@ func runApp(m tea.Model, stderr io.Writer) (code int) {
 			code = 1
 		}
 	}()
-	if _, err := tea.NewProgram(m, s.ProgramOptions()...).Run(); err != nil {
+	_, err = s.Run(m)
+	if sig, ok := s.Signal().(syscall.Signal); ok { // SIGTERM, SIGHUP, SIGQUIT
+		s.Close()
+		return 128 + int(sig)
+	}
+	if err != nil {
 		s.Close()
 		if !errors.Is(err, tea.ErrProgramPanic) { // Bubble Tea has printed the panic
 			fmt.Fprintf(stderr, "pqx: %s\n", fmtx.Sanitize(err.Error(), false))

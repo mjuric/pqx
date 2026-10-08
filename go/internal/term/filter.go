@@ -8,8 +8,10 @@ package term
 import (
 	"bytes"
 	"io"
+	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -174,15 +176,11 @@ func parseMouse(s []byte) (n, b, x, y int, partial bool) {
 	if s[1] != '[' {
 		return
 	}
-	if s[2] == 'M' { // X10: three bytes, each the value plus 32
-		for k := 3; k < 6; k++ {
-			if k == len(s) {
-				return 0, 0, 0, 0, true
-			}
-			if s[k] < 32 {
-				return
-			}
+	if s[2] == 'M' { // X10: any three bytes, each the value plus 32
+		if len(s) < 6 {
+			return 0, 0, 0, 0, true
 		}
+		// (xterm sends 0 for a coordinate beyond 223: below 1, dropped)
 		return 6, int(s[3]) - 32, int(s[4]) - 32, int(s[5]) - 32, false
 	}
 	// urxvt: ESC [ b ; x ; y M in decimal, with 32 added to b
@@ -240,35 +238,51 @@ func (t *translator) sgr(b, x, y int) []byte {
 	return append(out, final)
 }
 
-// Filter is an io.Reader for Bubble Tea's input (tea.WithInput) that reads
-// the terminal and passes on its bytes translated as described on
-// translator: X10 and urxvt mouse reports become SGR ones even when a read
-// cuts them in two, and invalid UTF-8 is lenient. A sequence cut off at the
-// end of a read waits for the rest for at most EscTimeout or SeqTimeout.
+// Filter reads the terminal and passes its bytes on, translated as
+// described on translator, through a pipe whose read end (File) is Bubble
+// Tea's input (tea.WithInput): X10 and urxvt mouse reports become SGR ones
+// even when a read cuts them in two, and invalid UTF-8 is lenient. A
+// sequence cut off at the end of a read waits for the rest for at most
+// EscTimeout or SeqTimeout.
 //
-// Bubble Tea can't interrupt a Read on a reader that isn't a file; Close
-// ends it.
+// The pipe makes the input a file Bubble Tea can interrupt (it cancels its
+// reads when it releases the terminal, to suspend or run a program) without
+// losing what the filter has passed on: that stays in the pipe. One
+// goroutine owns the translator.
 type Filter struct {
-	data  chan []byte
-	err   error // the source's error; set before data is closed
-	done  chan struct{}
+	r, w  *os.File              // the pipe
+	data  chan []byte           // reads from the terminal
+	err   atomic.Pointer[error] // the source's error
+	done  chan struct{}         // closed by Close
 	once  sync.Once
 	t     translator
-	out   []byte
 	timer *time.Timer
 }
 
-// NewFilter starts reading src (the terminal, in raw mode) in a goroutine.
-func NewFilter(src io.Reader) *Filter {
-	f := &Filter{
-		data:  make(chan []byte),
-		done:  make(chan struct{}),
-		timer: time.NewTimer(time.Hour),
+// NewFilter starts reading src (the terminal, in raw mode) and translating
+// it into the pipe.
+func NewFilter(src io.Reader) (*Filter, error) {
+	f, err := newFilter()
+	if err != nil {
+		return nil, err
 	}
-	f.timer.Stop()
 	go f.pump(src)
-	return f
+	go f.loop()
+	return f, nil
 }
+
+func newFilter() (*Filter, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	f := &Filter{r: r, w: w, data: make(chan []byte), done: make(chan struct{}), timer: time.NewTimer(time.Hour)}
+	f.timer.Stop()
+	return f, nil
+}
+
+// File is the pipe's read end, for tea.WithInput.
+func (f *Filter) File() *os.File { return f.r }
 
 func (f *Filter) pump(src io.Reader) {
 	buf := make([]byte, 4096)
@@ -282,48 +296,90 @@ func (f *Filter) pump(src io.Reader) {
 			}
 		}
 		if err != nil {
-			f.err = err
+			f.err.Store(&err)
 			close(f.data)
 			return
 		}
 	}
 }
 
-// Read implements io.Reader. It is meant for one reader (Bubble Tea's input
-// loop).
-func (f *Filter) Read(p []byte) (int, error) {
-	for len(f.out) == 0 {
+func (f *Filter) loop() {
+	for {
 		var expired <-chan time.Time
 		if len(f.t.buf) > 0 {
 			expired = f.timer.C
 		}
 		select {
 		case d, ok := <-f.data:
-			if !ok {
-				f.out = f.t.expire()
-				if len(f.out) == 0 {
-					return 0, f.err
-				}
-				break
-			}
-			f.out = f.t.feed(d)
-			if n, wait := f.t.held(); n > 0 {
-				f.timer.Reset(wait)
+			if !f.onData(d, ok) {
+				return
 			}
 		case <-expired:
-			f.out = f.t.expire()
+			if !f.onExpire() {
+				return
+			}
 		case <-f.done:
-			return 0, io.EOF
+			return
 		}
 	}
-	n := copy(p, f.out)
-	f.out = f.out[n:]
-	return n, nil
 }
 
-// Close stops the filter: a Read in progress and later ones return io.EOF.
-// It doesn't close the source.
+// onData handles a read from the terminal (ok false: the terminal is
+// done). It returns false when the loop should end.
+func (f *Filter) onData(d []byte, ok bool) bool {
+	if !ok {
+		f.send(f.t.expire())
+		_ = f.w.Close() // the reader sees EOF
+		return false
+	}
+	f.send(f.t.feed(d))
+	if n, wait := f.t.held(); n > 0 {
+		f.timer.Reset(wait)
+	}
+	return true
+}
+
+// onExpire handles the hold timer. A read that arrived together with the
+// timer goes first: it may hold the rest of the sequence.
+func (f *Filter) onExpire() bool {
+	select {
+	case d, ok := <-f.data:
+		return f.onData(d, ok)
+	default:
+	}
+	f.send(f.t.expire())
+	return true
+}
+
+func (f *Filter) send(p []byte) {
+	if len(p) > 0 {
+		_, _ = f.w.Write(p) // fails only after Close
+	}
+}
+
+// Read reads the translated input (for tests and other readers; Bubble Tea
+// reads File). After the terminal ends it returns the terminal's error.
+func (f *Filter) Read(p []byte) (int, error) {
+	n, err := f.r.Read(p)
+	select {
+	case <-f.done:
+		if err != nil {
+			err = io.EOF
+		}
+	default:
+		if e := f.err.Load(); err == io.EOF && e != nil {
+			err = *e
+		}
+	}
+	return n, err
+}
+
+// Close stops the filter and closes the pipe; it doesn't close the source.
 func (f *Filter) Close() error {
-	f.once.Do(func() { close(f.done) })
+	f.once.Do(func() {
+		close(f.done)
+		_ = f.w.Close()
+		_ = f.r.Close()
+	})
 	return nil
 }

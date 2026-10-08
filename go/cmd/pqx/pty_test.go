@@ -37,6 +37,12 @@ type ptyApp struct {
 // PQX_TEST_MAIN ("1" for pqx, "panic" for panicMain).
 func startPty(t *testing.T, mode string, args ...string) *ptyApp {
 	t.Helper()
+	return startPtyOut(t, mode, nil, args...)
+}
+
+// startPtyOut is startPty with stdout redirected to out (nil: the pty).
+func startPtyOut(t *testing.T, mode string, out *os.File, args ...string) *ptyApp {
+	t.Helper()
 	ptm, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
 	if err != nil {
 		t.Skipf("no pseudo-terminals: %v", err)
@@ -58,6 +64,9 @@ func startPty(t *testing.T, mode string, args ...string) *ptyApp {
 	cmd := exec.Command(os.Args[0], args...)
 	cmd.Env = append(os.Environ(), "PQX_TEST_MAIN="+mode, "TERM=xterm-256color")
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = pts, pts, pts
+	if out != nil {
+		cmd.Stdout = out
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -242,11 +251,171 @@ func TestPtyCrashRestoresTerminal(t *testing.T) {
 	}
 	tail := a.output()[n:]
 	checkCleared(t, tail)
+	a.checkCooked()
 	if !strings.Contains(tail, "test panic") {
 		t.Errorf("the panic isn't reported: %q", tail)
 	}
 	// with the terminal's output processing back on, "\n" arrives as "\r\n"
 	if !strings.Contains(tail, "after\r\nexit\r\n") {
 		t.Errorf("raw mode not restored: %q", tail[max(0, len(tail)-100):])
+	}
+}
+
+// termios is the pty's terminal mode.
+func (a *ptyApp) termios() *unix.Termios {
+	tio, err := unix.IoctlGetTermios(int(a.ptm.Fd()), unix.TCGETS)
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	return tio
+}
+
+// checkCooked checks that the terminal is out of raw mode (line editing and
+// echo on, as a new pty has them).
+func (a *ptyApp) checkCooked() {
+	a.t.Helper()
+	if l := a.termios().Lflag; l&unix.ICANON == 0 || l&unix.ECHO == 0 {
+		a.t.Errorf("terminal left in raw mode: lflag %#x", l)
+	}
+}
+
+func (a *ptyApp) checkRaw() {
+	a.t.Helper()
+	if l := a.termios().Lflag; l&(unix.ICANON|unix.ECHO) != 0 {
+		a.t.Errorf("terminal not in raw mode: lflag %#x", l)
+	}
+}
+
+// state is the process's state letter from /proc (T when stopped).
+func (a *ptyApp) state() string {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", a.cmd.Process.Pid))
+	if err != nil {
+		return "?"
+	}
+	f := strings.Fields(string(b[bytes.LastIndexByte(b, ')')+1:]))
+	return f[0]
+}
+
+func (a *ptyApp) waitState(want string, d time.Duration) bool {
+	end := time.Now().Add(d)
+	for time.Now().Before(end) {
+		if a.state() == want {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
+
+func (a *ptyApp) started() {
+	a.t.Helper()
+	if !a.waitFor("of 100", 20*time.Second) {
+		a.t.Fatalf("no first frame: %q", a.output())
+	}
+	time.Sleep(300 * time.Millisecond)
+	a.checkRaw()
+}
+
+// With stdout redirected pqx draws on the terminal (stderr), as Python pqx
+// does, and writes nothing to the file.
+func TestPtyStdoutRedirected(t *testing.T) {
+	f, err := os.Create(filepath.Join(t.TempDir(), "out.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := startPtyOut(t, "1", f, fixtureFile(t))
+	a.started()
+	a.write("q")
+	if ok, err := a.exited(5 * time.Second); !ok || err != nil {
+		t.Fatalf("q didn't quit: %v %v", ok, err)
+	}
+	if st, _ := f.Stat(); st.Size() != 0 {
+		t.Errorf("%d bytes written to stdout", st.Size())
+	}
+	a.checkCooked()
+}
+
+// SIGTSTP from outside (kill -TSTP, a job-control shell) suspends pqx with
+// the terminal restored, and SIGCONT brings it back as it was; input typed
+// while it was stopped isn't lost.
+func TestPtySuspendAndResume(t *testing.T) {
+	a := startPty(t, "1", fixtureFile(t))
+	a.started()
+	n := len(a.output())
+	if err := a.cmd.Process.Signal(syscall.SIGTSTP); err != nil {
+		t.Fatal(err)
+	}
+	if !a.waitState("T", 5*time.Second) {
+		t.Fatalf("pqx didn't stop: state %s", a.state())
+	}
+	time.Sleep(100 * time.Millisecond)
+	tail := a.output()[n:]
+	checkCleared(t, tail)
+	for _, off := range []string{"\x1b[?1006l", "\x1b[?25h"} {
+		if !strings.Contains(tail, off) {
+			t.Errorf("%q not written on suspend: %q", off, tail)
+		}
+	}
+	a.checkCooked()
+
+	n = len(a.output())
+	if err := a.cmd.Process.Signal(syscall.SIGCONT); err != nil {
+		t.Fatal(err)
+	}
+	if !a.waitFor("of 100", 5*time.Second) {
+		t.Fatalf("no repaint after SIGCONT: %q", a.output()[n:])
+	}
+	time.Sleep(200 * time.Millisecond)
+	tail = a.output()[n:]
+	for _, on := range []string{"\x1b[?1049h", "\x1b[?1006h"} {
+		if !strings.Contains(tail, on) {
+			t.Errorf("%q not written on resume: %q", on, tail)
+		}
+	}
+	a.checkRaw()
+
+	// stop again; a key typed while stopped is read after SIGCONT
+	_ = a.cmd.Process.Signal(syscall.SIGTSTP)
+	if !a.waitState("T", 5*time.Second) {
+		t.Fatalf("pqx didn't stop again: state %s", a.state())
+	}
+	a.write("q")
+	_ = a.cmd.Process.Signal(syscall.SIGCONT)
+	if ok, err := a.exited(5 * time.Second); !ok || err != nil {
+		t.Fatalf("the q typed while stopped didn't quit: %v %v", ok, err)
+	}
+	a.checkCooked()
+}
+
+// SIGINT quits quietly with 0; SIGTERM, SIGHUP and SIGQUIT restore the
+// terminal and exit with 128 + the signal.
+func TestPtySignals(t *testing.T) {
+	for _, c := range []struct {
+		sig  syscall.Signal
+		code int
+	}{{syscall.SIGINT, 0}, {syscall.SIGTERM, 143}, {syscall.SIGHUP, 129}, {syscall.SIGQUIT, 131}} {
+		a := startPty(t, "1", fixtureFile(t))
+		a.started()
+		n := len(a.output())
+		_ = a.cmd.Process.Signal(c.sig)
+		ok, err := a.exited(5 * time.Second)
+		if !ok {
+			t.Fatalf("%v: pqx didn't exit", c.sig)
+		}
+		code := 0
+		if ee, isExit := err.(*exec.ExitError); isExit {
+			code = ee.ExitCode()
+		} else if err != nil {
+			t.Errorf("%v: %v", c.sig, err)
+		}
+		if code != c.code {
+			t.Errorf("%v: exit %d, want %d", c.sig, code, c.code)
+		}
+		tail := a.output()[n:]
+		checkCleared(t, tail)
+		if strings.Contains(tail, "pqx:") {
+			t.Errorf("%v: a message: %q", c.sig, tail)
+		}
+		a.checkCooked()
 	}
 }

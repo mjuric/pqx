@@ -144,27 +144,29 @@ func TestPixelMouseModeIsNeverEnabled(t *testing.T) {
 	}
 }
 
+func sanitize(s string) string { return fmtx.Sanitize(s, true) }
+
 func TestCopy(t *testing.T) {
 	esc := "\x1b]52;c;" + base64.StdEncoding.EncodeToString([]byte("echo PWNED\n")) + "\x1b\\"
-	cmd, c := Copy(esc + "CLIP-VAL")
+	cmd, c := Copy(esc+"CLIP-VAL", sanitize)
 	if cmd == nil || strings.ContainsAny(c.Text, "\x1b\x07") || !c.Sanitized || c.Cut {
 		t.Errorf("Copy of a hostile value: %+v", c)
 	}
 	if !strings.HasPrefix(c.Text, "␛]52;c;") {
 		t.Errorf("ESC not shown as ␛: %q", c.Text)
 	}
-	if _, c := Copy("plain é ✓"); c.Text != "plain é ✓" || c.Sanitized {
+	if _, c := Copy("plain é ✓", sanitize); c.Text != "plain é ✓" || c.Sanitized {
 		t.Errorf("plain text: %+v", c)
 	}
 	// tab and newline are text, copied as they are (once fmtx.Sanitize
 	// keeps whitespace; its starter body doesn't)
 	if fmtx.Sanitize("\t", true) == "\t" {
-		if _, c := Copy("tab\there\nnew line"); c.Text != "tab\there\nnew line" || c.Sanitized {
+		if _, c := Copy("tab\there\nnew line", sanitize); c.Text != "tab\there\nnew line" || c.Sanitized {
 			t.Errorf("tab and newline: %+v", c)
 		}
 	}
 	long := strings.Repeat("é", MaxCopy) // 2 bytes each
-	_, c = Copy(long)
+	_, c = Copy(long, sanitize)
 	if !c.Cut || len(c.Text) > MaxCopy || len(c.Text) < MaxCopy-1 || !strings.HasSuffix(c.Text, "é") {
 		t.Errorf("long text: cut %v, %d bytes", c.Cut, len(c.Text))
 	}
@@ -172,7 +174,7 @@ func TestCopy(t *testing.T) {
 
 // The OSC 52 write itself, through Bubble Tea.
 func TestCopyWritesOSC52(t *testing.T) {
-	cmd, _ := Copy("héllo\x1b")
+	cmd, _ := Copy("héllo\x1b", sanitize)
 	s, _, err := runScreen(t, "q", cmd)
 	if err != nil {
 		t.Fatal(err)

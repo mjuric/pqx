@@ -3,6 +3,7 @@ package term
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -47,6 +48,13 @@ func TestTranslation(t *testing.T) {
 		{"\x1b[1;2;3M", 0, ""},                    // urxvt with a button code below 32
 		{x10(0, 222, 222), 0, "\x1b[<0;222;222M"}, // largest X10 coordinate (byte 254)
 		{"\x1b[1;5A\x1b[3~", 0, "\x1b[1;5A\x1b[3~"},
+		// xterm sends 0 for a coordinate beyond 223: dropped, as x10_to_sgr
+		// drops x < 1, and the stream stays in step
+		{"\x1b[M\x00\x00\x00z", 0, "z"},
+		{"\x1b[M #\x00z", 0, "z"},
+		{"\x1b[M\x1b[Az", 0, "z"},
+		{"\x1b[32;123456;5M", 0, "\x1b[<0;123456;5M"},   // six digits: a report
+		{"\x1b[32;1234567;5M", 0, "\x1b[32;1234567;5M"}, // seven: not one
 	}
 	for _, c := range cases {
 		if got := translate(t, c.last, c.in); got != c.want {
@@ -184,12 +192,11 @@ func (r *recorder) View() tea.View { return tea.NewView("") }
 func run(t *testing.T, pause time.Duration, chunks ...string) []string {
 	t.Helper()
 	pr, pw := io.Pipe()
-	f := NewFilter(pr)
-	defer f.Close()
+	f := mustFilter(t, pr)
 	rec := &recorder{}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	p := tea.NewProgram(rec, tea.WithInput(f), tea.WithOutput(io.Discard),
+	p := tea.NewProgram(rec, tea.WithInput(f.File()), tea.WithOutput(io.Discard),
 		tea.WithWindowSize(250, 200), tea.WithContext(ctx), tea.WithoutSignals())
 	done := make(chan error, 1)
 	go func() { _, err := p.Run(); done <- err }()
@@ -275,10 +282,9 @@ func TestKeysAndPastesUnaffected(t *testing.T) {
 // for the rest of a sequence after a lone ESC).
 func TestEscTiming(t *testing.T) {
 	pr, pw := io.Pipe()
-	f := NewFilter(pr)
-	defer f.Close()
+	f := mustFilter(t, pr)
 	got := make(chan stamp, 10)
-	p := tea.NewProgram(keyTimer{got}, tea.WithInput(f), tea.WithOutput(io.Discard),
+	p := tea.NewProgram(keyTimer{got}, tea.WithInput(f.File()), tea.WithOutput(io.Discard),
 		tea.WithWindowSize(80, 20), tea.WithoutSignals())
 	done := make(chan error, 1)
 	go func() { _, err := p.Run(); done <- err }()
@@ -333,14 +339,45 @@ func (k keyTimer) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 func (k keyTimer) View() tea.View { return tea.NewView("") }
 
+func mustFilter(t testing.TB, src io.Reader) *Filter {
+	t.Helper()
+	f, err := NewFilter(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+type failing struct {
+	data string
+	err  error
+}
+
+func (r *failing) Read(p []byte) (int, error) {
+	if r.data == "" {
+		return 0, r.err
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, nil
+}
+
 func TestFilterEOFAndClose(t *testing.T) {
-	f := NewFilter(strings.NewReader("ab\x1b"))
+	f := mustFilter(t, strings.NewReader("ab\x1b"))
 	b, err := io.ReadAll(f)
 	if err != nil || string(b) != "ab\x1b[27u" {
 		t.Errorf("ReadAll = %q, %v", b, err)
 	}
+	// the source's error, after what was read before it
+	boom := errors.New("boom")
+	f = mustFilter(t, &failing{"xy", boom})
+	b, err = io.ReadAll(f)
+	if !errors.Is(err, boom) || string(b) != "xy" {
+		t.Errorf("failing source: %q, %v", b, err)
+	}
 	pr, _ := io.Pipe()
-	f = NewFilter(pr)
+	f = mustFilter(t, pr)
 	errc := make(chan error)
 	go func() { _, err := f.Read(make([]byte, 10)); errc <- err }()
 	time.Sleep(10 * time.Millisecond)
@@ -350,12 +387,61 @@ func TestFilterEOFAndClose(t *testing.T) {
 	}
 }
 
+// readWithin reads what the filter passes on within d.
+func readWithin(t *testing.T, f *Filter, d time.Duration) string {
+	t.Helper()
+	_ = f.r.SetReadDeadline(time.Now().Add(d))
+	defer f.r.SetReadDeadline(time.Time{})
+	buf := make([]byte, 256)
+	n, err := f.r.Read(buf)
+	if err != nil {
+		t.Fatalf("nothing within %v: %v", d, err)
+	}
+	return string(buf[:n])
+}
+
+// The hold timer is armed when a sequence is cut off: a lone Esc arrives
+// without more input.
+func TestHeldEscArrivesAlone(t *testing.T) {
+	pr, pw := io.Pipe()
+	f := mustFilter(t, pr)
+	for i := 0; i < 3; i++ {
+		_, _ = pw.Write([]byte{0x1b})
+		if got := readWithin(t, f, 10*EscTimeout); got != "\x1b[27u" {
+			t.Fatalf("got %q", got)
+		}
+	}
+	_, _ = pw.Write([]byte("\x1b[M"))
+	if got := readWithin(t, f, 10*SeqTimeout); got != "\x1b[M" {
+		t.Fatalf("a partial report after its timeout: %q", got)
+	}
+}
+
+// When the timer and the rest of a sequence are both ready, the rest goes
+// first: the sequence isn't passed on cut.
+func TestRestBeatsTimer(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		f, err := newFilter()
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.data = make(chan []byte, 1)
+		r := x10(0, 81, 6)
+		f.send(f.t.feed([]byte(r[:3])))
+		f.data <- []byte(r[3:])
+		f.onExpire() // the timer fired with the rest waiting
+		if got := readWithin(t, f, time.Second); got != "\x1b[<0;81;6M" {
+			t.Fatalf("got %q", got)
+		}
+		f.Close()
+	}
+}
+
 // BenchmarkFilterLatency is the time from a key written to the pipe until
 // the filter's reader has it: the filter's cost on every key press.
 func BenchmarkFilterLatency(b *testing.B) {
 	pr, pw := io.Pipe()
-	f := NewFilter(pr)
-	defer f.Close()
+	f := mustFilter(b, pr)
 	buf := make([]byte, 64)
 	key := []byte("\x1b[B")
 	for b.Loop() {

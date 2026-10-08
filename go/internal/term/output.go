@@ -13,8 +13,10 @@ var (
 	// as Python pqx writes it before leaving the alternate screen.
 	ClearScreen = []byte("\x1b[0m\x1b[H\x1b[2J")
 	// restoreModes undoes what a running pqx may have turned on: the text
-	// cursor hidden, mouse reporting, bracketed paste.
-	restoreModes = []byte("\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l")
+	// cursor hidden, mouse reporting, bracketed paste, and the keyboard
+	// modes (modifyOtherKeys, the kitty keyboard flags), as Bubble Tea does
+	// on exit.
+	restoreModes = []byte("\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[>4m\x1b[<1u")
 )
 
 // Output is the terminal for Bubble Tea's output (tea.WithOutput). It clears
