@@ -45,8 +45,10 @@ too when you look at it.
 - **Focus:**
   - Tab from the grid, or a click in the pane, focuses it; the panel border shows
     focus in the accent colour like other panels.
-  - Tab, Esc or Enter returns to the grid. Enter also leaves the grid cursor on
-    the selected column.
+  - Tab or Enter returns to the grid, with the grid cursor on the selected
+    column. Esc does the same and closes the pane; it closes the pane from the
+    grid too. It only cancels instead while a lookup, stats, a plot or an export
+    runs (pqx's own row, column and count loading carries on).
   - `d` still opens and closes the pane, and closing it returns focus to the grid.
 - **Moving:**
   - ↑/↓, PgUp/PgDn, Home/End or a click selects a column. The grid jumps sideways

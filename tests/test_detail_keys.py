@@ -67,9 +67,10 @@ async def test_equals_from_pane_narrows_in_two_keystrokes(demo_path, demo):
         assert app.total == int(((demo.band == band) & (demo.detector == det)).sum())
         assert "match" in str(app.query_one("#keys").render())
 
-        await pilot.press("escape")  # back to the grid, on that field
+        await pilot.press("escape")  # back to the grid, on that field, closing the pane
         await pilot.pause(0.05)
         assert app.focused is g and app.cols_shown[g.cursor_column] == "detector"
+        assert not app.query_one("#detail").display
 
 
 async def test_equals_from_pane_on_null_and_sorted(demo_path, demo):
@@ -156,15 +157,19 @@ async def test_lookup_cancelled_by_esc(demo_path):
         await pilot.press("g", *"15000", "enter")
         await settle(pilot, app)
         g.move_cursor(column=app.cols_shown.index("band"))
-        await pilot.press("equals_sign")
+        await pilot.press("d", "equals_sign")  # with the detail pane open
         for _ in range(200):
             if calls and "locate" in app._busy:
                 break
             await pilot.pause(0.02)
         assert "locate" in app._busy and calls == [15_000]
-        await pilot.press("escape")
+        await pilot.press("escape")  # cancels the lookup, and only that
         await settle(pilot, app)
         assert g.abs_row == 0 and not app._busy and app.view.where
+        assert app.query_one("#detail").display
+        await pilot.press("escape")  # nothing running: now it closes the pane
+        await pilot.pause(0.05)
+        assert not app.query_one("#detail").display and app.focused is g
 
 
 async def test_equals_without_row_ids_goes_to_the_top(odd_path):
@@ -398,7 +403,7 @@ async def test_detail_key_line_fits_80_columns(demo_path):
         await pilot.pause(0.1)
         keys = app.query_one("#keys")
         line = "".join(seg.text for seg in keys.render_line(0)).rstrip()
-        assert "q quit" in line and "= match" in line and "esc grid" in line  # (d close, if room)
+        assert "q quit" in line and "= match" in line and "esc close" in line  # (tab grid, if room)
 
 
 async def test_record_page_found_by_file_row_and_not_yanked_after_a_move(demo_path):

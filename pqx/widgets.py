@@ -150,7 +150,7 @@ class DetailList(CursorList):
 
     BINDINGS = [
         Binding("enter,tab", "app.detail_to_grid", "Back to grid", show=False),
-        Binding("escape", "app.detail_to_grid(True)", "Back to grid", show=False),
+        Binding("escape", "app.detail_to_grid(True)", "Close", show=False),
         Binding("d", "app.toggle_detail", "Detail", show=False),
         # the grid's keys for a cell, on the selected field of the record shown
         Binding("equals_sign", "app.detail_key('filter_value')", "= filter", show=False),

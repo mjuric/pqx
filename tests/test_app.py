@@ -903,7 +903,7 @@ async def test_detail_pane_focus_and_link(demo_path):
         await pilot.pause(0.05)
         assert app.focused is lst and lst.selected == app.cols_shown[2]
         assert app.query_one("#detail").has_focus_within
-        assert "esc grid" in plain(app.query_one("#keys"))
+        assert "esc close" in plain(app.query_one("#keys"))
         assert isinstance(selected_prompt(lst), Styled)  # focused: the whole entry reversed
         await pilot.press("down", "down")  # the grid follows sideways, same row
         await pilot.pause(0.05)
@@ -920,7 +920,7 @@ async def test_detail_pane_focus_and_link(demo_path):
         assert not isinstance(selected_prompt(lst), Styled)  # unfocused: just the name
         assert "into detail" in plain(app.query_one("#keys"))
 
-        for key in ("escape", "tab"):
+        for key in ("enter", "tab"):
             await pilot.press("tab", "down", key)
             await pilot.pause(0.05)
             assert app.focused is g and g.cursor_column == 2 and g.cursor_row == 7
@@ -961,6 +961,15 @@ async def test_detail_pane_focus_and_link(demo_path):
         await pilot.pause(0.05)
         assert not app.query_one("#detail").display and app.focused is g
         assert "into detail" not in plain(app.query_one("#keys"))  # Tab goes to the filter now
+
+        # Esc closes the pane, from the grid or from inside it (back on the selected column)
+        await pilot.press("d", "escape")
+        await pilot.pause(0.05)
+        assert not app.query_one("#detail").display and app.focused is g
+        await pilot.press("d", "tab", "down", "escape")
+        await pilot.pause(0.05)
+        assert not app.query_one("#detail").display and app.focused is g
+        assert g.cursor_column == 4 and g.cursor_row == 9
 
 
 def selected_prompt(lst):

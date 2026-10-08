@@ -105,7 +105,7 @@ Press **?** in pqx for the full list.
 | arrows, PgUp/PgDn, Home/End | move around; Ctrl+Home/End for first/last row |
 | `g` | go to a row: `1234`, `1.5M`, `50%`, `-1` |
 | `s` · `=` | sort by this column · filter to this cell's value |
-| `d` | row detail panel (`=` `y` `i` `F` `<` `>` work there too, on the selected field) |
+| `d` · Esc | row detail panel (`=` `y` `i` `F` `<` `>` work there too, on the selected field) · close it |
 | `c` · `-` · `p` | choose columns · hide this column · pin columns |
 | `<` `>` · `F` | fewer / more digits · set a format (`.2f`, `,d`, `.1%`) |
 | `y` · `i` · `e` | copy cell · stats for this column · export |
@@ -122,9 +122,9 @@ Press **?** in pqx for the full list.
 | `g` | go to row: `1234`, `1.5M`, `50%`, `-1` |
 | `s` | sort by the cursor column (asc → desc → off); clicking a header does the same |
 | `=` | narrow the filter to rows equal to the cursor cell (the cursor stays on that record) |
-| `d` / Enter | row detail panel |
+| `d` / Enter · Esc | row detail panel · close it |
 | `tab` / click | into the open detail panel |
-| `↑` `↓` · `enter` `esc` `tab` | detail panel: pick a column (the grid follows on the same row; the wheel only scrolls) · back to the grid on that column |
+| `↑` `↓` · `enter` `tab` · `esc` | detail panel: pick a column (the grid follows on the same row; the wheel only scrolls) · back to the grid on that column · the same, closing the panel |
 | `=` `y` `i` `F` `<` `>` | detail panel: the same as on the grid cell of the selected field; after `=` the panel keeps focus on the same field and record, so `=` on one field and then another narrows in two keystrokes |
 | `c` · `-` · `p` | choose columns · hide column · pin columns |
 | Home / End | first / last column; `‹` `›` beside the header mark hidden columns (click to page) |
@@ -137,7 +137,7 @@ Press **?** in pqx for the full list.
 | click · `enter` | Plot: open a settings field's drop-down (type to narrow the column list) |
 | `tab` · `← →` | Plot: move between settings fields · step the field's value |
 | `r` | Plot: rotate the sky-map centre between RA 0° and 180° |
-| Esc | cancel running queries / leave the filter bar |
+| Esc | cancel running queries; when none are running, leave the filter bar or close the detail panel |
 | `?` · `q` | help · quit |
 
 Data, Schema and Stats stay on the same column: move to a column in one of them
