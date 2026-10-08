@@ -403,7 +403,61 @@ func TestPlacedAndInnerFocus(t *testing.T) {
 	a.p.Plot = pp
 	run(a, key("4"))
 	screen(a)
-	if pp.x != 2 || pp.y != titleRows+filterRows+1 {
+	if pp.x != margin+2 || pp.y != titleRows+filterRows+1 {
 		t.Fatalf("placed at %d,%d", pp.x, pp.y)
+	}
+}
+
+// counting pane: how often it was drawn.
+type countPane struct {
+	pane
+	views int
+}
+
+func (p *countPane) View(w, h int) string { p.views++; return p.pane.View(w, h) }
+
+func TestDialogKeysDontRedrawBehind(t *testing.T) {
+	a, _ := setup(t)
+	g := &countPane{pane: pane{name: "grid"}}
+	a.p.Grid = g
+	run(a, kit.OpenDialogMsg{Dialog: &dialog{pane{name: "Zdialog"}}})
+	a.View()
+	n := g.views
+	for range 5 {
+		run(a, key("x"))
+		a.View()
+	}
+	if g.views != n {
+		t.Fatalf("grid drawn %d times for dialog keys", g.views-n)
+	}
+	run(a, kit.TotalMsg{}) // anything else may change the screen behind
+	a.View()
+	if g.views != n+1 {
+		t.Fatalf("grid drawn %d times after a broadcast", g.views-n)
+	}
+}
+
+func TestComposeKeepsStyleRightOfOverlay(t *testing.T) {
+	base := "\x1b[7mabcdefghij\x1b[m"
+	got := compose(10, 1, base, []kit.Overlay{{X: 2, Y: 0, Content: "XY"}})
+	if ansi.Strip(got) != "abXYefghij" {
+		t.Fatalf("text %q", ansi.Strip(got))
+	}
+	// the right part is still reverse video
+	i := strings.Index(got, "XY")
+	if rest := got[i:]; !strings.Contains(rest, "\x1b[7mefghij") {
+		t.Fatalf("style lost: %q", got)
+	}
+}
+
+func BenchmarkDialogKeystroke(b *testing.B) {
+	t := &testing.T{}
+	a, _ := setup(t)
+	a.Update(tea.WindowSizeMsg{Width: 200, Height: 50})
+	a.Update(kit.OpenDialogMsg{Dialog: &dialog{pane{name: "Zdialog"}}})
+	a.View()
+	for b.Loop() {
+		a.Update(key("x"))
+		a.View()
 	}
 }

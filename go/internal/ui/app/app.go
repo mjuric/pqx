@@ -10,6 +10,8 @@
 package app
 
 import (
+	"github.com/charmbracelet/x/ansi"
+	"regexp"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -34,10 +36,11 @@ type Parts struct {
 
 // Layout constants (Python pqx's layout).
 const (
-	titleRows  = 1
+	margin     = 1 // the screen's side margin (Python's Screen padding)
+	titleRows  = 2 // the title bar and a blank row (the filter box's top margin)
 	filterRows = 3 // a bordered one-line input
 	keyRows    = 1
-	detailW    = 53 // the details pane's width (PR #24)
+	detailW    = 53 // the details pane's width (PR #24), one column from the grid's panel
 )
 
 // App is the root model.
@@ -52,6 +55,11 @@ type App struct {
 	w, h    int
 
 	quitting bool
+
+	// base is the screen behind the open dialogs, drawn once and kept
+	// while only the dialog gets messages (baseOK).
+	base   string
+	baseOK bool
 }
 
 type region struct {
@@ -119,6 +127,16 @@ func (a *App) broadcast(msg tea.Msg) tea.Cmd {
 
 // Update implements tea.Model.
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// keys, paste and mouse go to an open dialog and leave the screen behind
+	// it as it was; anything else may change it
+	switch msg.(type) {
+	case tea.KeyPressMsg, tea.PasteMsg, tea.MouseMsg:
+		if len(a.dialogs) == 0 {
+			a.baseOK = false
+		}
+	default:
+		a.baseOK = false
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.w, a.h = msg.Width, msg.Height
@@ -386,7 +404,14 @@ func (a *App) View() tea.View {
 	if a.quitting || a.w <= 0 || a.h <= 0 {
 		return v
 	}
-	base, cur := a.render()
+	var base string
+	var cur *tea.Cursor
+	if len(a.dialogs) > 0 && a.baseOK {
+		base = a.base // nothing behind the dialog changed
+	} else {
+		base, cur = a.render()
+		a.base, a.baseOK = base, len(a.dialogs) > 0
+	}
 	if len(a.dialogs) == 0 {
 		if toasts := a.p.Chrome.Toasts(a.w, a.h); len(toasts) > 0 {
 			base = compose(a.w, a.h, base, toasts)
@@ -421,15 +446,48 @@ func (a *App) dialogPos(d kit.Dialog) (int, int) {
 	return max(0, (a.w-dw)/2), max(0, (a.h-dh)/2)
 }
 
-// compose draws overlays over base without moving it.
+// compose draws overlays over base without moving it: each overlay line
+// replaces the cells it covers in its row, and the rest of the row keeps
+// its text and styles. Only the rows an overlay covers are touched, so a
+// keystroke in a dialog costs about the dialog's height.
 func compose(w, h int, base string, over []kit.Overlay) string {
-	layers := []*lipgloss.Layer{lipgloss.NewLayer(base)}
-	for i, o := range over {
-		layers = append(layers, lipgloss.NewLayer(o.Content).X(o.X).Y(o.Y).Z(i+1))
+	lines := strings.Split(base, "\n")
+	for _, o := range over {
+		for i, ol := range strings.Split(o.Content, "\n") {
+			y := o.Y + i
+			if y < 0 || y >= len(lines) || y >= h {
+				continue
+			}
+			x := max(0, min(o.X, w))
+			ow := min(ansi.StringWidth(ol), w-x)
+			if ow <= 0 {
+				continue
+			}
+			l := fitLine(lines[y], w)
+			left := ansi.Cut(l, 0, x+ow)
+			lines[y] = ansi.Cut(l, 0, x) + sgrReset + ansi.Truncate(ol, ow, "") + sgrReset +
+				activeStyle(left) + ansi.Cut(l, x+ow, w)
+		}
 	}
-	c := lipgloss.NewCanvas(w, h)
-	c.Compose(lipgloss.NewCompositor(layers...))
-	return c.Render()
+	return strings.Join(lines, "\n")
+}
+
+const sgrReset = "\x1b[m"
+
+var sgr = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
+
+// activeStyle is the SGR sequences of s from its last reset on: replayed,
+// they give the style in force at its end (where the rest of a row resumes
+// after an overlay).
+func activeStyle(s string) string {
+	seqs := sgr.FindAllString(s, -1)
+	start := 0
+	for i, q := range seqs {
+		if q == "\x1b[m" || q == "\x1b[0m" {
+			start = i + 1
+		}
+	}
+	return strings.Join(seqs[start:], "")
 }
 
 // render draws the screen and returns the text cursor, if a part shows one.
@@ -437,7 +495,7 @@ func (a *App) render() (string, *tea.Cursor) {
 	a.regions = a.regions[:0]
 	ch := a.p.Chrome
 	var b strings.Builder
-	b.WriteString(fitLine(ch.TitleBar(a.w), a.w))
+	b.WriteString(edgeLine(ch.TitleBar(max(1, a.w-2*margin)), a.w))
 	if a.legacyData() {
 		b.WriteString("\n")
 		b.WriteString(a.p.Legacy.View(a.w, a.h-titleRows))
@@ -449,6 +507,7 @@ func (a *App) render() (string, *tea.Cursor) {
 		}
 		return b.String(), cur
 	}
+	b.WriteString("\n" + strings.Repeat(" ", a.w)) // the blank row under the title
 	var cur *tea.Cursor
 	place := func(name string, p kit.Pane, x, y, w, h int) string {
 		if p == nil {
@@ -468,46 +527,56 @@ func (a *App) render() (string, *tea.Cursor) {
 		return p.View(w, h)
 	}
 
+	// Below the title everything sits inside the side margins: panels are
+	// W wide and start at column margin.
+	W := max(1, a.w-2*margin)
+	var body strings.Builder
+
 	// filter bar: a bordered one-line panel
-	b.WriteString("\n")
-	inner := place("filter", a.p.Filter, 2, titleRows+1, max(1, a.w-4), 1)
-	b.WriteString(a.frame(inner, a.w, filterRows, styled.Text{}, styled.Text{}, a.focus == "filter", a.p.Filter))
+	inner := place("filter", a.p.Filter, margin+2, titleRows+1, max(1, W-4), 1)
+	body.WriteString(a.frame(inner, W, filterRows, styled.Text{}, styled.Text{}, a.focus == "filter", a.p.Filter))
 
 	bodyH := max(3, a.h-titleRows-filterRows-keyRows)
 	top := titleRows + filterRows
 	tabs := a.tabStrip()
-	b.WriteString("\n")
+	body.WriteString("\n")
 	switch a.tab {
 	case kit.TabData:
-		gw := a.w
+		gw := W
 		if a.env.State.DetailOpen {
-			gw = max(10, a.w-detailW)
+			gw = max(10, W-detailW-1)
 		}
-		gridH := max(1, bodyH-3) // borders and the status line
-		inner := place("grid", a.p.Grid, 2, top+1, max(1, gw-4), gridH)
-		inner += "\n" + fitLine(ch.StatusLine(max(1, gw-4)), max(1, gw-4))
+		// the grid, a blank row and the status line (Python's #status margin)
+		gridH := max(1, bodyH-4)
+		inner := place("grid", a.p.Grid, margin+2, top+1, max(1, gw-4), gridH)
+		inner += "\n\n" + fitLine(ch.StatusLine(max(1, gw-4)), max(1, gw-4))
 		left := a.frame(inner, gw, bodyH, tabs, nil2(a.p.Grid), a.focus == "grid", a.p.Grid)
 		if a.env.State.DetailOpen {
-			dinner := place("detail", a.p.Detail, gw+2, top+1, detailW-4, bodyH-2)
-			right := a.frame(dinner, a.w-gw, bodyH, title(a.p.Detail), styled.Text{}, a.focus == "detail", a.p.Detail)
-			b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, left, right))
+			dw := W - gw - 1
+			dinner := place("detail", a.p.Detail, margin+gw+1+2, top+1, max(1, dw-4), bodyH-2)
+			right := a.frame(dinner, dw, bodyH, title(a.p.Detail), styled.Text{}, a.focus == "detail", a.p.Detail)
+			gap := strings.TrimSuffix(strings.Repeat(" \n", bodyH), "\n")
+			body.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, left, gap, right))
 		} else {
-			b.WriteString(left)
+			body.WriteString(left)
 		}
 	default:
 		name := tabPane(a.tab)
 		p := a.parts()[name]
 		if pp, ok := p.(kit.Paneled); ok {
-			a.regions = append(a.regions, region{name, p, 0, top, a.w, bodyH})
-			lines := strings.Split(a.panels(pp, a.w, bodyH, tabs, a.focus == name), "\n")
-			for i := range lines {
-				lines[i] = fitLine(lines[i], a.w)
+			a.regions = append(a.regions, region{name, p, margin, top, W, bodyH})
+			if pl, ok := p.(kit.Placed); ok {
+				pl.Place(margin, top)
 			}
-			b.WriteString(strings.Join(lines, "\n"))
+			body.WriteString(a.panels(pp, W, bodyH, tabs, a.focus == name))
 			break
 		}
-		inner := place(name, p, 2, top+1, max(1, a.w-4), bodyH-2)
-		b.WriteString(a.frame(inner, a.w, bodyH, tabs, nil2(p), a.focus == name, p))
+		inner := place(name, p, margin+2, top+1, max(1, W-4), bodyH-2)
+		body.WriteString(a.frame(inner, W, bodyH, tabs, nil2(p), a.focus == name, p))
+	}
+	pad := strings.Repeat(" ", margin)
+	for _, l := range strings.Split(body.String(), "\n") {
+		b.WriteString("\n" + pad + fitLine(l, W) + pad)
 	}
 	b.WriteString("\n")
 	var hints []kit.KeyHint
@@ -516,8 +585,15 @@ func (a *App) render() (string, *tea.Cursor) {
 	} else if p := a.focused(); p != nil {
 		hints = p.Keys()
 	}
-	b.WriteString(fitLine(ch.KeyBar(a.w, hints), a.w))
+	b.WriteString(edgeLine(ch.KeyBar(max(1, a.w-2*margin), hints), a.w))
 	return b.String(), cur
+}
+
+// edgeLine is s inside the screen's margin, w cells. (The chrome's title
+// bar and key bar keep one more cell themselves, Python's margin 0 1.)
+func edgeLine(s string, w int) string {
+	pad := strings.Repeat(" ", margin)
+	return fitLine(pad+fitLine(s, max(0, w-2*margin))+pad, w)
 }
 
 func title(p kit.Pane) styled.Text {

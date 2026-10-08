@@ -44,7 +44,7 @@ func (a *App) tabAt(x, y int) (kit.Tab, bool) {
 	if y != titleRows+filterRows {
 		return 0, false
 	}
-	x -= 3
+	x -= margin + 3
 	pos := 0
 	for i, name := range kit.TabNames {
 		if i > 0 {
@@ -60,7 +60,7 @@ func (a *App) tabAt(x, y int) (kit.Tab, bool) {
 }
 
 // frame draws inner (lines of exactly w-4 cells, or fewer lines) in a
-// rounded border w × h with a title in the top border and a subtitle in
+// square border w × h with a title in the top border and a subtitle in
 // the bottom one; the border is the accent colour when focused.
 func (a *App) frame(inner string, w, h int, title, subtitle styled.Text, focused bool, _ kit.Pane) string {
 	look := a.env.Look
@@ -72,7 +72,7 @@ func (a *App) frame(inner string, w, h int, title, subtitle styled.Text, focused
 	iw := max(0, w-4)
 	lines := strings.Split(inner, "\n")
 	var b strings.Builder
-	b.WriteString(borderLine(look, "╭", "╮", w, title, bs))
+	b.WriteString(borderLine(look, "┌", "┐", w, title, bs))
 	for i := 0; i < h-2; i++ {
 		b.WriteString("\n")
 		l := ""
@@ -82,12 +82,12 @@ func (a *App) frame(inner string, w, h int, title, subtitle styled.Text, focused
 		b.WriteString(edge("│") + " " + fitLine(l, iw) + " " + edge("│"))
 	}
 	b.WriteString("\n")
-	b.WriteString(borderLine(look, "╰", "╯", w, subtitle, bs))
+	b.WriteString(borderLine(look, "└", "┘", w, subtitle, bs))
 	return b.String()
 }
 
 // borderLine is a top or bottom border of width w with t in it, after
-// "╭─ ".
+// "┌─ ".
 func borderLine(look kit.Look, l, r string, w int, t styled.Text, bs styled.Style) string {
 	if w < 2 {
 		return strings.Repeat(" ", max(0, w))

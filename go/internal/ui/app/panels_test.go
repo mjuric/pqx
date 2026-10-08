@@ -46,10 +46,10 @@ func TestPaneledTab(t *testing.T) {
 	run(a, key("5"))
 	s := screen(a)
 	top := s[titleRows+filterRows]
-	if !strings.HasPrefix(top, "╭─ 1 Data ─ 2 Schema") || !strings.Contains(top, "╮ ╭─ right ─") {
+	if !strings.HasPrefix(top, " ┌─ 1 Data ─ 2 Schema") || !strings.Contains(top, "┐ ┌─ right ─") {
 		t.Fatalf("top border %q", top)
 	}
-	if row := s[titleRows+filterRows+1]; !strings.HasPrefix(row, "│ left") || !strings.Contains(row, "│ │ right") {
+	if row := s[titleRows+filterRows+1]; !strings.HasPrefix(row, " │ left") || !strings.Contains(row, "│ │ right") {
 		t.Fatalf("row %q", row)
 	}
 	for i, l := range strings.Split(ansi.Strip(a.View().Content), "\n") {
@@ -59,7 +59,7 @@ func TestPaneledTab(t *testing.T) {
 	}
 	// mouse: relative to the body's top left corner
 	run(a, tea.MouseClickMsg{X: 60, Y: titleRows + filterRows + 2, Button: tea.MouseLeft})
-	if len(m.mouse) != 1 || m.mouse[0].X != 60 || m.mouse[0].Y != 2 {
+	if len(m.mouse) != 1 || m.mouse[0].X != 60-margin || m.mouse[0].Y != 2 {
 		t.Fatalf("mouse %v", m.mouse)
 	}
 	// Tab steps through the panels, then on to the filter
