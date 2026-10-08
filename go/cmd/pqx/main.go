@@ -70,8 +70,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pqx: cannot open %s: %s\n", path, fmtx.Sanitize(err.Error(), false))
 		return 1
 	}
-	if o.Threads < 0 {
+	switch {
+	case o.Threads < 0:
 		return cantOpen(errors.New("--threads must be at least 1 (or 0 for all cores)"))
+	case o.Threads > maxThreads:
+		return cantOpen(fmt.Errorf("--threads must be at most %d", maxThreads))
 	}
 	ds, err := data.Open(o.Path, data.Options{Threads: o.Threads})
 	if err != nil {
@@ -109,6 +112,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	return runApp(app.New(env, parts), stderr)
 }
+
+// maxThreads is the most DuckDB threads --threads may ask for.
+const maxThreads = 4096
 
 // Sampling is on by default above this many rows or this file size
 // (app.py's AUTO_SAMPLE_ROWS and AUTO_SAMPLE_BYTES).

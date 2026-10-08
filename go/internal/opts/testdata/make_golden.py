@@ -36,6 +36,12 @@ CASES = [
     ["--format", "a=.2q", NOFILE], ["--format", "a=99", NOFILE], ["--format", "a=" + ESC + "[31m", NOFILE],
     ["--theme", "nord", NOFILE], ["--border", "white", NOFILE], ["--accent"],
     ["nope" + ESC + "]0;T\x07.parquet"],
+    # from the review of the Go port
+    [NOFILE, "-w", "--th"], ["--format", "--=x=faint", "--version", NOFILE], ["-hw"], ["-hhw"], ["-hw", "--"],
+    ["-hwfoo", NOFILE], ["-he", NOFILE], ["-hh=1"], [NOFILE, "--"], ["--", NOFILE, "--"], [NOFILE, "-w", "x", "--"],
+    ["--threads", "\u0663", NOFILE], ["--threads", "\U0001d7d9", NOFILE], ["--threads", "99999999999999999999", NOFILE],
+    ["--threads", "\u00a07\u2003", NOFILE], ["-="], ["--="], ["-x="], ["-w=", NOFILE], ["-w", "--", NOFILE],
+    [NOFILE, "--threads="], ["-٣", NOFILE], ["-1.5"], ["-.5", NOFILE],
 ]
 
 

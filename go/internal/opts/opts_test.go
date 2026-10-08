@@ -3,6 +3,7 @@ package opts
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -235,9 +236,36 @@ func TestOptions(t *testing.T) {
 	}
 }
 
+func TestPyInt(t *testing.T) {
+	for in, want := range map[string]int{
+		"7": 7, " 7 ": 7, "+7": 7, "-7": -7, "1_000": 1000, "\u0663": 3, "\U0001d7d9": 1, "\u00a07\u2003": 7,
+		"99999999999999999999": math.MaxInt, "-99999999999999999999": -math.MaxInt,
+	} {
+		if n, ok := pyInt(in); !ok || n != want {
+			t.Errorf("pyInt(%q) = %d, %v; want %d", in, n, ok, want)
+		}
+	}
+	for _, in := range []string{"", " ", "1.5", "1__0", "_1", "1_", "0x10", "1e3", "+-1", "--1", "\u00bd"} {
+		if _, ok := pyInt(in); ok {
+			t.Errorf("pyInt(%q) accepted", in)
+		}
+	}
+}
+
 func TestWidth(t *testing.T) {
 	if w := Width(env(map[string]string{"COLUMNS": "100"}), nil); w != 98 {
 		t.Errorf("COLUMNS=100: %d", w)
+	}
+	// $COLUMNS is read with Python's int()
+	for _, c := range []string{" 60 ", "6_0", "\t60", "+60", "\u0666\u0660"} {
+		if w := Width(env(map[string]string{"COLUMNS": c}), nil); w != 58 {
+			t.Errorf("COLUMNS=%q: %d", c, w)
+		}
+	}
+	for _, c := range []string{"60.0", "6__0", "_60", "-5", "0"} {
+		if w := Width(env(map[string]string{"COLUMNS": c}), nil); w != 78 {
+			t.Errorf("COLUMNS=%q: %d", c, w)
+		}
 	}
 	if w := Width(env(map[string]string{"COLUMNS": "x"}), nil); w != 78 {
 		t.Errorf("no terminal: %d", w)

@@ -3,7 +3,6 @@ package opts
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -42,8 +41,8 @@ Written by ` + Author + `.`
 // Width is the width argparse formats help for: $COLUMNS, else the width of
 // the terminal on stdout, else 80; less 2 (shutil.get_terminal_size).
 func Width(getenv func(string) string, stdout *os.File) int {
-	cols, err := strconv.Atoi(getenv("COLUMNS"))
-	if err != nil || cols <= 0 {
+	cols, ok := pyInt(getenv("COLUMNS"))
+	if !ok || cols <= 0 {
 		cols = 0
 		if stdout != nil {
 			if w, _, err := term.GetSize(stdout.Fd()); err == nil {
