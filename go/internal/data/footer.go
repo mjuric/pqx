@@ -88,6 +88,9 @@ func (d *dataset) footerScan(ctx context.Context) (*footerScan, error) {
 	}
 }
 
+// footerScanHook, if set (by tests), runs as each footer scan starts.
+var footerScanHook func()
+
 // leafStats is how the scan reads one leaf column's statistics.
 type leafStats struct {
 	conv     func([]byte) (Value, bool) // a min or max as a Value; false if malformed
@@ -102,6 +105,9 @@ type leafStats struct {
 // column's logical type (pqx's _scan_footer, which PyArrow's statistics
 // decode). Leaves sharing a path add up. ctx is checked every row group.
 func (d *dataset) scanFooter(ctx context.Context) (*footerScan, error) {
+	if footerScanHook != nil {
+		footerScanHook()
+	}
 	md := d.md
 	n := md.Schema.NumColumns()
 	paths := make([]string, n)
