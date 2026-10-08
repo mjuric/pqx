@@ -222,6 +222,12 @@ func (f *Filter) Update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
+// body is the part focus goes back to after a view is applied: the grid on
+// the Data tab, else the tab's body.
+func (f *Filter) body() string {
+	return [...]string{"grid", "schema", "stats", "plot", "meta"}[f.st.Tab]
+}
+
 // viewText is what the box shows for a view.
 func viewText(v data.View) string {
 	if v.IsSQL() {
@@ -318,7 +324,7 @@ func (f *Filter) apply(v data.View, keep int64) tea.Cmd {
 		f.env.Tasks.Cancel("validate")
 		var cmds []tea.Cmd
 		if f.focused {
-			cmds = append(cmds, kit.Send(kit.FocusMsg{Pane: "grid"}))
+			cmds = append(cmds, kit.Send(kit.FocusMsg{Pane: f.body()}))
 		}
 		if f.st.Total < 0 && !f.env.Tasks.Running("count") {
 			cmds = append(cmds, f.count(v)) // its count was cancelled: count again
@@ -369,7 +375,7 @@ func (f *Filter) onValidated(r validated) tea.Cmd {
 		cmds = append(cmds, f.count(v))
 	}
 	if f.focused {
-		cmds = append(cmds, kit.Send(kit.FocusMsg{Pane: "grid"}))
+		cmds = append(cmds, kit.Send(kit.FocusMsg{Pane: f.body()}))
 	}
 	f.err = ""
 	return tea.Sequence(kit.Send(kit.StatusMsg{}), tea.Batch(cmds...))

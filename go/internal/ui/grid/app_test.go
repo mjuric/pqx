@@ -431,3 +431,24 @@ func TestDetailToggle(t *testing.T) {
 		t.Errorf("grid width without the pane: %d", h.g.w)
 	}
 }
+
+// Applying a view from another tab gives focus back to that tab's body,
+// not to the grid behind it.
+func TestFilterFocusOnAnotherTab(t *testing.T) {
+	h := newHarness(t, newFake(100, 3), 80, 20)
+	h.press("2", "/")
+	if !h.f.TypingFocused() || h.env.State.Tab != kit.TabSchema {
+		t.Fatalf("filter focused %v, tab %v", h.f.TypingFocused(), h.env.State.Tab)
+	}
+	h.typeText("id % 2 = 0")
+	h.press("enter")
+	if h.env.State.View.Where != "id % 2 = 0" || h.f.TypingFocused() || h.g.focused {
+		t.Errorf("view %+v, filter focused %v, grid focused %v", h.env.State.View, h.f.TypingFocused(), h.g.focused)
+	}
+	h.press("1", "/")
+	h.typeText(" and id > 3")
+	h.press("enter")
+	if !h.g.focused {
+		t.Error("on the Data tab the grid doesn't get focus back")
+	}
+}
