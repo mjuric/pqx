@@ -133,6 +133,8 @@ func runApp(m tea.Model, stderr io.Writer) (code int) {
 		return 1
 	}
 	defer s.Close()
+	data.PanicHook = term.RestoreTerminal
+	defer func() { data.PanicHook = nil }()
 	defer func() {
 		// Bubble Tea recovers panics in the app and its commands; this is
 		// for the rest of this goroutine

@@ -150,6 +150,7 @@ func (d *dataset) readRowGroup(ctx context.Context, pf *file.Reader, rg int, loc
 		wg.Add(1)
 		sem <- struct{}{}
 		go func() {
+			defer repanic()
 			defer func() { <-sem; wg.Done() }()
 			if ctx.Err() != nil {
 				errs[k] = ctx.Err()
