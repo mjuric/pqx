@@ -20,10 +20,21 @@ SSSource on the network filesystem):
 | 3. Arrow results | **Yes, behind a build tag.** `duckdb.NewArrowFromConn` needs `-tags duckdb_arrow`. It returns `arrow-go/v18` (v18.5.1) records, the same module used for Parquet. |
 | 7. Binary | 77 MB unstripped. It links `libstdc++` and glibc dynamically, so not yet fully static. |
 
-One warning sign for question 4: a 100-row window of all 185 SSSource columns
-via DuckDB (`file_row_number between …`) took **1.0–1.2 s**. This is why
-Python pqx reads row groups directly with PyArrow, and the Go reader must do
-the same with `arrow-go`.
+For question 4, the window at row 5,000,000 (100 rows) on SSSource, three runs each:
+
+| reader | all 185 columns | 15 columns |
+|---|---|---|
+| DuckDB from Go | 1.0–1.2 s | |
+| DuckDB from Python | 0.97–1.06 s | 77–96 ms |
+| PyArrow, one row group | 0.35–1.96 s | 43–113 ms |
+
+Go's DuckDB matches Python's. All readers are slow on all columns because
+SSSource's row groups hold about 1M rows and it has no page index: each
+requested column is decoded for the whole row group. **Lazy columns are what
+keep paging fast**, so fetching only the columns on screen is required.
+Reading row groups directly (PyArrow, `arrow-go` in Go) was about 1.5–2×
+faster than DuckDB at 15 columns, so it's worth having, with a per-window
+choice of reader as in Python's `window_cost`.
 
 ## Layout
 
