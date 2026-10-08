@@ -10,6 +10,7 @@ require (
 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/duckdb/duckdb-go/v2 v2.10506.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
