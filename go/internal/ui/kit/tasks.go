@@ -23,11 +23,12 @@ type Tasks struct {
 }
 
 type task struct {
-	id      int
-	label   string
-	user    bool
-	started time.Time
-	cancel  context.CancelFunc
+	id         int
+	label      string
+	user       bool
+	background bool
+	started    time.Time
+	cancel     context.CancelFunc
 }
 
 // DoneMsg carries a task's result. The root passes it on only if the task is
@@ -57,6 +58,15 @@ func (t *Tasks) Run(tag, label string, user bool, fn func(ctx context.Context) t
 	}
 }
 
+// RunBackground is Run for work that is neither the user's nor shown as
+// busy (the footer scan): it doesn't count for Busy, BusyUser or List, and
+// Esc's CancelAll leaves it running. Cancel and Stop cancel it.
+func (t *Tasks) RunBackground(tag string, fn func(ctx context.Context) tea.Msg) tea.Cmd {
+	cmd := t.Run(tag, "", false, fn)
+	t.running[tag].background = true
+	return cmd
+}
+
 // Done is called by the root with each DoneMsg: it reports whether the
 // result is current (and marks the task finished).
 func (t *Tasks) Done(m DoneMsg) bool {
@@ -81,14 +91,23 @@ func (t *Tasks) Cancel(tag string) {
 // parts can note what to retry (CancelledMsg is broadcast with them).
 func (t *Tasks) CancelAll() []string {
 	tags := make([]string, 0, len(t.running))
-	for tag := range t.running {
-		tags = append(tags, tag)
+	for tag, r := range t.running {
+		if !r.background {
+			tags = append(tags, tag)
+		}
 	}
 	sort.Strings(tags)
 	for _, tag := range tags {
 		t.Cancel(tag)
 	}
 	return tags
+}
+
+// Stop cancels every task, background ones too (quit).
+func (t *Tasks) Stop() {
+	for tag := range t.running {
+		t.Cancel(tag)
+	}
 }
 
 // CancelledMsg is broadcast after Esc cancelled the tasks Tags.
@@ -98,10 +117,17 @@ type CancelledMsg struct{ Tags []string }
 func (t *Tasks) Running(tag string) bool { _, ok := t.running[tag]; return ok }
 
 // Busy reports whether any task runs; BusyUser whether a user task does.
-func (t *Tasks) Busy() bool { return len(t.running) > 0 }
+func (t *Tasks) Busy() bool {
+	for _, r := range t.running {
+		if !r.background {
+			return true
+		}
+	}
+	return false
+}
 func (t *Tasks) BusyUser() bool {
 	for _, r := range t.running {
-		if r.user {
+		if r.user && !r.background {
 			return true
 		}
 	}
@@ -119,6 +145,9 @@ type TaskInfo struct {
 func (t *Tasks) List() []TaskInfo {
 	out := make([]TaskInfo, 0, len(t.running))
 	for tag, r := range t.running {
+		if r.background {
+			continue
+		}
 		out = append(out, TaskInfo{tag, r.label, r.user, r.started})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Started.Before(out[j].Started) })

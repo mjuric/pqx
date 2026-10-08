@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/mjuric/pqx/go/internal/ui/kit"
 	"strings"
 	"testing"
 
@@ -16,9 +17,9 @@ type paneled struct {
 	inner int
 }
 
-func (p *paneled) Panels(w, h int) []Panel {
+func (p *paneled) Panels(w, h int) []kit.Panel {
 	lw := (w - 1) / 2
-	return []Panel{
+	return []kit.Panel{
 		{X: 0, Y: 0, W: lw, H: h, Focused: p.inner == 0, Content: "left"},
 		{X: lw + 1, Y: 0, W: w - lw - 1, H: h, Focused: p.inner == 1, Title: styled.New("right", styled.Style{}),
 			Content: "right"},

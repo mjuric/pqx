@@ -207,6 +207,8 @@ func (p *Pane) compute(name string) tea.Cmd {
 // Update implements kit.Pane.
 func (p *Pane) Update(msg tea.Msg) tea.Cmd {
 	switch m := msg.(type) {
+	case kit.TabChangedMsg:
+		return p.setVisible(m.Tab == kit.TabStats)
 	case kit.DoneMsg:
 		if r, ok := m.Msg.(*result); ok && m.Tag == "stats" {
 			return p.done(r)
@@ -309,18 +311,19 @@ func (p *Pane) done(r *result) tea.Cmd {
 	return nil
 }
 
-// Focus implements kit.Focusable. Until the root tells panes which tab is
-// shown, focus stands for it: the tab's body gets focus when it is shown.
+// Focus implements kit.Focusable. The pane has focus only while its tab
+// shows (visibility itself follows kit.TabChangedMsg).
 func (p *Pane) Focus() tea.Cmd {
 	p.focused = true
+	if p.visible {
+		return nil
+	}
 	return p.setVisible(true)
 }
 
-// Blur implements kit.Focusable.
-func (p *Pane) Blur() {
-	p.focused = false
-	p.setVisible(false)
-}
+// Blur implements kit.Focusable: the tab may still show (focus on the
+// filter), so the pane stays visible.
+func (p *Pane) Blur() { p.focused = false }
 
 // Keys implements kit.Pane.
 func (p *Pane) Keys() []kit.KeyHint {
