@@ -19,7 +19,9 @@ import (
 	"github.com/mjuric/pqx/go/internal/ui/footer"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
 	"github.com/mjuric/pqx/go/internal/ui/meta"
+	"github.com/mjuric/pqx/go/internal/ui/plot"
 	"github.com/mjuric/pqx/go/internal/ui/schema"
+	"github.com/mjuric/pqx/go/internal/ui/stats"
 )
 
 var version = "0.0.0-proto" // set with -ldflags "-X main.version=..."
@@ -103,6 +105,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Legacy: ui.Legacy{M: ui.New(ds)},
 		Schema: schema.New(env, footer.New(env)),
 		Meta:   meta.New(env),
+		Stats:  stats.New(env),
+		Plot:   plot.New(env),
 	}
 	p := tea.NewProgram(app.New(env, parts))
 	if _, err := p.Run(); err != nil {
