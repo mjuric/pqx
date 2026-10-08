@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mjuric/pqx/go/internal/data"
+	"github.com/mjuric/pqx/go/internal/fmtx"
 	"github.com/mjuric/pqx/go/internal/styled"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
@@ -284,5 +285,39 @@ func TestRenderStyled(t *testing.T) {
 	tx.Append("b", styled.Style{})
 	if got := ansi.Strip(BasicLook{}.Render(tx)); got != "ab" {
 		t.Fatalf("%q", got)
+	}
+}
+
+// fakeDialogs makes named dialogs.
+type fakeDialogs struct{}
+
+func (fakeDialogs) Goto(int64) kit.Dialog { return &dialog{pane{name: "goto"}} }
+func (fakeDialogs) Format(data.Column, fmtx.Override, data.Value) kit.Dialog {
+	return &dialog{pane{name: "format"}}
+}
+func (fakeDialogs) Columns([]data.Column, map[string]bool, string) kit.Dialog {
+	return &dialog{pane{name: "columns"}}
+}
+func (fakeDialogs) Export() kit.Dialog { return &dialog{pane{name: "export"}} }
+func (fakeDialogs) Help() kit.Dialog   { return &dialog{pane{name: "help"}} }
+
+// "?" opens the help and "e" the export from any tab, but are text while
+// typing (tests/test_app.py::test_quit_key_is_text_in_filter).
+func TestHelpAndExportKeys(t *testing.T) {
+	a, ps := setup(t)
+	a.env.Dialogs = fakeDialogs{}
+	for _, tc := range []struct{ key, tab, dialog string }{{"?", "1", "help"}, {"e", "1", "export"}, {"?", "3", "help"}} {
+		run(a, key(tc.tab))
+		run(a, key(tc.key))
+		if len(a.dialogs) != 1 || a.dialogs[0].(*dialog).name != tc.dialog {
+			t.Fatalf("%s on tab %s: %v", tc.key, tc.tab, a.dialogs)
+		}
+		run(a, kit.CloseDialogMsg{})
+	}
+	run(a, key("/"))
+	run(a, key("?"))
+	run(a, key("e"))
+	if len(a.dialogs) != 0 || strings.Join(ps["filter"].keys, "") != "?e" {
+		t.Fatalf("dialogs %v filter keys %v", a.dialogs, ps["filter"].keys)
 	}
 }

@@ -193,12 +193,25 @@ func (a *App) onKey(k tea.KeyPressMsg) tea.Cmd {
 			return a.quit()
 		case "/":
 			return a.setFocus("filter")
+		case "?":
+			if a.env.Dialogs != nil {
+				return kit.Send(kit.OpenDialogMsg{Dialog: a.env.Dialogs.Help()})
+			}
+		case "e":
+			if a.env.Dialogs != nil {
+				return kit.Send(kit.OpenDialogMsg{Dialog: a.env.Dialogs.Export()})
+			}
 		case "esc":
 			return a.escape(k)
-		case "tab":
-			return a.cycleFocus(1)
-		case "shift+tab":
-			return a.cycleFocus(-1)
+		case "tab", "shift+tab":
+			d := 1
+			if s == "shift+tab" {
+				d = -1
+			}
+			if f, ok := a.focused().(InnerFocus); ok && f.CycleFocus(d) {
+				return nil
+			}
+			return a.cycleFocus(d)
 		}
 	} else if s == "esc" {
 		return a.escape(k)
@@ -470,6 +483,15 @@ func (a *App) render() (string, *tea.Cursor) {
 	default:
 		name := tabPane(a.tab)
 		p := a.parts()[name]
+		if pp, ok := p.(Paneled); ok {
+			a.regions = append(a.regions, region{name, p, 0, top, a.w, bodyH})
+			lines := strings.Split(a.panels(pp, a.w, bodyH, tabs, a.focus == name), "\n")
+			for i := range lines {
+				lines[i] = fitLine(lines[i], a.w)
+			}
+			b.WriteString(strings.Join(lines, "\n"))
+			break
+		}
 		inner := place(name, p, 2, top+1, max(1, a.w-4), bodyH-2)
 		b.WriteString(a.frame(inner, a.w, bodyH, tabs, nil2(p), a.focus == name, p))
 	}

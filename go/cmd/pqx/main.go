@@ -14,8 +14,13 @@ import (
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/ui"
 	"github.com/mjuric/pqx/go/internal/ui/app"
+	"github.com/mjuric/pqx/go/internal/ui/chrome"
+	"github.com/mjuric/pqx/go/internal/ui/dialogs"
+	"github.com/mjuric/pqx/go/internal/ui/footer"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
+	"github.com/mjuric/pqx/go/internal/ui/meta"
 	"github.com/mjuric/pqx/go/internal/ui/plot"
+	"github.com/mjuric/pqx/go/internal/ui/schema"
 	"github.com/mjuric/pqx/go/internal/ui/stats"
 )
 
@@ -94,8 +99,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		State: &kit.State{Total: ds.NumRows(), Columns: ds.Columns(), FileRow: 0},
 		Tasks: kit.NewTasks(),
 	}
+	env.Dialogs = dialogs.New(env)
 	parts := app.Parts{
+		Chrome: chrome.New(env),
 		Legacy: ui.Legacy{M: ui.New(ds)},
+		Schema: schema.New(env, footer.New(env)),
+		Meta:   meta.New(env),
 		Stats:  stats.New(env),
 		Plot:   plot.New(env),
 	}
