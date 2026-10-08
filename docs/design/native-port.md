@@ -2,7 +2,8 @@
 
 Status: investigation done 2026-10-08; prototype built and measured the same day
 (see [Prototype results](#prototype-results)). Recommendation: go ahead with the
-full port, after the user decides. This document is the
+full port, after the user decides. The plan for the full port is in
+[go-port.md](go-port.md). This document is the
 handoff to the agent who continues the work: it records what was asked, what
 was found, what was decided, and what is still unverified.
 
