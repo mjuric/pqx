@@ -176,7 +176,7 @@ func (g *Grid) rowRange(a, b int64) (int64, int64) {
 }
 
 // ensureRows reads the rows within half a screen of the screen if any of
-// them isn't read, a screen each side. A read already running that covers
+// them isn't read, a screen each side, for the columns on screen. A read already running that covers
 // them is left alone; otherwise it is replaced.
 func (g *Grid) ensureRows() tea.Cmd {
 	n := int64(g.bodyH())
@@ -196,9 +196,11 @@ func (g *Grid) ensureRows() tea.Cmd {
 	if fa >= fb {
 		return nil
 	}
+	// only the columns on screen: the first draw waits for this read, whose
+	// cost follows the columns; those near the screen follow ("cols")
 	cols := g.allNames()
 	if d.ids {
-		cols = g.nearNames(1)
+		cols = g.nearNames(0)
 	}
 	req := fetchReq{gen: d.gen, start: fa, n: int(fb - fa), cols: cols}
 	if g.page != nil && g.env.Tasks.Running("page") && g.page.covers(req) {
@@ -268,9 +270,8 @@ func (g *Grid) runCols(req colsReq, label string) tea.Cmd {
 	})
 }
 
-// readColumns reads req's columns for its rows: by position in the plain
-// view (where rows are file rows), else by file row; a data layer without
-// FetchColumns yet is asked for the view's rows by position.
+// readColumns reads req's columns for its rows, by file row; a data layer
+// without FetchColumns yet is asked for the view's rows by position.
 func readColumns(ctx context.Context, ds data.Dataset, view data.View, req colsReq) (data.Window, error) {
 	lo, hi := req.rows[0], req.rows[len(req.rows)-1]+1
 	byPos := func() (data.Window, error) {
@@ -293,9 +294,6 @@ func readColumns(ctx context.Context, ds data.Dataset, view data.View, req colsR
 			return out, errors.New("the view ended early")
 		}
 		return out, nil
-	}
-	if view.Plain() {
-		return byPos()
 	}
 	w, err := ds.FetchColumns(ctx, req.fileRows, req.cols)
 	if errors.Is(err, data.ErrNotImplemented) {
@@ -389,15 +387,19 @@ func (g *Grid) onPage(r pageResult) tea.Cmd {
 		}
 		req := r.req
 		g.failed = &req
-		return tea.Batch(kit.Notify(kit.Error, "Query failed: "+firstLine(r.err)),
-			kit.Send(kit.StatusMsg{Severity: kit.Error, Text: "read failed: " + firstLine(r.err)}))
+		msg := fmtx.Sanitize(truncRunes(firstLine(r.err), 160), false)
+		return tea.Batch(
+			kit.Send(kit.NotifyMsg{Severity: kit.Error, Title: "✗ Query failed", Text: fmtx.Sanitize(truncRunes(r.err.Error(), 600), true)}),
+			kit.Send(kit.StatusMsg{Severity: kit.Error, Text: "read failed: " + msg}))
 	}
-	g.store(r.req.start, r.req.n, r.win)
+	g.keepCursorInView(func() {
+		g.store(r.req.start, r.req.n, r.win)
+		g.reserve(nil)
+	})
 	if r.win.Len < r.req.n {
 		req := r.req
 		g.failed = &req // a short read: reading it again tells nothing new
 	}
-	g.reserve(nil)
 	g.v.confirmed = true
 	g.prev = nil
 	cmds := []tea.Cmd{g.failedNotice(r.win.Failed), g.runWaiters(), g.refreshed(), g.startFooter()}
@@ -434,21 +436,23 @@ func (g *Grid) onCols(r colsResult) tea.Cmd {
 		return tea.Batch(g.failedNotice(failed), g.refreshed())
 	}
 	d := g.v
-	for name, vals := range r.win.Cols {
-		for i, row := range req.rows {
-			if i >= len(vals) {
-				break
+	g.keepCursorInView(func() {
+		for name, vals := range r.win.Cols {
+			for i, row := range req.rows {
+				if i >= len(vals) {
+					break
+				}
+				if fr, ok := d.fileRow[row]; !ok || fr != req.fileRows[i] {
+					continue // evicted meanwhile
+				}
+				if _, ok := d.cell(name, row); ok {
+					continue // never replace what is there
+				}
+				d.set(name, row, vals[i])
 			}
-			if fr, ok := d.fileRow[row]; !ok || fr != req.fileRows[i] {
-				continue // evicted meanwhile
-			}
-			if _, ok := d.cell(name, row); ok {
-				continue // never replace what is there
-			}
-			d.set(name, row, vals[i])
+			g.fitValues(name, vals)
 		}
-		g.fitValues(name, vals)
-	}
+	})
 	g.markFailed(req, r.win.Failed)
 	return tea.Batch(g.failedNotice(r.win.Failed), g.runWaiters(), g.refreshed())
 }

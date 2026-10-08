@@ -21,7 +21,7 @@ import (
 // to Update on the test goroutine. It records notices, status messages,
 // copies and the dialogs opened.
 type harness struct {
-	t    *testing.T
+	t    testing.TB
 	app  *app.App
 	g    *Grid
 	f    *filter.Filter
@@ -67,7 +67,7 @@ type hopts struct {
 	session map[string]fmtx.Override
 }
 
-func newHarness(t *testing.T, ds data.Dataset, w, h int, o ...hopts) *harness {
+func newHarness(t testing.TB, ds data.Dataset, w, h int, o ...hopts) *harness {
 	t.Helper()
 	var op hopts
 	if len(o) > 0 {

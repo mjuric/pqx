@@ -104,7 +104,8 @@ type Grid struct {
 	footer        map[string][2]data.Value
 	footerStarted bool
 
-	sgr map[styled.Style]sgrPair // see render.go
+	sgr     map[styled.Style]sgrPair // see render.go
+	formats int                      // values formatted (for tests)
 }
 
 // saved is a view and the cursor on it, kept so a view that fails on its

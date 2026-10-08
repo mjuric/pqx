@@ -220,15 +220,20 @@ func (g *Grid) pin() tea.Cmd {
 // onColumnsChanged takes State.Hidden and Pinned: the cursor stays on its
 // column, or the one now in its place; the view keeps its leftmost column,
 // or the first one right of it still shown.
-func (g *Grid) onColumnsChanged() tea.Cmd {
-	curName, leftName := g.curName(), ""
+func (g *Grid) onColumnsChanged() tea.Cmd { return g.applyColumns(g.curName()) }
+
+// applyColumns takes State.Hidden and Pinned: the cursor goes to column
+// target, or stays where it is if that isn't shown; the view keeps its
+// leftmost column, or the first one right of it still shown.
+func (g *Grid) applyColumns(target string) tea.Cmd {
+	leftName := ""
 	idx := g.curCol
 	if g.left < len(g.cols) {
 		leftName = g.cols[g.left].Name
 	}
 	old := g.cols
 	g.setColumns()
-	if i, ok := g.byName[curName]; ok {
+	if i, ok := g.byName[target]; ok {
 		g.curCol = i
 	} else {
 		g.curCol = min(idx, len(g.cols)-1)
@@ -278,12 +283,7 @@ func (g *Grid) onColumnsPicked(visible []string) tea.Cmd {
 			g.st.Hidden[c.Name] = true
 		}
 	}
-	cmd := g.onColumnsChanged()
-	if i, ok := g.byName[g.st.Current]; ok {
-		g.curCol = i
-	}
-	g.hiddenHint = ""
-	return tea.Batch(cmd, g.moved(), kit.Send(kit.ColumnsChangedMsg{}))
+	return tea.Batch(g.applyColumns(g.st.Current), kit.Send(kit.ColumnsChangedMsg{}))
 }
 
 // onColumnChanged follows another part's current column: the cursor goes

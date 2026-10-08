@@ -435,7 +435,7 @@ func TestHorizontalScroll(t *testing.T) {
 		t.Fatal("End didn't scroll right")
 	}
 	calls := ds.log()
-	if len(calls) == 0 || calls[len(calls)-1].kind != "fetch" || !slices.Contains(calls[len(calls)-1].cols, "c299") {
+	if len(calls) == 0 || calls[len(calls)-1].kind != "columns" || !slices.Contains(calls[len(calls)-1].cols, "c299") {
 		t.Errorf("columns scrolled in weren't read: %+v", calls)
 	}
 	hdr = h.grid()[0]

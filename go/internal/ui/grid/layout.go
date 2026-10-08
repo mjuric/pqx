@@ -25,6 +25,7 @@ func (g *Grid) opts(c column) fmtx.Opts {
 
 // format formats one value of column c.
 func (g *Grid) format(c column, v any) cellTx {
+	g.formats++
 	switch v.(type) {
 	case failedCell:
 		return cellTx{plain: cells.FailedMark, w: 1, style: g.look.Style("error"), just: just(c)}
@@ -143,6 +144,7 @@ func (g *Grid) fitValues(name string, vals []data.Value) {
 	}
 	w := 0
 	for _, v := range cand {
+		g.formats++
 		w = max(w, cells.Width(fmtx.Format(v, c.kind, g.opts(c))))
 	}
 	g.grow(name, w)
@@ -311,6 +313,16 @@ func (g *Grid) colsNear(screens int) []int {
 		}
 	}
 	return out
+}
+
+// keepCursorInView runs fn (which may widen columns) and, if that pushed
+// the cursor's cell, on screen until then, off it, scrolls it back.
+func (g *Grid) keepCursorInView(fn func()) {
+	was := g.cursorInView()
+	fn()
+	if was && !g.cursorInView() {
+		g.scrollToColumn()
+	}
 }
 
 // clampCursor keeps the cursor on a row and column that exist.

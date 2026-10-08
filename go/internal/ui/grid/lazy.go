@@ -211,5 +211,5 @@ func (g *Grid) onFooter(r footerResult) {
 			g.footer[s.Path] = [2]data.Value{s.Min, s.Max}
 		}
 	}
-	g.reserve(nil)
+	g.keepCursorInView(func() { g.reserve(nil) })
 }

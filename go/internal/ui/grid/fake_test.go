@@ -49,6 +49,8 @@ type fakeDS struct {
 	noColumnsAPI bool
 	// footer, if set, is FooterSummary's answer.
 	footer []data.ChunkSummary
+	// special, if set, overrides truth for some cells.
+	special func(name string, fr int64) (data.Value, bool)
 }
 
 type call struct {
@@ -94,6 +96,16 @@ func truth(name string, fr int64) data.Value {
 	}
 	j, _ := strconv.Atoi(name[1:])
 	return fr*1000 + int64(j)
+}
+
+// value is the value of column name at file row fr.
+func (f *fakeDS) value(name string, fr int64) data.Value {
+	if f.special != nil {
+		if v, ok := f.special(name, fr); ok {
+			return v
+		}
+	}
+	return truth(name, fr)
 }
 
 func (f *fakeDS) Path() string           { return "/data/test.parquet" }
@@ -222,7 +234,7 @@ func (f *fakeDS) fill(w *data.Window, rows []int64, cols []string) {
 	for _, c := range cols {
 		vals := make([]data.Value, len(rows))
 		for i, fr := range rows {
-			vals[i] = truth(c, fr)
+			vals[i] = f.value(c, fr)
 		}
 		w.Cols[c] = vals
 	}
