@@ -192,3 +192,94 @@ async def test_a_record_found_later_gets_its_screen_row(demo_path, demo):
         assert record(app) == 15_000
         assert g.abs_row == position(demo.band == band, 15_000) > g.window
         assert g.screen_row() == 15 and leftmost(app) == "ra"
+
+
+async def pinned_place(pilot, app) -> GridTable:
+    """Three columns pinned, the cursor on a pinned one (ssObjectId), mag the leftmost scrollable."""
+    g = app.query_one(GridTable)
+    await pilot.press("g", *"15004", "enter")
+    await settle(pilot, app)
+    g.move_cursor(column=app.cols_shown.index("ra"), animate=False)
+    await pilot.press("p")
+    await pilot.pause(0.05)
+    assert g.fixed_columns == 3
+    g.move_cursor(column=app.cols_shown.index("ssObjectId"), animate=False)
+    await pilot.pause(0.05)
+    g.scroll_to(x=g.scroll_x_for(app.cols_shown.index("mag")), animate=False, immediate=True)
+    await pilot.pause(0.05)
+    assert leftmost(app) == "mag" and g.scroll_x > 0
+    return g
+
+
+async def test_a_cursor_in_a_pinned_column_keeps_the_leftmost_column(demo_path):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = await pinned_place(pilot, app)
+        for keys in (["down"], ["pagedown"], ["g", *"2000", "enter"], ["up"]):  # moves, and a page load
+            await pilot.press(*keys)
+            await settle(pilot, app)
+            assert leftmost(app) == "mag", keys
+            assert app.cols_shown[g.cursor_column] == "ssObjectId"
+        fr = record(app)
+        await pilot.press("equals_sign")
+        await settle(pilot, app)
+        assert app.view.where.startswith("ssObjectId") and record(app) == fr and leftmost(app) == "mag"
+        await pilot.press("x")
+        await settle(pilot, app)
+        assert app.view.is_trivial and g.abs_row == fr and leftmost(app) == "mag"
+        await pilot.press("s")
+        await settle(pilot, app)
+        assert app.view.order_by == [("ssObjectId", False)] and leftmost(app) == "mag"
+
+
+async def test_a_failed_page_forgets_the_screen_row(demo_path, demo):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = await place(pilot, app, 15_000, "detector", "psfFlux", 15)
+        await pilot.press("equals_sign")
+        await settle(pilot, app)
+        assert g.screen_row() == 15
+        real = app.ds.fetch
+
+        def fetch(view, *a, **kw):
+            if view.is_trivial:
+                raise RuntimeError("no page")
+            return real(view, *a, **kw)
+        app.ds.fetch = fetch
+        await pilot.press("x")  # the plain view's page fails
+        await settle(pilot, app)
+        assert app._anchor_row is None and app._anchor_left is None
+        app.ds.fetch = real
+        await pilot.press("g", *"5000", "enter")
+        await settle(pilot, app)
+        assert g.abs_row == 5000 and g.screen_row() == g.visible_rows() - 1  # scrolled to, not to row 15
+
+
+async def test_an_empty_result_keeps_the_leftmost_column(demo_path):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = await place(pilot, app, 15_000, "detector", "psfFlux", 15)
+        await pilot.press("slash", *"band = 'nope'", "enter")
+        await settle(pilot, app)
+        assert app.total == 0 and g.row_count == 0 and g.scroll_x > 0  # (as far as the header goes)
+        await pilot.press("slash", *["backspace"] * 20, *"band = 'r'", "enter")
+        await settle(pilot, app)
+        assert app.view.where == "band = 'r'" and g.row_count and leftmost(app) == "psfFlux"
+
+
+async def test_hiding_a_column_keeps_the_leftmost_column(demo_path):
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        g = await place(pilot, app, 15_000, "mag", "psfFlux", 15)
+        await pilot.press("minus")  # mag: psfFlux stays leftmost
+        await settle(pilot, app)
+        assert "mag" not in app.cols_shown and leftmost(app) == "psfFlux"
+        g.move_cursor(column=app.cols_shown.index("psfFlux"), animate=False)
+        await pilot.pause(0.05)
+        await pilot.press("minus")  # the leftmost one: the next one right of it is
+        await settle(pilot, app)
+        assert "psfFlux" not in app.cols_shown and leftmost(app) == "psfFluxErr"

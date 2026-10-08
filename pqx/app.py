@@ -32,6 +32,7 @@ from textual.color import Color
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
 from textual.css.query import NoMatches
+from textual.geometry import Region
 from textual.message import Message
 from textual.renderables.styled import Styled
 from textual.suggester import Suggester
@@ -734,6 +735,18 @@ class GridTable(DataTable):
         if self._growth != start and cursor_was_in_view and not self.cursor_cell_in_view():
             self._scroll_cursor_into_view()
 
+    def _scroll_cursor_into_view(self, animate: bool = False) -> None:
+        """DataTable's, except that a cursor in a pinned column scrolls only vertically: DataTable
+        takes the pinned cell's region at its table position, left of the scrolled view, and
+        scrolls all the way left to show a cell that's on screen anyway."""
+        if self.cursor_type == "cell" and self.cursor_column < self.fixed_columns:
+            spacing = self._get_fixed_offset()
+            row = self._get_row_region(self.cursor_row)
+            region = Region(int(self.scroll_x) + spacing.left, row.y, 1, row.height)
+            self.scroll_to_region(region, animate=animate, spacing=spacing, force=True)
+            return
+        super()._scroll_cursor_into_view(animate)
+
     def cursor_cell_in_view(self) -> bool:
         """Whether the cursor cell is wholly on screen horizontally (a pinned one always is)."""
         if self.cursor_type != "cell" or self.cursor_column < self.fixed_columns:
@@ -1032,6 +1045,9 @@ class PqxApp(App):
         #: show the kept record on once it's there (_land_keep; _apply_page in a plain view)
         self._anchor_left: str | None = None
         self._anchor_row: int | None = None
+        #: (leftmost column, scroll_x) an empty result's header was shown with: kept for the next
+        #: view unless the header is scrolled meanwhile
+        self._empty_left: tuple[str, float] | None = None
         self.total: int | None = self.ds.num_rows if self.view.is_trivial else None
         big = self.ds.num_rows > AUTO_SAMPLE_ROWS or self.ds.file_size > AUTO_SAMPLE_BYTES
         self.sampling = big if sample is None else sample
@@ -1364,17 +1380,24 @@ class PqxApp(App):
                 unit = self.ds.column(name).unit
             self.formatters[name] = F.CellFormatter(name, typ, unit, self.col_formats.get(name))
 
-    def _rebuild_columns(self) -> None:
+    def _rebuild_columns(self, follow: bool = False) -> None:
         """Rebuild the grid's columns for ``cols_shown``. If they're the columns shown, the view
         keeps its horizontal place: the leftmost wholly visible scrollable column is remembered
         (by name: widths are refit for the new rows) and shown leftmost again by the next page
-        (_apply_page). Clearing resets the scroll, so it's taken now."""
+        (_apply_page). Clearing resets the scroll, so it's taken now. ``follow``: the columns
+        were picked or hidden: keep the place even so, at the first column from the leftmost
+        one rightwards that's still shown."""
         grid = self.query_one(GridTable)
         self._anchor_left, self._anchor_row = None, None
-        if [c.key.value for c in grid.ordered_columns] == list(self.cols_shown) and grid.row_count:
+        empty, self._empty_left = self._empty_left, None
+        old = [c.key.value for c in grid.ordered_columns]
+        if old and (follow or old == list(self.cols_shown)):  # (an empty result's header counts too)
             first, last, hidden_left, _ = grid.column_window()
-            if hidden_left and first <= last:
-                self._anchor_left = self.cols_shown[first]
+            shown = set(self.cols_shown)
+            if empty is not None and not grid.row_count and grid.scroll_x == empty[1] and empty[0] in shown:
+                self._anchor_left = empty[0]  # (the header of an empty result may not scroll that far)
+            elif hidden_left and first <= last:
+                self._anchor_left = next((n for n in old[first:] if n in shown), None)
         grid.clear(columns=True)
         for name in self.cols_shown:
             grid.add_column(self._column_label(name), key=name)
@@ -1463,7 +1486,7 @@ class PqxApp(App):
         """A window load came to nothing (failed, cancelled, or its view changed meanwhile). If it
         was the newest, the page on screen stays, and its columns load as before."""
         if gen == self._page_gen:
-            self._anchor_left = None
+            self._anchor_left, self._anchor_row = None, None
             if self._keep is not None:
                 self._drop_keep("its page didn't load")  # (the page on the way to it didn't come)
             self._page_gen += 1
@@ -1520,8 +1543,13 @@ class PqxApp(App):
             grid.scroll_cursor_fitted()
             if row_at is not None:
                 grid.show_cursor_at(row_at)
-        else:
+        else:  # (no rows: the header keeps the place, for the next view)
+            if left is not None and left in page.columns:
+                scroll_x = grid.scroll_x_for(page.columns.index(left))
+            grid.scroll_x = scroll_x
             grid.fit_visible()
+            if left is not None:
+                self._empty_left = (left, grid.scroll_x)
         if self.total is None and len(page.rows) < grid.window:
             self.total = page.offset + len(page.rows)  # hit the end: we now know the size
             grid.total = self.total
@@ -2411,7 +2439,7 @@ class PqxApp(App):
                 grid = self.query_one(GridTable)
                 offset, row = grid.offset, grid.abs_row  # before the rebuild resets the cursor
                 self.cols_shown = result
-                self._rebuild_columns()
+                self._rebuild_columns(follow=True)
                 # land on the current column (also the one a hidden-column hint was about)
                 col = result.index(self.current_column) if self.current_column in result else 0
                 self._hidden_hint = None
@@ -2426,7 +2454,7 @@ class PqxApp(App):
         self.cols_shown = [c for c in self.cols_shown if c != name]
         col = min(grid.cursor_column, len(self.cols_shown) - 1)
         offset, row = grid.offset, grid.abs_row  # before the rebuild resets the cursor
-        self._rebuild_columns()
+        self._rebuild_columns(follow=True)
         self.load_window(offset, row, col)
         self.notify(f"Hid {F.sanitize(name)} · c brings it back", timeout=2, markup=False)
 
