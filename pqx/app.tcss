@@ -277,6 +277,7 @@ OptionList > .option-list--option-hover {
 ModalScreen {
     align: center middle;
     background: transparent;
+    padding: 0;  /* Screen's side padding would shift the screen shown behind a dialog */
 }
 
 .dialog {
