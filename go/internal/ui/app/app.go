@@ -193,6 +193,14 @@ func (a *App) onKey(k tea.KeyPressMsg) tea.Cmd {
 			return a.quit()
 		case "/":
 			return a.setFocus("filter")
+		case "?":
+			if a.env.Dialogs != nil {
+				return kit.Send(kit.OpenDialogMsg{Dialog: a.env.Dialogs.Help()})
+			}
+		case "e":
+			if a.env.Dialogs != nil {
+				return kit.Send(kit.OpenDialogMsg{Dialog: a.env.Dialogs.Export()})
+			}
 		case "esc":
 			return a.escape(k)
 		case "tab", "shift+tab":
