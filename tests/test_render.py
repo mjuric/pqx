@@ -71,7 +71,7 @@ UPSTREAM_SOURCE = {
     "move_cursor": "f312ced43e2c45fd",
     "watch_cursor_coordinate": "a4f113b27d09127b",
     "watch_fixed_columns": "af846fa34a6922c8",
-    "_scroll_cursor_into_view": "9e4419fb40c5be82",
+    "_scroll_cursor_into_view": "9e4419fb40c5be82",  # also overridden: GridTable keeps scroll_x for a pinned cursor
 }
 
 
