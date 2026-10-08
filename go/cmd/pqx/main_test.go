@@ -22,6 +22,11 @@ func TestRun(t *testing.T) {
 		{[]string{"--threads", "x", "f"}, 2, "", "invalid value"},
 		{[]string{"--threads", "-1", "f"}, 2, "", "--threads must be 0 or more"},
 		{[]string{"--threads", "4", "/nonexistent/file.parquet"}, 1, "", "pqx: /nonexistent/file.parquet: "},
+		{[]string{"/nonexistent/file.parquet", "--threads", "4"}, 1, "", "pqx: /nonexistent/file.parquet: "},
+		{[]string{"/nonexistent/file.parquet", "--threads=4"}, 1, "", "pqx: /nonexistent/file.parquet: "},
+		{[]string{"/nonexistent/f", "--version"}, 0, "pqx (Go prototype)", ""},
+		{[]string{"/nonexistent/f", "--threads", "-1"}, 2, "", "--threads must be 0 or more"},
+		{[]string{"--", "-odd-name.parquet"}, 1, "", "pqx: -odd-name.parquet: "},
 	}
 	for _, c := range cases {
 		var out, errb bytes.Buffer

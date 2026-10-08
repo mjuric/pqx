@@ -23,19 +23,21 @@ func (m *Model) View() tea.View {
 	if !m.quitting {
 		content = m.Render()
 	}
+	small := m.tooSmall()
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = "pqx " + sanitizeTitle(m.name)
-	switch m.focus {
-	case focusFilter:
+	switch {
+	case small:
+	case m.focus == focusFilter:
 		if c := m.filter.Cursor(); c != nil {
 			c.Position.X += 2 + len("where") + 1
 			c.Position.Y += filterTop + 1
 			c.Color = nil
 			v.Cursor = c
 		}
-	case focusGoto:
+	case m.focus == focusGoto:
 		if c := m.gotoIn.Cursor(); c != nil {
 			c.Position.X += textWidth(gotoPrompt)
 			c.Position.Y += m.h - 2
@@ -59,10 +61,21 @@ func sanitizeTitle(s string) string {
 
 const gotoPrompt = "go to row: "
 
+// The smallest screen the layout fits: the chrome and one body row.
+const (
+	minW = 24
+	minH = chromeRows + 1
+)
+
+func (m *Model) tooSmall() bool { return m.w < minW || m.h < minH }
+
 // Render draws the screen as text with SGR sequences, one line per row.
 func (m *Model) Render() string {
 	if m.w <= 0 || m.h <= 0 {
 		return ""
+	}
+	if m.tooSmall() {
+		return fit(fmt.Sprintf("terminal too small (%dx%d, need %dx%d)", m.w, m.h, minW, minH), m.w)
 	}
 	var b strings.Builder
 	b.Grow(m.w * m.h * 3)
@@ -270,11 +283,13 @@ func (m *Model) statusLine() string {
 	var b strings.Builder
 	b.WriteString(boldFg(fgCyan, sanitizeTitle(m.name)))
 	b.WriteString(sep)
+	// the count, or the end a short read found before the count arrived
+	lim := m.v.limit()
 	total := "?"
-	if m.v.total >= 0 {
-		total = commas(m.v.total)
+	if lim >= 0 {
+		total = commas(lim)
 	}
-	if m.v.total == 0 {
+	if lim == 0 {
 		b.WriteString("no rows")
 	} else {
 		fmt.Fprintf(&b, "row %s of %s", commas(m.curRow+1), total)

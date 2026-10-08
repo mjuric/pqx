@@ -79,6 +79,7 @@ type fetchMsg struct {
 }
 
 type countMsg struct {
+	id  int
 	gen int
 	n   int64
 	err error
@@ -166,6 +167,7 @@ type Model struct {
 
 	counting    bool
 	countCancel context.CancelFunc
+	countID     int
 	countStart  time.Time
 
 	focus     focusKind
@@ -213,6 +215,7 @@ func New(ds data.Dataset) *Model {
 	m.v = newViewData(0, data.View{}, cols)
 	m.v.total = ds.NumRows()
 	m.v.known = m.v.total
+	m.v.confirmed = true
 	m.filter = newInput("")
 	m.gotoIn = newInput("1234, 1.5M, 50%, -1")
 	m.hint = "SQL WHERE expression, e.g. x > 0"
@@ -362,7 +365,7 @@ func (m *Model) onKey(k tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+home":
 		m.curRow = 0
 	case "ctrl+end":
-		if m.v.total < 0 {
+		if m.v.limit() < 0 {
 			m.setMsg(msgWarn, "still counting rows: went to the last row loaded so far")
 		}
 		m.curRow = m.v.lastRow()
@@ -400,13 +403,20 @@ func (m *Model) quit() tea.Cmd {
 	return tea.Quit
 }
 
-// escape cancels user-started work (the count); with nothing running it
-// clears the message.
+// escape cancels running work: the count and any fetch. Cells not loaded
+// keep their placeholders; the next move fetches them again. With nothing
+// running it clears the message.
 func (m *Model) escape() {
+	fetching := m.inflight != nil
+	m.cancelFetch()
 	if m.counting {
 		m.countCancel()
 		m.counting = false
 		m.setMsg(msgWarn, "count cancelled; the row count is unknown")
+		return
+	}
+	if fetching {
+		m.setMsg(msgWarn, "loading cancelled")
 		return
 	}
 	m.setMsg(msgNone, "")
@@ -430,7 +440,7 @@ func (m *Model) closeFilter() {
 func (m *Model) onFilterKey(k tea.KeyPressMsg, s string) tea.Cmd {
 	switch s {
 	case "esc":
-		if m.counting {
+		if m.busy() {
 			m.escape()
 			return nil
 		}
@@ -485,7 +495,7 @@ func (m *Model) goTo(spec string) tea.Cmd {
 	if strings.TrimSpace(spec) == "" {
 		return nil
 	}
-	total := m.v.total
+	total := m.v.limit()
 	unknown := total < 0
 	if unknown {
 		t := strings.TrimSpace(spec)
@@ -526,6 +536,11 @@ func (m *Model) applyFilter(text string) tea.Cmd {
 	}
 	m.closeFilter()
 	if where == m.v.view.Where {
+		if !m.counting && m.v.total < 0 && m.v.upper < 0 {
+			// its count was cancelled: count again
+			m.setMsg(msgNone, "")
+			return tea.Batch(m.startCount(), m.startTick())
+		}
 		return nil
 	}
 	return m.setView(data.View{Where: where})
@@ -555,12 +570,12 @@ func (m *Model) setView(v data.View) tea.Cmd {
 	m.v = newViewData(m.gen, v, m.cols)
 	m.failed = nil
 	m.curRow, m.top = 0, 0
+	m.setMsg(msgNone, "")
 	var cmds []tea.Cmd
 	if v.Plain() {
 		m.v.total = m.ds.NumRows()
 		m.v.known = m.v.total
 		m.v.confirmed = true
-		m.setMsg(msgNone, "")
 	} else {
 		cmds = append(cmds, m.startCount())
 	}
@@ -571,18 +586,23 @@ func (m *Model) setView(v data.View) tea.Cmd {
 
 func (m *Model) startCount() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
+	m.countID++
 	m.counting, m.countCancel, m.countStart = true, cancel, m.now()
-	ds, view, gen := m.ds, m.v.view, m.v.gen
-	m.setMsg(msgNone, "")
+	ds, view, gen, id := m.ds, m.v.view, m.v.gen, m.countID
 	return func() tea.Msg {
 		n, err := ds.Count(ctx, view)
-		return countMsg{gen: gen, n: n, err: err}
+		if ctx.Err() != nil {
+			// cancelled: whatever the error says (DuckDB answers an
+			// interrupt with its own "INTERRUPT Error")
+			err = ctx.Err()
+		}
+		return countMsg{id: id, gen: gen, n: n, err: err}
 	}
 }
 
 func (m *Model) onCount(msg countMsg) tea.Cmd {
-	if msg.gen != m.v.gen || !m.counting {
-		return nil // an old view's count, or one cancelled with Esc
+	if msg.id != m.countID || msg.gen != m.v.gen || !m.counting {
+		return nil // an old count: another view's, or one cancelled
 	}
 	m.counting = false
 	m.countCancel()
@@ -627,7 +647,8 @@ func (m *Model) revert(err error) tea.Cmd {
 	m.v = p.v
 	m.curRow, m.top, m.curCol, m.left = p.curRow, p.top, p.curCol, p.left
 	m.failed = nil
-	m.setMsg(msgErr, "query failed: "+err.Error()+"  · previous view kept")
+	// the error itself is shown in the filter box
+	m.setMsg(msgErr, "query failed; previous view kept")
 	m.focus = focusFilter
 	m.filter.SetValue(where)
 	m.filter.CursorEnd()
@@ -718,7 +739,7 @@ func (m *Model) layout() []slot {
 // fetch already running that covers them is left alone; otherwise it is
 // cancelled and replaced.
 func (m *Model) ensure() tea.Cmd {
-	if m.w == 0 || len(m.cols) == 0 {
+	if m.w == 0 || len(m.cols) == 0 || m.tooSmall() {
 		return nil
 	}
 	n := int64(m.bodyH())
@@ -766,6 +787,9 @@ func (m *Model) ensure() tea.Cmd {
 	ds, view := m.ds, d.view
 	fetch := func() tea.Msg {
 		w, err := ds.Fetch(ctx, view, req.start, req.n, req.cols)
+		if ctx.Err() != nil {
+			err = ctx.Err() // superseded, whatever the error says
+		}
 		return fetchMsg{req: req, win: w, err: err}
 	}
 	return tea.Batch(fetch, m.startTick())
@@ -808,20 +832,23 @@ func (m *Model) onFetch(msg fetchMsg) tea.Cmd {
 	return m.ensure()
 }
 
-// store adds a fetched window to the cache.
+// store adds a fetched window to the cache. Positions come from the request
+// (a Window starts where it was asked to); a short read (fewer than n rows)
+// means the view ends there.
 func (m *Model) store(req fetchReq, w data.Window) {
 	d := m.v
-	if w.Len < req.n && (w.Len > 0 || w.Start == 0) && d.total < 0 {
-		// a short read reaches the end of the view: its row count is exact
-		d.upper = w.Start + int64(w.Len)
-	} else if w.Len == 0 && d.total < 0 && (d.upper < 0 || w.Start < d.upper) {
-		d.upper = w.Start
+	start := req.start
+	if w.Len < req.n && d.total < 0 {
+		end := start + int64(w.Len)
+		if d.upper < 0 || end < d.upper {
+			d.upper = end
+		}
 	}
-	if end := w.Start + int64(w.Len); end > d.known {
+	if end := start + int64(w.Len); end > d.known {
 		d.known = end
 	}
 	for i := 0; i < w.Len && i < len(w.FileRows); i++ {
-		r, fr := w.Start+int64(i), w.FileRows[i]
+		r, fr := start+int64(i), w.FileRows[i]
 		d.fileRow[r] = fr
 		d.labelW = max(d.labelW, textWidth(commas(fr)))
 	}
@@ -837,14 +864,14 @@ func (m *Model) store(req fetchReq, w data.Window) {
 		}
 		cw := d.colW[ci]
 		for i, s := range vals {
-			col[w.Start+int64(i)] = s
+			col[start+int64(i)] = s
 			if cw < maxColWidth {
 				cw = max(cw, min(maxColWidth, textWidth(s)))
 			}
 		}
 		d.colW[ci] = cw
 	}
-	if !m.hintSet && d.view.Plain() && w.Start == 0 && w.Len > 0 {
+	if !m.hintSet && d.view.Plain() && start == 0 && w.Len > 0 {
 		m.hintSet = true
 		m.hint = filterHint(m.cols, d, m.right)
 		m.filter.Placeholder = m.hint
@@ -900,7 +927,7 @@ func (m *Model) onWheel(ms tea.Mouse) tea.Cmd {
 }
 
 func (m *Model) onClick(ms tea.Mouse) tea.Cmd {
-	if ms.Button != tea.MouseLeft {
+	if ms.Button != tea.MouseLeft || m.tooSmall() {
 		return nil
 	}
 	if ms.Y >= filterTop && ms.Y < gridTop {

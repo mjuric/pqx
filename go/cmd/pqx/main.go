@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -40,7 +41,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	showVersion := fs.Bool("version", false, "")
 	help := fs.Bool("help", false, "")
 	fs.BoolVar(help, "h", false, "")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(flagsFirst(args)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stdout, usage)
 			return 0
@@ -77,4 +78,29 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// flagsFirst moves options ahead of the file name, so that "pqx FILE
+// --threads 4" works as well as "pqx --threads 4 FILE" (the flag package
+// stops at the first argument that isn't an option). "--" ends the options.
+func flagsFirst(args []string) []string {
+	var flags, rest []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			rest = append(rest, args[i+1:]...)
+			i = len(args)
+		case len(a) > 1 && a[0] == '-':
+			flags = append(flags, a)
+			name := strings.TrimLeft(a, "-")
+			if name == "threads" && i+1 < len(args) { // the one option with a value
+				i++
+				flags = append(flags, args[i])
+			}
+		default:
+			rest = append(rest, a)
+		}
+	}
+	return append(append(flags, "--"), rest...)
 }

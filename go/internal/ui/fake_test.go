@@ -13,7 +13,8 @@ import (
 
 // fakeDS is an in-memory data.Dataset. Column "id" holds the file row
 // number; "name" holds "r<row>"; other columns hold "<col>:<row>". A filter
-// "id % K = 0" (any K) keeps every K-th row; "bad" fails on read; anything
+// "id % K = 0" (any K) keeps every K-th row; "none" keeps no rows; "bad"
+// fails on read; anything
 // with an unbalanced parenthesis fails CheckWhere.
 type fakeDS struct {
 	rows int64
@@ -27,6 +28,9 @@ type fakeDS struct {
 
 	// gate, when set, makes Fetch wait for a value (or ctx) before reading.
 	gate chan struct{}
+	// interruptErr, when set, is what a cancelled Fetch or Count returns
+	// instead of ctx.Err(), as DuckDB returns "INTERRUPT Error".
+	interruptErr error
 	// countGate likewise for Count.
 	countGate chan struct{}
 }
@@ -86,6 +90,9 @@ func step(v data.View) (int64, error) {
 }
 
 func (f *fakeDS) viewRows(v data.View) (int64, int64, error) {
+	if v.Where == "none" {
+		return 1, 0, nil
+	}
 	k, err := step(v)
 	if err != nil {
 		return 0, 0, err
@@ -105,6 +112,9 @@ func (f *fakeDS) Fetch(ctx context.Context, v data.View, start int64, n int, col
 			f.mu.Lock()
 			f.cancelled++
 			f.mu.Unlock()
+			if f.interruptErr != nil {
+				return data.Window{}, f.interruptErr
+			}
 			return data.Window{}, ctx.Err()
 		}
 	}
@@ -149,6 +159,9 @@ func (f *fakeDS) Count(ctx context.Context, v data.View) (int64, error) {
 			f.mu.Lock()
 			f.countsCan++
 			f.mu.Unlock()
+			if f.interruptErr != nil {
+				return 0, f.interruptErr
+			}
 			return 0, ctx.Err()
 		}
 	}

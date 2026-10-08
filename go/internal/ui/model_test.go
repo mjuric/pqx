@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -286,8 +288,8 @@ func TestSupersededFetchIsCancelled(t *testing.T) {
 	if !strings.Contains(h.screen(), "r999999") {
 		t.Errorf("last row not shown:\n%s", h.screen())
 	}
-	if _, ok := h.m.v.cells["id"][0]; ok {
-		t.Errorf("the cancelled fetch stored rows")
+	if h.m.msgKind == msgErr || h.m.failed != nil {
+		t.Errorf("the cancelled fetch was taken for a failure: %q", h.m.msg)
 	}
 }
 
@@ -429,7 +431,7 @@ func TestEscCancelsCount(t *testing.T) {
 	if strings.Contains(s, "counting…") || !strings.Contains(s, "count cancelled") {
 		t.Errorf("status after Esc:\n%s", s)
 	}
-	if !h.m.v.view.Plain() && h.m.v.view.Where != "id % 7 = 0" {
+	if h.m.v.view.Where != "id % 7 = 0" {
 		t.Error("Esc changed the view")
 	}
 }
@@ -613,6 +615,188 @@ func TestCommas(t *testing.T) {
 	for n, want := range map[int64]string{0: "0", 999: "999", 1000: "1,000", 1234567: "1,234,567", -1234: "-1,234"} {
 		if got := commas(n); got != want {
 			t.Errorf("commas(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+// A count cancelled with Esc whose message arrives after a newer count of the
+// same view has started must not stop the newer one.
+func TestLateCancelledCountIsIgnored(t *testing.T) {
+	ds := newFake(1000, 3)
+	ds.countGate = make(chan struct{})
+	h := newHarness(t, ds, 80, 20)
+	h.press("/")
+	h.typeText("id % 7 = 0")
+	h.press("enter")
+	genA, idA := h.m.v.gen, h.m.countID
+	h.send(kp("esc")) // cancel A's count; its message is still on the way
+	if h.m.counting {
+		t.Fatal("Esc didn't stop the count")
+	}
+	// a filter that fails on its first read goes back to A and counts again
+	h.send(kp("/"))
+	h.m.filter.SetValue("bad")
+	h.send(kp("enter"))
+	h.waitFor("the revert to A", func() bool { return h.m.v.gen == genA && h.m.counting })
+	h.send(countMsg{id: idA, gen: genA, err: context.Canceled}) // A's old count
+	h.settle()
+	if !h.m.counting || h.m.countID == idA {
+		t.Fatal("the late result of the cancelled count stopped the new one")
+	}
+	if s := h.screen(); !strings.Contains(s, "✗ query failed") || !strings.Contains(s, "counting…") {
+		t.Errorf("after the revert:\n%s", s)
+	}
+	close(ds.countGate)
+	h.waitFor("the new count", func() bool { return !h.m.counting })
+	if h.m.v.total != 143 {
+		t.Errorf("total %d, want 143", h.m.v.total)
+	}
+}
+
+// Cancelled work that returns its own error (DuckDB's "INTERRUPT Error")
+// rather than context.Canceled is still cancelled work, not a failure.
+func TestInterruptErrorIsNotAFailure(t *testing.T) {
+	ds := newFake(1_000_000, 3)
+	ds.gate = make(chan struct{})
+	ds.countGate = make(chan struct{})
+	ds.interruptErr = errors.New("INTERRUPT Error: Interrupted!")
+	h := newHarness(t, ds, 80, 20)
+	h.press("/")
+	h.typeText("id % 3 = 0")
+	h.press("enter")
+	h.press("ctrl+end") // supersedes the first fetch of the filtered view
+	h.waitFor("the superseded fetch", func() bool { return ds.cancels() == 1 })
+	h.settle()
+	if h.m.v.view.Where != "id % 3 = 0" || h.m.msgKind == msgErr || h.m.failed != nil {
+		t.Errorf("a superseded fetch counted as a failure: view %q, msg %q", h.m.v.view.Where, h.m.msg)
+	}
+	h.press("esc") // cancels the count and the fetch
+	h.waitFor("the cancelled count", func() bool { return ds.countCancels() == 1 })
+	h.settle()
+	if h.m.msgKind == msgErr || h.m.v.view.Where != "id % 3 = 0" {
+		t.Errorf("a cancelled count counted as a failure: %q", h.m.msg)
+	}
+	if !strings.Contains(h.screen(), "count cancelled") {
+		t.Errorf("status:\n%s", h.screen())
+	}
+	close(ds.gate)
+}
+
+// Window positions come from the request: an empty Window{} for rows at 50
+// says the view ends at row 50, not that it is empty.
+func TestEmptyWindowAtOffset(t *testing.T) {
+	ds := newFake(1000, 3)
+	ds.countGate = make(chan struct{})
+	h := newHarness(t, ds, 80, 20)
+	h.press("/")
+	h.typeText("id % 10 = 0")
+	h.press("enter")
+	gen := h.m.v.gen
+	h.send(fetchMsg{req: fetchReq{id: 999, gen: gen, start: 50, n: 30, cols: []string{"id"}}, win: data.Window{}})
+	if h.m.v.limit() != 50 || h.m.v.lastRow() != 49 {
+		t.Errorf("limit %d, last row %d; want 50, 49", h.m.v.limit(), h.m.v.lastRow())
+	}
+	if !strings.Contains(h.screen(), "r10") {
+		t.Errorf("the rows before 50 are gone:\n%s", h.screen())
+	}
+	close(ds.countGate)
+	h.settle()
+}
+
+func TestEscCancelsFetch(t *testing.T) {
+	ds := newFake(1000, 3)
+	ds.gate = make(chan struct{})
+	h := newHarness(t, ds, 80, 20)
+	if h.m.inflight == nil {
+		t.Fatal("no fetch in flight")
+	}
+	h.press("esc")
+	h.waitFor("the cancelled fetch", func() bool { return ds.cancels() == 1 })
+	h.settle()
+	if h.m.inflight != nil || h.m.failed != nil || h.m.msgKind == msgErr {
+		t.Errorf("after Esc: inflight %v failed %v msg %q", h.m.inflight, h.m.failed, h.m.msg)
+	}
+	if !strings.Contains(h.line(bodyTop), "·") {
+		t.Errorf("placeholders gone: %q", h.line(bodyTop))
+	}
+	close(ds.gate)
+	h.press("down") // the next move fetches again
+	h.waitFor("the refetch", func() bool { return h.m.inflight == nil && len(ds.calls()) == 2 })
+	h.settle()
+	if !strings.Contains(h.screen(), "r0") {
+		t.Errorf("rows not loaded after Esc and a move:\n%s", h.screen())
+	}
+}
+
+func TestReapplyFilterRestartsCount(t *testing.T) {
+	ds := newFake(1000, 3)
+	ds.countGate = make(chan struct{})
+	h := newHarness(t, ds, 80, 20)
+	h.press("/")
+	h.typeText("id % 10 = 0")
+	h.press("enter")
+	h.press("esc")
+	if h.m.counting {
+		t.Fatal("Esc didn't stop the count")
+	}
+	gen := h.m.v.gen
+	h.press("/", "enter")
+	if !h.m.counting || h.m.v.gen != gen {
+		t.Errorf("re-applying the filter: counting %v, gen %d (was %d)", h.m.counting, h.m.v.gen, gen)
+	}
+	close(ds.countGate)
+	h.waitFor("the count", func() bool { return !h.m.counting })
+	if h.m.v.total != 100 {
+		t.Errorf("total %d", h.m.v.total)
+	}
+}
+
+// When a short read finds the end before the count arrives, the status line
+// shows it.
+func TestShortReadShowsTotal(t *testing.T) {
+	ds := newFake(1000, 3)
+	ds.countGate = make(chan struct{})
+	h := newHarness(t, ds, 80, 20)
+	h.press("/")
+	h.typeText("id % 200 = 0")
+	h.press("enter")
+	if s := h.screen(); !strings.Contains(s, "row 1 of 5") || !strings.Contains(s, "counting…") {
+		t.Errorf("status with a short read:\n%s", s)
+	}
+	h.press("/")
+	h.m.filter.SetValue("none")
+	h.press("enter")
+	if s := h.screen(); !strings.Contains(s, "no rows") || strings.Contains(s, "of ?") {
+		t.Errorf("status with no rows:\n%s", s)
+	}
+	close(ds.countGate)
+	h.settle()
+}
+
+func TestTinyTerminal(t *testing.T) {
+	ds := newFake(1000, 3)
+	h := newHarness(t, ds, 80, 20)
+	for _, size := range [][2]int{{80, minH - 1}, {minW - 1, 20}, {10, 3}} {
+		h.send(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		h.settle()
+		s := h.screen()
+		if strings.Contains(s, "\n") || ansi.StringWidth(s) > size[0] || !strings.HasPrefix(s, "terminal") {
+			t.Errorf("%dx%d: %q", size[0], size[1], s)
+		}
+		h.press("g")
+		if h.m.View().Cursor != nil {
+			t.Errorf("%dx%d: a cursor is placed on a screen too small", size[0], size[1])
+		}
+		h.press("esc")
+	}
+	h.send(tea.WindowSizeMsg{Width: minW, Height: minH})
+	h.settle()
+	if lines := strings.Split(h.screen(), "\n"); len(lines) != minH {
+		t.Errorf("at the minimum size: %d lines", len(lines))
+	}
+	for i, l := range strings.Split(h.screen(), "\n") {
+		if ansi.StringWidth(l) > minW {
+			t.Errorf("line %d too wide: %q", i, l)
 		}
 	}
 }
