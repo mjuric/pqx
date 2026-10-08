@@ -1,4 +1,6 @@
-package ui
+// Package rowspec parses the row numbers the go-to dialog takes (Python
+// pqx's parse_row_spec), for the dialog (WP10) and the grid.
+package rowspec
 
 import (
 	"errors"

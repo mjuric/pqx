@@ -1,4 +1,4 @@
-package ui
+package grid
 
 import (
 	"bytes"
@@ -10,6 +10,10 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/mjuric/pqx/go/internal/ui/app"
+	"github.com/mjuric/pqx/go/internal/ui/filter"
+	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
 
 // These tests feed raw terminal input through a real tea.Program (its
@@ -155,8 +159,9 @@ func TestX10MouseSplitAcrossReads(t *testing.T) {
 // (1016); and on exit, what it does with the alternate screen.
 func TestTerminalModes(t *testing.T) {
 	ds := newFake(100, 3)
-	m := New(ds)
-	m.tick = func() tea.Cmd { return nil }
+	env := &kit.Env{DS: ds, Look: app.BasicLook{}, Tasks: kit.NewTasks(),
+		State: &kit.State{Total: ds.NumRows(), Columns: ds.Columns()}}
+	m := app.New(env, app.Parts{Grid: New(env), Filter: filter.New(env)})
 	var out bytes.Buffer
 	pr, pw := io.Pipe()
 	p := tea.NewProgram(m, tea.WithInput(pr), tea.WithOutput(&out),
@@ -177,7 +182,7 @@ func TestTerminalModes(t *testing.T) {
 	if strings.Contains(s, "?1016") {
 		t.Error("SGR-pixel mouse mode (1016) was touched")
 	}
-	// The alternate screen is erased before it is left (Model.quit blanks the
+	// The alternate screen is erased before it is left (the root blanks the
 	// last frame; Bubble Tea itself doesn't erase it).
 	i := strings.LastIndex(s, "\x1b[?1049l")
 	t.Logf("around leaving the alternate screen: %q", s[max(0, i-60):])

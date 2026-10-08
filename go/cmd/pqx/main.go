@@ -16,11 +16,12 @@ import (
 	"github.com/mjuric/pqx/go/internal/opts"
 	"github.com/mjuric/pqx/go/internal/term"
 	"github.com/mjuric/pqx/go/internal/theme"
-	"github.com/mjuric/pqx/go/internal/ui"
 	"github.com/mjuric/pqx/go/internal/ui/app"
 	"github.com/mjuric/pqx/go/internal/ui/chrome"
 	"github.com/mjuric/pqx/go/internal/ui/dialogs"
+	"github.com/mjuric/pqx/go/internal/ui/filter"
 	"github.com/mjuric/pqx/go/internal/ui/footer"
+	"github.com/mjuric/pqx/go/internal/ui/grid"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
 	"github.com/mjuric/pqx/go/internal/ui/meta"
 	"github.com/mjuric/pqx/go/internal/ui/plot"
@@ -99,13 +100,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 			Version:        version,
 		},
 		Look:  look,
-		State: &kit.State{Total: ds.NumRows(), Columns: ds.Columns(), FileRow: 0},
 		Tasks: kit.NewTasks(),
 	}
+	env.State = newState(ds, env.Opts)
 	env.Dialogs = dialogs.New(env)
 	parts := app.Parts{
 		Chrome: chrome.New(env),
-		Legacy: ui.Legacy{M: ui.New(ds)},
+		Grid:   grid.New(env),
+		Filter: filter.New(env),
 		Schema: schema.New(env, footer.New(env)),
 		Meta:   meta.New(env),
 		Stats:  stats.New(env),
@@ -156,4 +158,20 @@ func runApp(m tea.Model, stderr io.Writer) (code int) {
 		return 1
 	}
 	return 0
+}
+
+// newState is the UI's state at startup: the whole file, and the column
+// formats saved and given on the command line.
+func newState(ds data.Dataset, opts kit.Options) *kit.State {
+	formats := map[string]fmtx.Override{}
+	for n, o := range opts.Formats {
+		formats[n] = o
+	}
+	for n, o := range opts.SessionFormats {
+		formats[n] = o
+	}
+	return &kit.State{
+		Total: ds.NumRows(), Columns: ds.Columns(), FileRow: 0, Formats: formats,
+		Hidden: map[string]bool{}, Sampling: opts.Sampling,
+	}
 }
