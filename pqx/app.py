@@ -91,8 +91,8 @@ KEYS = {
     "tab-plot": [("enter/click", "pick"), ("tab", "next field"), ("← →", "change"), ("r", "rotate"), ("m", "sampling"), ("e", "export"),
                  ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
     "tab-meta": [("↑↓", "scroll"), ("tab", "next panel"), ("1-5", "tabs"), ("?", "help"), ("q", "quit")],
-    "detail": [("↑↓", "column"), ("=", "match"), ("y", "copy"), ("i", "stats"), ("esc", "grid"), ("?", "help"),
-               ("q", "quit"), ("d", "close")],
+    "detail": [("↑↓", "column"), ("=", "match"), ("y", "copy"), ("i", "stats"), ("esc", "close"), ("?", "help"),
+               ("q", "quit"), ("tab", "grid")],
     "dropdown": [("type", "to filter"), ("↑↓", "move"), ("enter/click", "pick"), ("esc", "close")],
     "filter": [("enter", "apply"), ("esc", "back"), ("ctrl+x", "clear"), ("↑↓", "history"), ("→", "complete"),
                ("select … from t", "full query")],
@@ -2090,14 +2090,20 @@ class PqxApp(App):
         self._update_detail()
         self._render_keys()
 
-    def action_detail_to_grid(self, cancel: bool = False) -> None:
-        """Enter, Tab or Esc in the pane: back to the grid, on the selected column.
-        Esc also cancels running queries, as it does everywhere else."""
-        if cancel and self._busy:
+    def action_detail_to_grid(self, close: bool = False) -> None:
+        """Enter or Tab in the pane: back to the grid, on the selected column. Esc
+        (``close``) does the same and closes the pane, unless queries are running:
+        then, as everywhere else, it only cancels them."""
+        if close and self._busy:
             self.action_escape()
+            return
         name = self.query_one(DetailList).selected
         if name:
             self._move_grid_to_column(name)
+        if close:
+            self.query_one("#detail").display = False
+            self._update_detail()
+            self._render_keys()
         self.query_one(GridTable).focus()
 
     def action_detail_key(self, action: str, *args) -> None:
@@ -2606,6 +2612,8 @@ class PqxApp(App):
         if isinstance(self.focused, Input):
             self.query_one(GridTable).focus() if self.query_one(TabbedContent).active == "tab-data" \
                 else self.set_focus(None)
+        elif isinstance(self.focused, GridTable) and self.query_one("#detail").display:
+            self.action_toggle_detail()
 
     def action_toggle_sample(self) -> None:
         self.sampling = not self.sampling

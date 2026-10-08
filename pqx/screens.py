@@ -50,8 +50,8 @@ The filter applies everywhere: grid, stats, plots and export.
 | **g** | go to row — `1234`, `1.5M`, `50%`, `-1` |
 | **s** | sort by the cursor column: ascending → descending → off |
 | **=** | narrow the filter to rows equal to the cursor cell; the cursor stays on the same record |
-| **d** or Enter | toggle the row detail panel (full precision, sexagesimal, UTC dates) |
-| Tab or a click | into the detail panel: **↑/↓**, PgUp/PgDn, Home/End or a click pick a column and the grid follows on the same row (the wheel only scrolls); **Enter**, **Esc** or **Tab** return to the grid on that column |
+| **d** or Enter | toggle the row detail panel (full precision, sexagesimal, UTC dates); **Esc** closes it |
+| Tab or a click | into the detail panel: **↑/↓**, PgUp/PgDn, Home/End or a click pick a column and the grid follows on the same row (the wheel only scrolls); **Enter** or **Tab** return to the grid on that column; **Esc** also closes the panel |
 | in the detail panel | **=**, **y**, **i**, **F**, **<** / **>** act on the selected field as on that grid cell; after **=** you stay in the panel on the same field and record, so **=** on one field and then another narrows in two keystrokes |
 | **c** | choose visible columns; **-** hides the cursor column |
 | **p** | pin columns up to the cursor (stay visible when scrolling right) |
@@ -73,7 +73,7 @@ They change only the grid and stats; the detail panel and **y** keep full precis
 | **1**–**5** · **Ctrl+← →** | go to a tab · previous / next tab. The tab strip in the panel border shows each tab's number and ends with the ^← ^→ reminder; a click on a number or name switches too |
 | **e** | export the current view (filter + sort) to Parquet / CSV / JSON |
 | **m** | toggle sampling for stats and plots on large files |
-| **Esc** | cancel running queries |
+| **Esc** | cancel running queries; when nothing is running, leave the filter box or close the detail panel |
 | **Ctrl+P** | command palette |
 | **?** | this help · **q** quit |
 
