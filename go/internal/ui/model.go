@@ -188,6 +188,8 @@ type Model struct {
 	tick func() tea.Cmd
 
 	now func() time.Time
+
+	quitting bool
 }
 
 // New makes the model for an open dataset.
@@ -385,6 +387,10 @@ func (m *Model) onKey(k tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *Model) quit() tea.Cmd {
+	// Bubble Tea leaves the alternate screen without erasing it; under GNU
+	// screen with altscreen off the grid would stay on the terminal. The
+	// final frame, drawn before it leaves, is therefore blank.
+	m.quitting = true
 	if m.fetchCancel != nil {
 		m.fetchCancel()
 	}

@@ -19,7 +19,11 @@ var border = lipgloss.RoundedBorder()
 // View implements tea.Model: the whole screen, in the alternate screen with
 // cell-motion mouse reporting.
 func (m *Model) View() tea.View {
-	v := tea.NewView(m.Render())
+	content := ""
+	if !m.quitting {
+		content = m.Render()
+	}
+	v := tea.NewView(content)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = "pqx " + sanitizeTitle(m.name)
