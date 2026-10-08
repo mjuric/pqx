@@ -1167,15 +1167,33 @@ func TestCancelViews(t *testing.T) {
 	done, cancel := context.WithCancel(bg)
 	cancel()
 	calls := map[string]func(ctx context.Context) error{
-		"Validate SQL":   func(ctx context.Context) error { _, err := ds.Validate(ctx, View{SQL: "select 1"}); return err },
-		"Validate sort":  func(ctx context.Context) error { _, err := ds.Validate(ctx, View{OrderBy: []Sort{{Column: "id"}}}); return err },
-		"Fetch sorted":   func(ctx context.Context) error { _, err := ds.Fetch(ctx, View{OrderBy: []Sort{{Column: "id"}}}, 0, 5, []string{"id"}); return err },
-		"Fetch SQL":      func(ctx context.Context) error { _, err := ds.Fetch(ctx, View{SQL: "select 1 a"}, 0, 5, []string{"a"}); return err },
-		"Count SQL":      func(ctx context.Context) error { _, err := ds.Count(ctx, View{SQL: "select 1"}); return err },
-		"FetchColumns":   func(ctx context.Context) error { _, err := ds.FetchColumns(ctx, []int64{5, 3}, []string{"id"}); return err },
-		"FindRow":        func(ctx context.Context) error { _, _, err := ds.FindRow(ctx, View{Where: "id > 3"}, 5); return err },
-		"FetchAround":    func(ctx context.Context) error { _, err := ds.FetchAround(ctx, View{Where: "id > 3"}, 5, 1, 0, 5, []string{"id"}); return err },
-		"FindRow sorted": func(ctx context.Context) error { _, _, err := ds.FindRow(ctx, View{OrderBy: []Sort{{Column: "id"}}}, 5); return err },
+		"Validate SQL": func(ctx context.Context) error { _, err := ds.Validate(ctx, View{SQL: "select 1"}); return err },
+		"Validate sort": func(ctx context.Context) error {
+			_, err := ds.Validate(ctx, View{OrderBy: []Sort{{Column: "id"}}})
+			return err
+		},
+		"Fetch sorted": func(ctx context.Context) error {
+			_, err := ds.Fetch(ctx, View{OrderBy: []Sort{{Column: "id"}}}, 0, 5, []string{"id"})
+			return err
+		},
+		"Fetch SQL": func(ctx context.Context) error {
+			_, err := ds.Fetch(ctx, View{SQL: "select 1 a"}, 0, 5, []string{"a"})
+			return err
+		},
+		"Count SQL": func(ctx context.Context) error { _, err := ds.Count(ctx, View{SQL: "select 1"}); return err },
+		"FetchColumns": func(ctx context.Context) error {
+			_, err := ds.FetchColumns(ctx, []int64{5, 3}, []string{"id"})
+			return err
+		},
+		"FindRow": func(ctx context.Context) error { _, _, err := ds.FindRow(ctx, View{Where: "id > 3"}, 5); return err },
+		"FetchAround": func(ctx context.Context) error {
+			_, err := ds.FetchAround(ctx, View{Where: "id > 3"}, 5, 1, 0, 5, []string{"id"})
+			return err
+		},
+		"FindRow sorted": func(ctx context.Context) error {
+			_, _, err := ds.FindRow(ctx, View{OrderBy: []Sort{{Column: "id"}}}, 5)
+			return err
+		},
 	}
 	for name, call := range calls {
 		if err := call(done); !errors.Is(err, context.Canceled) {
