@@ -1,7 +1,8 @@
 # Porting pqx to a compiled language
 
-Status: investigation done 2026-10-08, nothing built. The next step is a
-prototype (see [Prototype](#next-step-a-prototype)). This document is the
+Status: investigation done 2026-10-08; prototype built and measured the same day
+(see [Prototype results](#prototype-results)). Recommendation: go ahead with the
+full port, after the user decides. This document is the
 handoff to the agent who continues the work: it records what was asked, what
 was found, what was decided, and what is still unverified.
 
@@ -183,6 +184,130 @@ merging. Port order:
 6. Tabs.
 7. Dialogs.
 8. Packaging: goreleaser, Homebrew, and possibly PyPI wheels so `pip install pqx` still works.
+
+## Prototype results
+
+Built 2026-10-08 on `native-port` (plan: [go-prototype.md](go-prototype.md); PRs #27
+draft, #28 UI, #29 data layer, #30 integration). The Go code is in `go/`: about 3,300
+lines plus 2,600 lines of tests (data 22 tests, UI 27, command 1), in CI as `go.yml`.
+It opens a file, shows the grid with lazy columns, pages, `g`, filters with a
+background count, Esc, mouse wheel and clicks.
+
+### Measurements
+
+The same machine (128 cores, Rocky 10), the same 200×50 pty, warm page cache (cold
+reads couldn't be forced here). Times are from key press until the expected row is on
+the emulated screen, three runs each, in ms; first screen includes process start and
+Python's imports. Harness: `go/bench/pty/` (`bench.py`, `esc.sh`).
+
+| file | | first screen | PgDn | `g` middle row | Ctrl+End |
+|---|---|---|---|---|---|
+| SSSource (8.07M × 184, 8 row groups) | Python | 2,031–2,424 | 89–108 | 249–280 | 200–226 |
+| | Go | 166–174 | 42–44 | 61–66 | 59–65 |
+| mpc_orbits (1.58M × 53, 13 row groups) | Python | 1,874–2,644 | 73–87 | 260–311 | 149–167 |
+| | Go | 188–213 | 29–41 | 139–140 | 55–57 |
+| wide300 (200k × 300, 4 row groups) | Python | 1,742–1,882 | 112–124 | 168–173 | 126–151 |
+| | Go | 153–182 | 44–46 | 65–69 | 42–66 |
+| rg2000 (2M × 20, 2,000 row groups) | Python | 1,815–1,859 | 159–183 | 220–247 | 95–132 |
+| | Go | 285–319 | 43–48 | 24–41 | 36–41 |
+
+Esc on SSSource, with a filter whose count takes about 7 s
+(`levenshtein(repeat(obsid,4), repeat(trksub,4)) > 5`):
+
+| | filter applied, spinner shown | Esc until "cancelled" shown |
+|---|---|---|
+| Python | 191–238 ms | 136–154 ms |
+| Go | 57–62 ms | 61–66 ms |
+
+The Esc time is until the screen says the count stopped. DuckDB itself stops within
+about 0.1–0.16 s of the cancel (probe and data-layer tests).
+
+Go's PgDn floor of about 40 ms on every file looks like a fixed cost in the UI or
+renderer rather than reading; not investigated.
+
+Window reads alone (data layer, SSSource, 100 rows at row 5,000,000):
+
+| reader | 15 columns | all 184 columns |
+|---|---|---|
+| arrow-go (Go, columns in parallel) | 18–27 ms | 166–190 ms |
+| PyArrow (Python pqx's direct reader) | 43–113 ms | 0.35–1.96 s |
+| DuckDB (either language) | 77–96 ms | 0.97–1.07 s |
+
+Build and binary:
+
+| | |
+|---|---|
+| clean build | 43 s here, 56 s in GitHub Actions; 1.1 s after an edit |
+| binary, linux-amd64 | 116 MB; 91 MB stripped (`-s -w`); 31 MB gzipped |
+| links dynamically | glibc (needs 2.38 when built on Rocky 10), libstdc++, libgcc_s, libm |
+
+### Open questions, answered
+
+1. **Cancelling a query: yes.** Cancelling the `context` interrupts DuckDB from
+   another goroutine; a count returned 0.6 ms after the cancel, a full scan within
+   0.16 s. A cancelled arrow-go read stops within about 20–40 ms (it checks between
+   reads). Each DuckDB call has its own connection, so cancelling one leaves the others.
+2. **Prebuilt DuckDB: yes.** `duckdb-go` v2.10506.0 ships static DuckDB 1.5.6 (the
+   version Python pqx uses) for linux-amd64/arm64, darwin-amd64/arm64 and
+   windows-amd64, with the parquet, json, icu, tpch, tpcds and autocomplete
+   extensions built in. No C++ compile.
+3. **Arrow results: yes,** behind the `duckdb_arrow` build tag, as `arrow-go/v18`
+   records (the Makefile and CI always set the tag).
+4. **Row-group reads: arrow-go is faster than PyArrow** (table above), so the plain
+   view always reads with arrow-go; no `window_cost`. Without a page index it still
+   decompresses a row group's earlier pages, but `SeekToRow` skips decoding them.
+5. **Mouse and input, in Bubble Tea v2.0.10:**
+   - X10 mouse from GNU screen decodes correctly, including coordinates above 95
+     (bytes above 127), **when a report arrives in one read.** If a report is split
+     after `ESC [ M`, the rest arrives as key presses: a click at column 80 types `q`
+     and quits. Needs an input filter in pqx (as `_terminal.py` is for Textual) or an
+     upstream fix. Likely only over slow links; not seen in practice yet.
+   - Pixel mouse mode (1016) is never enabled, so the iTerm2-over-ssh problem can't
+     happen.
+   - OSC 52 copy is supported (`tea.SetClipboard`).
+   - Leaving the alternate screen doesn't clear it; pqx draws a blank last frame on
+     quit, as Python pqx does, but not after a crash.
+   - Not tried in real GNU screen or iTerm2.
+6. **Grid speed: fine.** Building the 200×50 screen with 300 columns takes about
+   95 µs; a whole frame through Bubble Tea's renderer 1.5–2.2 ms.
+7. **Binary size and static linking.** See above. A fully static glibc build isn't
+   practical (and glibc's static libraries aren't installed here); the usual route is
+   static libstdc++/libgcc (needs `libstdc++-static`) and a build on an old glibc,
+   i.e. a manylinux_2_28 container for Linux wheels and downloads. Leaving out the
+   tpch/tpcds extensions would need a custom DuckDB build.
+
+### Found along the way
+
+- `duckdb-go`'s `Query`/`Exec`/`PrepareContext` run every statement in a string but
+  the last. The data layer has DuckDB `Prepare` each filter query first (which refuses
+  more than one statement without running anything) and accepts only one SELECT.
+- Strings read from DuckDB pointed into memory DuckDB frees per batch; they are now
+  copied.
+- DuckDB auto-detects hive partitioning from the path (`year=2024/`), adding columns
+  the Go data layer didn't expect; it now turns it off. (Python pqx works on such
+  paths; checked.)
+- arrow-go and DuckDB disagree on INT96 and nanosecond timestamps, JSON and ENUM;
+  `Column.Type` comes from DuckDB and the plain view formats like DuckDB.
+
+### Known gaps in the prototype
+
+Decimals wider than 38 digits in filtered views (Python's `_fix_wide_decimals` not
+ported); no DuckDB fallback for columns arrow-go can't read; file names with a
+backslash next to glob characters can't be filtered; a filter whose table function
+blocks in the OS (`read_csv('/some/fifo')`) leaves a goroutine and connection behind;
+the split-X10 input issue above; wide characters (emoji) untested; macOS, Windows and
+real-terminal checks not done; cold-cache times not measured.
+
+### Recommendation: go
+
+The Go version starts 10–14× sooner (0.15–0.3 s against 1.8–2.6 s), pages and jumps
+2–4× faster, cancels sooner, and its data layer reads windows faster than PyArrow.
+The binary would ship as one download, or as one PyPI wheel per platform with no
+Python dependencies (about 30 MB compressed), so `pip install pqx` and `uvx pqx` keep
+working. The risks found are bounded: the mouse input filter, the manylinux build, and
+the data-layer gaps above, which Python pqx already solves and which port directly.
+The cost is the rest of the UI (tabs, details pane, dialogs, formatting, themes),
+roughly a release of work, in the order listed above.
 
 ## Test data
 
