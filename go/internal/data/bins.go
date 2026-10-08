@@ -115,7 +115,7 @@ func (d *dataset) Histogram(ctx context.Context, v View, col string, o HistOptio
 	if err := finite("histogram's range", lo, hi); err != nil {
 		return Histogram{}, err
 	}
-	hi = widen(lo, hi)
+	lo, hi = widen(lo, hi)
 	bn, err := newBinning(lo, hi, bins)
 	if err != nil {
 		return Histogram{}, err
@@ -266,15 +266,18 @@ func (d *dataset) XYCounts(ctx context.Context, v View, x, y string, nx, ny int,
 			y0, y1 = r[6], r[7]
 		}
 		if xlim == nil {
-			x1 = widen(x0, x1)
+			x0, x1 = widen(x0, x1)
 			xlim = &[2]float64{x0, x1}
 		}
 		if ylim == nil {
-			y1 = widen(y0, y1)
+			y0, y1 = widen(y0, y1)
 			ylim = &[2]float64{y0, y1}
 		}
 	}
 	x0, x1, y0, y1 := xlim[0], xlim[1], ylim[0], ylim[1]
+	if !(x1 > x0) || !(y1 > y0) { // given limits that hold nothing (as in pqx: no cells match)
+		return Grid2D{Counts: newGrid(ny, nx), X: [2]float64{x0, x1}, Y: [2]float64{y0, y1}}, nil
+	}
 	bx, err := newBinning(x0, x1, nx)
 	if err != nil {
 		return Grid2D{}, err
@@ -309,16 +312,20 @@ func (d *dataset) XYCounts(ctx context.Context, v View, x, y string, nx, ny int,
 // MaxCells bounds the bins of a histogram and the cells of a 2-D grid.
 const MaxCells = 16 << 20
 
-// widen is hi, or when the range is empty, lo + 1 (pqx's), or for an lo so
-// large that adding 1 changes nothing, a little more than lo.
-func widen(lo, hi float64) float64 {
+// widen is lo and hi, or when the range is empty, lo to lo + 1 (pqx's);
+// for an lo so large that adding 1 changes nothing, a little more than lo,
+// or if that overflows (lo is near the largest float64), a little less.
+func widen(lo, hi float64) (float64, float64) {
 	if hi > lo {
-		return hi
+		return lo, hi
 	}
 	if lo+1 > lo {
-		return lo + 1
+		return lo, lo + 1
 	}
-	return lo + math.Abs(lo)*0x1p-40
+	if up := lo + math.Abs(lo)*0x1p-40; !math.IsInf(up, 0) {
+		return lo, up
+	}
+	return lo - math.Abs(lo)*0x1p-40, lo
 }
 
 // binning is how SQL numbers the n equal bins from lo to hi: as pqx does,

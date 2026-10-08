@@ -3,11 +3,14 @@ package data
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -252,8 +255,8 @@ func TestBinsHugeRange(t *testing.T) {
 		t.Errorf("one huge value: %v %v %v", h.Edges, h.Counts, err)
 	}
 	inf := math.Inf(1)
-	if _, err := ds.Histogram(bg, View{}, "x", HistOptions{Hi: &inf}); err == nil {
-		t.Error("an infinite Hi: no error")
+	if _, err := ds.Histogram(bg, View{}, "x", HistOptions{Hi: &inf}); err == nil || !strings.Contains(err.Error(), "must be finite") {
+		t.Errorf("an infinite Hi: %v", err)
 	}
 	if _, err := ds.XYCounts(bg, View{}, "x", "y", 2, 2, Sample{}, &[2]float64{0, inf}, nil); err == nil {
 		t.Error("an infinite x limit: no error")
@@ -282,16 +285,17 @@ func TestBinsTooMany(t *testing.T) {
 // are of the finite values only.
 func TestXYRobustRange(t *testing.T) {
 	const n = 10_000
-	x, y := make([]float64, n), make([]float64, n)
+	x, y, z := make([]float64, n), make([]float64, n), make([]float64, n)
 	for i := range x {
-		x[i], y[i] = 5, float64(i%100)
+		x[i], y[i], z[i] = 5, float64(i%100), 7
 		if i%3 == 0 {
 			y[i] = math.Inf(1 - 2*(i%2)) // ±inf: left out
 		}
 	}
 	x[1], x[2] = 0, 10 // (rows whose y is finite)
+	z[4], z[5] = -3, 20
 	path := filepath.Join(t.TempDir(), "q.parquet")
-	writeFloats(t, path, 2500, []string{"x", "y"}, x, y)
+	writeFloats(t, path, 2500, []string{"x", "y", "z"}, x, y, z)
 	ds := openT(t, path)
 	g, err := ds.XYCounts(bg, View{}, "x", "y", 4, 4, Sample{}, nil, nil)
 	if err != nil {
@@ -303,12 +307,22 @@ func TestXYRobustRange(t *testing.T) {
 	if !(g.Y[0] >= 0 && g.Y[1] <= 99 && g.Y[0] < g.Y[1]) {
 		t.Errorf("y limits %v", g.Y)
 	}
+	g, err = ds.XYCounts(bg, View{}, "y", "z", 4, 4, Sample{}, nil, nil)
+	if err != nil || g.Y != [2]float64{-3, 20} {
+		t.Errorf("z limits %v (%v): quantiles 7 and 7 should give way to min and max", g.Y, err)
+	}
+	// a third of the values are ±inf, which would be the 1% and 99% quantiles
 	st, err := ds.ColumnStats(bg, View{}, "y", Sample{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Quantiles[0.01] < 0 || st.Quantiles[0.99] > 99 || st.Max != math.Inf(1) || st.Min != math.Inf(-1) {
-		t.Errorf("quantiles of finite values only: %v (min %v, max %v)", st.Quantiles, st.Min, st.Max)
+	if st.Max != math.Inf(1) || st.Min != math.Inf(-1) || len(st.Quantiles) != 7 {
+		t.Errorf("y: %+v", st)
+	}
+	for q, v := range st.Quantiles {
+		if !(v >= 0 && v <= 99) {
+			t.Errorf("quantile %v = %v: not of the finite values", q, v)
+		}
 	}
 }
 
@@ -375,6 +389,11 @@ func TestFooterSharedPaths(t *testing.T) {
 	if len(summ) != 2 || summ[0].Path != "a" || summ[1].Path != "b" {
 		t.Fatalf("paths %+v", summ)
 	}
+	// give the second leaf an encoding of its own, so both must be read
+	for _, rg := range ds.md.RowGroups {
+		cm := rg.Columns[2].MetaData
+		cm.Encodings = append(cm.Encodings, 9) // BYTE_STREAM_SPLIT
+	}
 	var comp int64
 	encs := map[string]bool{}
 	for rg := range ds.md.NumRowGroups() {
@@ -389,7 +408,7 @@ func TestFooterSharedPaths(t *testing.T) {
 	if summ[0].Compressed != comp || summ[0].Physical != "INT64" {
 		t.Errorf("a: %+v, both leaves %d", summ[0], comp)
 	}
-	if got := ds.Encodings("a"); len(got) != len(encs) {
+	if got := ds.Encodings("a"); len(got) != len(encs) || !encs["BYTE_STREAM_SPLIT"] || !slices.Contains(got, "BYTE_STREAM_SPLIT") {
 		t.Errorf("encodings %v, both leaves %v", got, encs)
 	}
 }
@@ -427,7 +446,8 @@ func TestFooterOddStatistics(t *testing.T) {
 }
 
 // Old writers' statistics of FIXED_LEN_BYTE_ARRAY decimals are wrong
-// (PARQUET-1655) and are dropped, as PyArrow drops them; returned decimals
+// (PARQUET-1655) and are dropped here, as arrow-go's reader drops them
+// (PyArrow 25 keeps them: a deliberate difference); returned decimals
 // and bytes are copies.
 func TestFooterOldDecimalStatistics(t *testing.T) {
 	sc := arrow.NewSchema([]arrow.Field{
@@ -475,6 +495,88 @@ func TestFooterOldDecimalStatistics(t *testing.T) {
 		again, _ := ds.FooterSummary(bg)
 		if again[0].Min.(Decimal).Unscaled.Cmp(big.NewInt(-5)) != 0 || again[1].Min.([]byte)[0] != 0 {
 			t.Errorf("the cache changed: %v %v", again[0].Min, again[1].Min)
+		}
+	}
+}
+
+// New files get the umask's permissions; an existing target keeps its own.
+func TestExportUmask(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "s.parquet")
+	writeInts(t, src, 1)
+	ds := openT(t, src)
+	for _, c := range []struct {
+		umask int
+		want  os.FileMode
+	}{{0o077, 0o600}, {0o002, 0o664}} {
+		old := syscall.Umask(c.umask)
+		out := filepath.Join(dir, fmt.Sprintf("u%o.csv", c.umask))
+		_, err := ds.Export(bg, View{}, out, ExportCSV, nil)
+		syscall.Umask(old)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi, _ := os.Stat(out); fi.Mode().Perm() != c.want {
+			t.Errorf("umask %o: mode %v", c.umask, fi.Mode())
+		}
+	}
+}
+
+// A long target name works; a directory or a read-only target is refused,
+// by its name.
+func TestExportTargets(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "s.parquet")
+	writeInts(t, src, 1)
+	ds := openT(t, src)
+	long := filepath.Join(dir, strings.Repeat("n", 240)+".csv")
+	if _, err := ds.Export(bg, View{}, long, ExportCSV, nil); err != nil {
+		t.Errorf("a 244-character name: %v", err)
+	}
+	sub := filepath.Join(dir, "sub")
+	os.Mkdir(sub, 0o755)
+	if _, err := ds.Export(bg, View{}, sub, ExportCSV, nil); err == nil || !strings.Contains(err.Error(), sub+" is a directory") {
+		t.Errorf("a directory: %v", err)
+	}
+	ro := filepath.Join(dir, "ro.csv")
+	os.WriteFile(ro, []byte("keep"), 0o444)
+	old := writable
+	writable = func(p string) bool { return p != ro && old(p) }
+	defer func() { writable = old }()
+	if _, err := ds.Export(bg, View{}, ro, ExportCSV, nil); err == nil || !strings.Contains(err.Error(), ro+" is read-only") {
+		t.Errorf("read-only: %v", err)
+	}
+	if b, _ := os.ReadFile(ro); string(b) != "keep" {
+		t.Errorf("ro.csv: %q", b)
+	}
+	if got := dirNames(t, dir); len(got) != 4 {
+		t.Errorf("directory: %v", got)
+	}
+}
+
+// A constant column at the largest float64 widens downward; given x-y
+// limits that hold nothing give an empty grid, as in pqx.
+func TestBinsEdgeRanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "max.parquet")
+	m := []float64{math.MaxFloat64, math.MaxFloat64}
+	writeFloats(t, path, 10, []string{"x", "y"}, m, []float64{-math.MaxFloat64, -math.MaxFloat64})
+	ds := openT(t, path)
+	for _, col := range []string{"x", "y"} {
+		h, err := ds.Histogram(bg, View{}, col, HistOptions{Bins: 4})
+		if err != nil || sum(h.Counts) != 2 || math.IsInf(h.Edges[0], 0) || math.IsInf(h.Edges[4], 0) {
+			t.Errorf("%s: %v %v %v", col, h.Edges, h.Counts, err)
+		}
+	}
+	// (x-y limits leave out their upper ends, so x, at the top of its
+	// widened range, isn't counted, as pqx leaves out every column's maximum)
+	g, err := ds.XYCounts(bg, View{}, "x", "y", 3, 3, Sample{}, nil, nil)
+	if err != nil || g.X[1] != math.MaxFloat64 || !(g.X[0] < g.X[1]) || g.Y[0] != -math.MaxFloat64 || !(g.Y[1] > g.Y[0]) {
+		t.Errorf("xy: %v %v %v %v", g.X, g.Y, g.Counts, err)
+	}
+	for _, l := range [][2]float64{{5, 5}, {10, 0}} {
+		g, err := ds.XYCounts(bg, View{}, "x", "y", 3, 2, Sample{}, &l, nil)
+		if err != nil || g.X != l || len(g.Counts) != 2 || len(g.Counts[0]) != 3 || g.Counts[0][0] != 0 {
+			t.Errorf("x limits %v: %+v %v", l, g, err)
 		}
 	}
 }

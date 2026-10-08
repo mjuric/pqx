@@ -2,13 +2,17 @@ package data
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql/driver"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/duckdb/duckdb-go/v2"
 )
@@ -57,7 +61,10 @@ func (d *dataset) Export(ctx context.Context, v View, path string, f ExportForma
 	var n int64
 	err = d.withConn(ctx, func(c *duckdbConn) (err error) {
 		// (this runs to the end even when Export has returned on a cancel:
-		// the temporary file is removed here, never renamed after a cancel)
+		// the temporary file is removed here, never renamed after a cancel.
+		// One race is left: a cancel that comes after the ctx check below
+		// but before the rename lets the export complete, while Export may
+		// already have returned the cancel.)
 		defer func() {
 			if err == nil {
 				err = ctx.Err()
@@ -128,11 +135,26 @@ func prepareCopy(c *duckdbConn, copySQL string) (*duckdb.Stmt, error) {
 }
 
 // exportTemp makes an empty file of our own next to out, for DuckDB to
-// write the export into.
+// write the export into. Its name is short (so a long target name still
+// fits), and it is created 0666 so the umask applies, as to any new file.
 func (d *dataset) exportTemp(out string) (string, error) {
-	f, err := os.CreateTemp(filepath.Dir(out), "."+filepath.Base(out)+".pqx-*.tmp")
+	dir := filepath.Dir(out)
+	var f *os.File
+	var err error
+	for range 100 {
+		var r [4]byte
+		rand.Read(r[:])
+		f, err = os.OpenFile(filepath.Join(dir, ".pqx-"+hex.EncodeToString(r[:])+".tmp"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o666)
+		if !errors.Is(err, fs.ErrExist) {
+			break
+		}
+	}
 	if err != nil {
-		return "", safeErr(err)
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err // (the temporary file's name means nothing to anyone)
+		}
+		return "", fmt.Errorf("can't write in %s: %w", Sanitize(dir), safeErr(err))
 	}
 	tmp := f.Name()
 	f.Close()
@@ -144,17 +166,19 @@ func (d *dataset) exportTemp(out string) (string, error) {
 }
 
 // finishExport puts the written temporary file in out's place, with out's
-// permissions if it exists (else rw-r--r--).
+// permissions if it exists (else those it was created with).
 func finishExport(tmp, out string) error {
-	mode := os.FileMode(0o644)
 	if fi, err := os.Stat(out); err == nil {
-		mode = fi.Mode().Perm()
-	}
-	if err := os.Chmod(tmp, mode); err != nil {
-		return safeErr(err)
+		if err := os.Chmod(tmp, fi.Mode().Perm()); err != nil {
+			return safeErr(err)
+		}
 	}
 	return safeErr(os.Rename(tmp, out))
 }
+
+// writable reports whether the process may write to the existing file at
+// path (a variable so tests, which run as root, can stand in for it).
+var writable = func(path string) bool { return syscall.Access(path, 2 /* W_OK */) == nil }
 
 // exportPath is path expanded and absolute, unless it is the file being
 // explored: the same path, or (when it exists) the same file.
@@ -173,6 +197,15 @@ func (d *dataset) exportPath(path string) (string, error) {
 	}
 	if out == d.path || d.isSource(out) {
 		return "", ErrOverwriteSource
+	}
+	// an existing target that can't be replaced is refused up front, by name
+	if fi, err := os.Stat(out); err == nil {
+		if fi.IsDir() {
+			return "", fmt.Errorf("%s is a directory", Sanitize(out))
+		}
+		if !writable(out) {
+			return "", fmt.Errorf("%s is read-only", Sanitize(out))
+		}
 	}
 	return out, nil
 }
