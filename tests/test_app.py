@@ -1224,3 +1224,31 @@ async def test_detail_pane_fits_full_precision_numbers(tmp_path):
             console = Console(width=width, color_system=None, legacy_windows=False)
             lines = console.render_lines(EntryGrid(Text(name), value, lst._name_width), pad=False)
             assert len(lines) == value.plain.count("\n") + 1, (name, value.plain, width)  # (+ derived line)
+
+
+async def test_a_dialog_does_not_shift_the_screen_behind_it(demo_path):
+    # ModalScreen inherits Screen's side padding unless told otherwise, which drew the
+    # screen behind every dialog one column to the right.
+    import html
+    import re
+
+    def first_cells(svg: str) -> dict:
+        rows: dict = {}
+        for x, y, t in re.findall(r'<text[^>]*x="([\d.]+)" y="([\d.]+)"[^>]*>([^<]*)</text>', svg):
+            if html.unescape(t).replace("\xa0", " ").strip():
+                rows.setdefault(float(y), []).append((float(x), html.unescape(t)))
+        return {y: sorted(v)[0] for y, v in rows.items()}
+
+    app = PqxApp(demo_path)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        before = first_cells(app.export_screenshot())
+        title_y = next(y for y, (_, t) in before.items() if t.strip() == "pqx")  # (not the window title)
+        for key, screen in (("question_mark", HelpScreen), ("g", GotoScreen), ("c", ColumnPicker)):
+            await pilot.press(key)
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, screen)
+            after = first_cells(app.export_screenshot())
+            assert after[title_y] == before[title_y], key  # the title bar, never covered by a dialog
+            await pilot.press("escape")
+            await pilot.pause(0.1)
