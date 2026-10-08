@@ -1,0 +1,37 @@
+# Facts about the fixtures (written by make_fixtures.py), and the regex the runner waits
+# for at startup (the count is in) unless a scenario sets its own `ready:`.
+demo:
+  ready: "✓ 20,000 rows"
+  facts: >
+    20,000 rows x 16 columns (pqx.demo make_table(20000, seed=7)), 8 row groups of 2,500,
+    zstd. Row 0: diaSourceId 170000000000000000, ssObjectId 1000133, band r.
+    diaSourceId = 170000000000000000 + row. ssObjectId is null for 70% of rows.
+    Units and descriptions in felis style; table metadata table/description/generator.
+slow:
+  ready: "✓ 2,000,000 rows"
+  facts: >
+    2,000,000 rows x 16 columns (pqx.demo, seed 3), 8 row groups of 250,000, 140 MB.
+    For counts slow enough to cancel.
+odd:
+  ready: "✓ 1,000 rows"
+  facts: >
+    1,000 rows: file_row_number (0, 10, 20, ...), "weird name" (0-2), x (normal, NaN every
+    50th, inf at row 1), tags list<string>, pos struct<ra,dec>, blob binary, day date
+    from 2026-01-01, allnull int64. Row groups of 300.
+types:
+  ready: "✓ 200 rows"
+  facts: >
+    200 rows, one column per type (int8, uint32, uint64, float32, float64 with unit nJy,
+    bool, string with Greek and CJK, binary, date, timestamp[us, UTC], duration[s],
+    decimal(12,2), decimal256(50,0), list<int32>, struct, map, mjd [d], raDeg/decDeg [deg]).
+    Every 7th row from row 3 is null except id, wide, mjd, raDeg, decDeg. Row groups of 64.
+units:
+  ready: "✓ 1,000 rows"
+  facts: >
+    1,000 rows: objectId, RAJ2000, DEJ2000, elon, mjd, psfFlux, raErr, gmag, each with a
+    felis "[unit] description". Row groups of 250.
+wide:
+  ready: "✓ 3,000 rows"
+  facts: >
+    3,000 rows x 60 columns: id, then c00..c58 floats (scale 10^(i%7-2)), rounded to 6
+    decimals. Row groups of 1,000.
