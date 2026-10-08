@@ -124,6 +124,8 @@ type Env struct {
 	Look  Look
 	State *State
 	Tasks *Tasks
+	// Dialogs makes dialogs; nil until WP10.
+	Dialogs Dialogs
 }
 
 // KeyHint is one entry of the key bar: "/ filter".
@@ -202,3 +204,36 @@ type Chrome interface {
 	KeyBar(w int, hints []KeyHint) string
 	Toasts(w, h int) []Overlay
 }
+
+// Dialogs makes the dialogs (WP10). Env.Dialogs may be nil until it is
+// built; parts then show a notice instead. Each dialog sends its result as
+// the message named and closes itself (CloseDialogMsg).
+type Dialogs interface {
+	// Goto asks for a row spec (1234, 1.5M, 50%, -1) of total rows (-1 while
+	// counting): GotoMsg.
+	Goto(total int64) Dialog
+	// Format asks for col's format, starting from cur, checked against
+	// sample: FormatSetMsg.
+	Format(col data.Column, cur fmtx.Override, sample data.Value) Dialog
+	// Columns picks the visible columns of cols (hidden marks the hidden
+	// ones), landing on current: ColumnsPickedMsg.
+	Columns(cols []data.Column, hidden map[string]bool, current string) Dialog
+	// Export asks where and how to write the current view, then writes it
+	// (task "export") and reports the result itself.
+	Export() Dialog
+	// Help shows the help.
+	Help() Dialog
+}
+
+// GotoMsg: the go-to dialog's row (already resolved against the total).
+type GotoMsg struct{ Row int64 }
+
+// FormatSetMsg: the format dialog's result for Column (the zero Override
+// resets it to automatic).
+type FormatSetMsg struct {
+	Column   string
+	Override fmtx.Override
+}
+
+// ColumnsPickedMsg: the column picker's result, the columns to show.
+type ColumnsPickedMsg struct{ Visible []string }
