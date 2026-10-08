@@ -4,11 +4,11 @@
 // sanitizing, and human-readable numbers. Part of the contract
 // (docs/design/go-port.md); WP3 implements it, with Python's outputs
 // (go/testdata/golden/fmt.json) as the spec.
-//
-// The bodies here are starters so the rest of pqx builds: WP3 replaces them.
 package fmtx
 
 import (
+	"math"
+
 	"github.com/apache/arrow-go/v18/arrow"
 
 	"github.com/mjuric/pqx/go/internal/data"
@@ -64,41 +64,12 @@ const DefaultWidth = 40
 
 // KindFor is the kind of a column from its name, Arrow type and unit
 // (fmt.kind_for).
-func KindFor(name string, t arrow.DataType, unit string) Kind {
-	switch {
-	case t == nil:
-		return KindStr
-	case arrow.IsInteger(t.ID()):
-		return KindInt
-	case t.ID() == arrow.FLOAT32 || t.ID() == arrow.FLOAT16:
-		return KindFloat32
-	case arrow.IsFloating(t.ID()) || arrow.IsDecimal(t.ID()):
-		return KindFloat
-	case t.ID() == arrow.BOOL:
-		return KindBool
-	case t.ID() == arrow.TIMESTAMP || t.ID() == arrow.DATE32 || t.ID() == arrow.DATE64 || t.ID() == arrow.TIME32 || t.ID() == arrow.TIME64:
-		return KindTime
-	case t.ID() == arrow.BINARY || t.ID() == arrow.LARGE_BINARY || t.ID() == arrow.FIXED_SIZE_BINARY || t.ID() == arrow.BINARY_VIEW:
-		return KindBinary
-	case arrow.IsNested(t.ID()):
-		return KindNested
-	}
-	return KindStr
-}
+func KindFor(name string, t arrow.DataType, unit string) Kind { return kindFor(name, t, unit) }
 
 // Format is one value's text (fmt.format_value), sanitized unless
-// o.Unsafe. Starter: the prototype's formatting.
+// o.Unsafe.
 func Format(v data.Value, k Kind, o Opts) string {
-	s := starterFormat(v)
-	if !o.Unsafe {
-		s = Sanitize(s, true)
-	}
-	if o.Width > 0 && !o.Raw {
-		if r := []rune(s); len(r) > o.Width {
-			s = string(r[:o.Width-1]) + "…"
-		}
-	}
-	return s
+	return formatValue(v, k, o.Raw, o.Width, o.Override, !o.Unsafe)
 }
 
 // RightJustified reports whether a kind's cells sit right (numbers).
@@ -117,68 +88,124 @@ func Cell(v data.Value, k Kind, o Opts) styled.Text {
 	if RightJustified(k) {
 		t.Justify = styled.Right
 	}
-	if v == nil {
+	switch x := v.(type) {
+	case nil:
 		t.Style.Dim = true
+		return t
+	case float64:
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			t.Style.Dim = true
+			return t
+		}
+	case float32:
+		if f := float64(x); math.IsNaN(f) || math.IsInf(f, 0) {
+			t.Style.Dim = true
+			return t
+		}
+	}
+	if k == KindBool {
+		t.Justify = styled.Center
+		if truthy(v) {
+			t.Style.Bold = true
+		} else {
+			t.Style.Dim = true
+		}
 	}
 	return t
 }
 
+// truthy is Python's bool(v).
+func truthy(v data.Value) bool {
+	switch x := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return x
+	case int64:
+		return x != 0
+	case uint64:
+		return x != 0
+	case float64:
+		return x != 0
+	case float32:
+		return x != 0
+	case string:
+		return x != ""
+	case []byte:
+		return len(x) > 0
+	case data.List:
+		return len(x) > 0
+	case data.Struct:
+		return len(x) > 0
+	case data.Map:
+		return len(x) > 0
+	case data.Decimal:
+		return x.Unscaled != nil && x.Unscaled.Sign() != 0
+	case data.Duration:
+		return x != 0
+	case data.Interval:
+		return x != data.Interval{}
+	}
+	return true
+}
+
 // Derived is the reading shown below a value in the details pane
 // ("· 2026-01-02 03:04:05 UTC", h:m:s, d:m:s, mas, AB mag), "" if none
-// (fmt.derived). Starter: none.
-func Derived(name string, k Kind, v data.Value, unit string) string { return "" }
+// (fmt.derived).
+func Derived(name string, k Kind, v data.Value, unit string) string { return derived(name, k, v, unit) }
 
 // MJDToISO, DegToHMS and DegToDMS are fmt.py's conversions.
-func MJDToISO(mjd float64) string            { return "" }
-func DegToHMS(deg float64) string            { return "" }
-func DegToDMS(deg float64, plus bool) string { return "" }
+func MJDToISO(mjd float64) string            { return mjdToISO(mjd) }
+func DegToHMS(deg float64) string            { return degToHMS(deg) }
+func DegToDMS(deg float64, plus bool) string { return degToDMS(deg, plus) }
 
 // DefaultDigits is the digits a kind shows automatically (decimals for
 // mjd, angle and mag; significant digits for the others), or 0 if digits
 // don't apply.
-func DefaultDigits(k Kind) int { return 0 }
+func DefaultDigits(k Kind) int { return defaultDigits(k) }
 
 // StepOverride is "<" (delta -1) or ">" (+1) applied to o.
-func StepOverride(o Override, k Kind, delta int) Override { return o }
+func StepOverride(o Override, k Kind, delta int) Override { return stepOverride(o, k, delta) }
 
 // DescribeOverride is o in words for the header and notices ("3 digits", ".2f").
-func DescribeOverride(o Override, k Kind) string { return o.Spec }
+func DescribeOverride(o Override, k Kind) string { return describeOverride(o, k) }
 
 // OverrideError is why value can't be a format for kind (checked against
-// sample, a value of the column, if not nil), or "" if it can.
-func OverrideError(o Override, k Kind, sample data.Value) string { return "" }
+// sample, a value of the column, if not nil), or "" if it can. Kind ""
+// is Python's kind=None: the spec only has to suit some column.
+func OverrideError(o Override, k Kind, sample data.Value) string { return overrideError(o, k, sample) }
 
 // ParseOverride is the format dialog's and formats.yaml's text: "3" is 3
 // digits, "" automatic, anything else a spec (config.parse_override).
-func ParseOverride(text string) Override {
-	if text == "" {
-		return Override{}
-	}
-	return Override{Spec: text, Set: true}
-}
+func ParseOverride(text string) Override { return parseOverride(text) }
 
 // Sanitize shows control, C1, bidi and zero-width characters as visible
 // symbols (ESC as ␛), keeping tab and newline if keepWS (fmt.sanitize).
 // Everything from the file goes through it before reaching the terminal.
-func Sanitize(s string, keepWS bool) string { return data.Sanitize(s) }
+func Sanitize(s string, keepWS bool) string {
+	if keepWS {
+		return data.SanitizeKeepWS(s)
+	}
+	return data.Sanitize(s)
+}
 
 // HasControls reports whether Sanitize would change s.
-func HasControls(s string, keepWS bool) bool { return Sanitize(s, keepWS) != s }
+func HasControls(s string, keepWS bool) bool {
+	if keepWS {
+		return data.SanitizeKeepWS(s) != s
+	}
+	return data.HasControls(s)
+}
 
 // Percent is part/whole as a percentage that never reads 0% or 100% for a
 // partial share.
-func Percent(part, whole float64) string { return "" }
+func Percent(part, whole float64) string { return percent(part, whole) }
 
 // HumanCount is n as 1.2k, 3.4M, 5.6B, 7.8T.
-func HumanCount(n float64) string { return "" }
+func HumanCount(n float64) string { return humanCount(n) }
 
 // HumanBytes is n bytes as KiB, MiB, ….
-func HumanBytes(n float64) string { return "" }
+func HumanBytes(n float64) string { return humanBytes(n) }
 
 // ShortType is a short type name for headers (f64, i32, ts[us,UTC], dict<…>).
-func ShortType(t arrow.DataType) string {
-	if t == nil {
-		return ""
-	}
-	return t.String()
-}
+func ShortType(t arrow.DataType) string { return shortType(t) }
