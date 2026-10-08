@@ -321,10 +321,14 @@ func (d *dataset) noteDirectFailure(ctx context.Context, err error, rows []int64
 // decodes each row group from its start (it decompresses the pages before a
 // row even when it skips them) to the last row wanted; DuckDB skips rows
 // faster but sets up a scan of every row group in the file per query.
-// Milliseconds and bytes; arrowNsPerByte measured on SSSource and mpc_orbits
-// (see readRows' test notes in the PR), DuckDB's constants are pqx's.
+// Milliseconds and bytes. arrowNsPerByte is from SSSource and mpc_orbits
+// (1.1 to 2.3 ns per uncompressed byte for 50 rows of 20 columns); DuckDB's
+// constants are pqx's. DuckDB reads row groups in parallel and its time
+// varied less (40 to 700 ms there, against 20 ms to 14 s for arrow-go,
+// whose worst case is a wide text column decoded up to a row deep in a row
+// group), so the model leans to DuckDB.
 var (
-	arrowNsPerByte    = 1.0
+	arrowNsPerByte    = 1.5
 	duckSkipRatio     = 0.3 // DuckDB's cost to skip a byte, relative to arrow-go decoding it
 	duckMsBase        = 4.0
 	duckMsPerCol      = 0.1
@@ -415,7 +419,8 @@ func (d *dataset) readDuckRows(ctx context.Context, rows []int64, fields []int) 
 			cond = fmt.Sprintf("file_row_number >= %d AND file_row_number < %d", rows[0], rows[len(rows)-1]+1)
 		} else {
 			var b strings.Builder
-			b.WriteString("file_row_number IN (")
+			// (the range lets DuckDB skip the row groups outside it)
+			fmt.Fprintf(&b, "file_row_number >= %d AND file_row_number <= %d AND file_row_number IN (", rows[0], rows[len(rows)-1])
 			for i, r := range rows {
 				if i > 0 {
 					b.WriteString(", ")

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -626,8 +627,14 @@ func TestWindowsDirectVsDuck(t *testing.T) {
 // test_fetch.py::test_reads_only_needed_row_groups
 func TestReadsOnlyNeededRowGroups(t *testing.T) {
 	d := manyRowGroups(t)
+	var mu sync.Mutex
 	var calls [][2]int
-	readHook = func(rg int, leaves []int) error { calls = append(calls, [2]int{rg, leaves[0]}); return nil }
+	readHook = func(rg int, leaves []int) error {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, [2]int{rg, leaves[0]})
+		return nil
+	}
 	defer func() { readHook = nil }()
 	w := mustFetch(t, d, View{}, 130, 10, []string{"x"})
 	if !slices.Equal(w.FileRows, []int64{130, 131, 132, 133, 134, 135, 136, 137, 138, 139}) {
@@ -683,8 +690,14 @@ func TestReadErrorExcludesOnlyTheBadColumn(t *testing.T) {
 	if !d.fb.excluded[d.byName["band"]] || d.fb.excluded[d.byName["mag"]] {
 		t.Fatalf("excluded %v", d.fb.excluded)
 	}
+	var mu sync.Mutex
 	var reads []int
-	readHook = func(rg int, leaves []int) error { reads = append(reads, leaves[0]); return nil }
+	readHook = func(rg int, leaves []int) error {
+		mu.Lock()
+		defer mu.Unlock()
+		reads = append(reads, leaves[0])
+		return nil
+	}
 	mustFetch(t, d, View{}, 100, 10, []string{"mag", "band"})
 	if !slices.Equal(reads, []int{d.leaves[d.byName["mag"]][0]}) {
 		t.Fatalf("arrow-go read %v; band should be DuckDB's", reads)
@@ -694,17 +707,16 @@ func TestReadErrorExcludesOnlyTheBadColumn(t *testing.T) {
 // test_fetch.py::test_unpinned_read_error_remembers_row_groups
 func TestUnpinnedReadErrorRemembersRowGroups(t *testing.T) {
 	d := manyRowGroups(t)
+	var mu sync.Mutex
 	var calls []int
-	readHook = func(rg int, leaves []int) error {
-		calls = append(calls, rg)
-		return nil
-	}
 	defer func() { readHook = nil }()
-	// row group 3 fails unless one row is read (the probe reads one)
+	// row group 3 fails once (a read of all its columns); the probes that
+	// follow (each column alone) don't
 	fail := true
-	orig := readHook
 	readHook = func(rg int, leaves []int) error {
-		orig(rg, leaves)
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, rg)
 		if rg == 3 && fail {
 			fail = false
 			return errors.New("bad page deep in row group 3")
@@ -1077,16 +1089,16 @@ func TestGlobBackslashNames(t *testing.T) {
 		`a\*.parquet`: {1, 2}, `a\b.parquet`: {3}, `b\[1].parquet`: {4, 4}, `e\?.parquet`: {5},
 		`c\.parquet`: {6}, `g\\*.parquet`: {7, 7, 7}, `sub/x?.parquet`: {8}, `sub/x1.parquet`: {9, 9},
 	}
+	paths := map[string][]int64{}
 	for name, vals := range files {
 		p := filepath.Join(dir, name)
 		if strings.HasPrefix(name, "sub/") {
 			p = filepath.Join(sub, strings.TrimPrefix(name, "sub/"))
 		}
 		writeInts(t, p, vals...)
-		files[p] = vals
-		delete(files, name)
+		paths[p] = vals
 	}
-	for p, vals := range files {
+	for p, vals := range paths {
 		ds, err := Open(p, Options{})
 		if err != nil {
 			t.Fatal(err)
@@ -1145,5 +1157,41 @@ func TestBlockingTableFunction(t *testing.T) {
 	}
 	if n := d.db.Stats().InUse; n > 0 {
 		t.Fatalf("%d connections still in use", n)
+	}
+}
+
+// Every new call stops on a cancelled context, and a slow sorted or SQL
+// view stops soon after the cancel.
+func TestCancelViews(t *testing.T) {
+	_, ds := fixture(t)
+	done, cancel := context.WithCancel(bg)
+	cancel()
+	calls := map[string]func(ctx context.Context) error{
+		"Validate SQL":   func(ctx context.Context) error { _, err := ds.Validate(ctx, View{SQL: "select 1"}); return err },
+		"Validate sort":  func(ctx context.Context) error { _, err := ds.Validate(ctx, View{OrderBy: []Sort{{Column: "id"}}}); return err },
+		"Fetch sorted":   func(ctx context.Context) error { _, err := ds.Fetch(ctx, View{OrderBy: []Sort{{Column: "id"}}}, 0, 5, []string{"id"}); return err },
+		"Fetch SQL":      func(ctx context.Context) error { _, err := ds.Fetch(ctx, View{SQL: "select 1 a"}, 0, 5, []string{"a"}); return err },
+		"Count SQL":      func(ctx context.Context) error { _, err := ds.Count(ctx, View{SQL: "select 1"}); return err },
+		"FetchColumns":   func(ctx context.Context) error { _, err := ds.FetchColumns(ctx, []int64{5, 3}, []string{"id"}); return err },
+		"FindRow":        func(ctx context.Context) error { _, _, err := ds.FindRow(ctx, View{Where: "id > 3"}, 5); return err },
+		"FetchAround":    func(ctx context.Context) error { _, err := ds.FetchAround(ctx, View{Where: "id > 3"}, 5, 1, 0, 5, []string{"id"}); return err },
+		"FindRow sorted": func(ctx context.Context) error { _, _, err := ds.FindRow(ctx, View{OrderBy: []Sort{{Column: "id"}}}, 5); return err },
+	}
+	for name, call := range calls {
+		if err := call(done); !errors.Is(err, context.Canceled) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, v := range map[string]View{
+		"sorted": {Where: slow, OrderBy: []Sort{{Column: "id"}}},
+		"SQL":    {SQL: "select sum(r) from range(100000000000) t(r)"},
+	} {
+		ctx, cancel := context.WithTimeout(bg, 100*time.Millisecond)
+		t0 := time.Now()
+		_, err := ds.Fetch(ctx, v, 0, 5, nil)
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) || time.Since(t0) > time.Second {
+			t.Errorf("%s: %v after %v", name, err, time.Since(t0))
+		}
 	}
 }

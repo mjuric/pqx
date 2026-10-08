@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -433,5 +434,41 @@ func TestGoldenData(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// data_common.json: is_sql_query and where_sql.
+func TestGoldenCommon(t *testing.T) {
+	f := golden.Load(t, "data_common.json")
+	for _, r := range f.Section(t, "is_sql_query") {
+		if got := IsSQLQuery(r.String(t, "text")); got != r.Bool(t, "out") {
+			t.Errorf("%s %q: %v", r.ID(), r.String(t, "text"), got)
+		}
+	}
+	for _, r := range f.Section(t, "where_sql") {
+		w := r.String(t, "where")
+		got, err := whereSQL(w)
+		if msg, ok := r.Err(); ok {
+			if err == nil || !strings.Contains(msg, err.Error()) {
+				t.Errorf("%s %q: %q %v, Python %s", r.ID(), w, got, err, msg)
+			}
+			continue
+		}
+		// (an unterminated literal is refused here; Python's tokenizer
+		// lets it through to DuckDB, which refuses it)
+		if strings.HasPrefix(w, "'unterminated") {
+			if err == nil {
+				t.Errorf("%s: accepted", r.ID())
+			}
+			continue
+		}
+		if err != nil || got != r.String(t, "out") {
+			t.Errorf("%s %q: %q %v, Python %q", r.ID(), w, got, err, r.String(t, "out"))
+		}
+	}
+	for _, r := range f.Section(t, "path_literal") {
+		if got := pathLiteral(r.String(t, "path")); got != r.String(t, "out") {
+			t.Errorf("%s: %q, Python %q", r.ID(), got, r.String(t, "out"))
+		}
 	}
 }

@@ -21,8 +21,8 @@ import (
 // contract: the filter bar uses it to tell a query from a filter.)
 func IsSQLQuery(text string) bool { return sqlStart.MatchString(text) }
 
-// TableName is the name a SQL view's query calls the file by.
-const TableName = "t"
+// tableName is the name a SQL view's query calls the file by.
+const tableName = "t"
 
 // viewState is what the views need beyond the prototype's dataset: DuckDB's
 // types of the columns, and how each column is read in the plain view.
@@ -143,7 +143,7 @@ func (d *dataset) tableView(ctx context.Context) error {
 		return nil
 	}
 	err := d.withConn(ctx, func(c *duckdbConn) error {
-		_, err := c.ExecContext(ctx, "CREATE OR REPLACE VIEW "+TableName+" AS SELECT * FROM "+readParquet(d.duckPath, false), nil)
+		_, err := c.ExecContext(ctx, "CREATE OR REPLACE VIEW "+tableName+" AS SELECT * FROM "+readParquet(d.duckPath, false), nil)
 		return err
 	})
 	if err != nil {
