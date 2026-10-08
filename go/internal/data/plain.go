@@ -8,6 +8,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/apache/arrow-go/v18/parquet"
 	"github.com/apache/arrow-go/v18/parquet/file"
@@ -23,8 +24,10 @@ var (
 	BufferedStream = true
 	ReadBufferSize = int64(1 << 20)
 	// ReadParallel is how many columns the plain view reads at once.
-	ReadParallel = runtime.GOMAXPROCS(0)
+	ReadParallel = defaultReadParallel
 )
+
+var defaultReadParallel = runtime.GOMAXPROCS(0)
 
 // ctxReader is the file as arrow-go reads it for one Fetch: every read checks
 // the Fetch's context first, so a cancelled Fetch stops at its next read.
@@ -34,11 +37,17 @@ type ctxReader struct {
 }
 
 func (r ctxReader) ReadAt(p []byte, off int64) (int, error) {
+	if beforeRead != nil {
+		beforeRead()
+	}
 	if err := r.ctx.Err(); err != nil {
 		return 0, err
 	}
 	return r.SectionReader.ReadAt(p, off)
 }
+
+// beforeRead, if set (by tests), runs before every read of the plain view.
+var beforeRead func()
 
 // fetchPlain reads file rows [start, start+n) straight from the row groups
 // that hold them, only the requested columns. In each row group, arrow-go's
@@ -121,7 +130,11 @@ func (d *dataset) readRowGroup(ctx context.Context, pf *file.Reader, rg int, lo,
 				errs[k] = ctx.Err()
 				return
 			}
-			out[k], errs[k] = readColumn(ctx, fr, rg, d.leaves[j], lo, hi)
+			cell := FormatCell
+			if d.cellText != nil && d.cellText[j] != nil {
+				cell = d.cellText[j]
+			}
+			out[k], errs[k] = readColumn(ctx, fr, rg, d.leaves[j], lo, hi, cell)
 		}()
 	}
 	wg.Wait()
@@ -134,7 +147,7 @@ func (d *dataset) readRowGroup(ctx context.Context, pf *file.Reader, rg int, lo,
 }
 
 // readColumn reads rows [lo, hi) of one top-level column (its leaves) in row group rg.
-func readColumn(ctx context.Context, fr *pqarrow.FileReader, rg int, leaves []int, lo, hi int64) ([]string, error) {
+func readColumn(ctx context.Context, fr *pqarrow.FileReader, rg int, leaves []int, lo, hi int64, cell func(arrow.Array, int) string) ([]string, error) {
 	rr, err := fr.GetRecordReader(ctx, leaves, []int{rg})
 	if err != nil {
 		return nil, err
@@ -158,7 +171,10 @@ func readColumn(ctx context.Context, fr *pqarrow.FileReader, rg int, leaves []in
 			return nil, fmt.Errorf("arrow-go read %d columns for one", rec.NumCols())
 		}
 		k := min(int(rec.NumRows()), int(hi-lo)-len(out))
-		out = append(out, formatColumn(rec.Column(0), 0, k)...)
+		col := rec.Column(0)
+		for i := range k {
+			out = append(out, cell(col, i))
+		}
 	}
 	return out, nil
 }
@@ -169,5 +185,5 @@ func (d *dataset) readErr(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return fmt.Errorf("reading %s: %w", Sanitize(d.path), err)
+	return safeErr(fmt.Errorf("reading %s: %w", d.path, err))
 }

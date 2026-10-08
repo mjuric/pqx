@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -46,33 +47,48 @@ func duckError(err error) error {
 
 // withConn runs fn on a connection of its own (so that cancelling one call
 // interrupts only that call's query).
-func (d *dataset) withConn(ctx context.Context, fn func(c *duckdb.Conn) error) error {
-	conn, err := d.db.Conn(ctx)
-	if err != nil {
-		if ctx.Err() != nil {
+//
+// It runs fn on a goroutine and returns ctx's error as soon as ctx is done,
+// even if fn is stuck where DuckDB can't be interrupted (preparing a query
+// binds its table functions: read_csv of a FIFO in a filter blocks in the
+// OS). fn's goroutine then finishes, and gives back its connection, later;
+// fn must not touch anything the caller reads after an error.
+// duckdbConn is duckdb-go's connection.
+type duckdbConn = duckdb.Conn
+
+func (d *dataset) withConn(ctx context.Context, fn func(c *duckdbConn) error) error {
+	done := make(chan error, 1)
+	go func() {
+		conn, err := d.db.Conn(ctx)
+		if err != nil {
+			done <- err
+			return
+		}
+		defer conn.Close()
+		done <- conn.Raw(func(dc any) error {
+			c, ok := dc.(*duckdb.Conn)
+			if !ok {
+				return errors.New("not a DuckDB connection")
+			}
+			return fn(c)
+		})
+	}()
+	select {
+	case err := <-done:
+		if err != nil && ctx.Err() != nil {
 			return ctx.Err()
 		}
 		return err
-	}
-	defer conn.Close()
-	err = conn.Raw(func(dc any) error {
-		c, ok := dc.(*duckdb.Conn)
-		if !ok {
-			return errors.New("not a DuckDB connection")
-		}
-		return fn(c)
-	})
-	if err != nil && ctx.Err() != nil {
+	case <-ctx.Done():
 		return ctx.Err()
 	}
-	return err
 }
 
 // checkSelect prepares (binds) query without running it: an error if it
 // doesn't bind or isn't exactly one SELECT. duckdb-go's Prepare refuses more
 // than one statement (unlike its QueryContext, which runs all but the last
 // and returns the last one's rows).
-func checkSelect(c *duckdb.Conn, query string) error {
+func checkSelect(c *duckdbConn, query string) error {
 	st, err := c.Prepare(query)
 	if err != nil {
 		if strings.Contains(err.Error(), "multiple statements") || strings.Contains(err.Error(), "PrepareContext") {
@@ -119,10 +135,13 @@ func (d *dataset) query(ctx context.Context, query string, fn func(rec arrow.Rec
 	})
 }
 
+// CheckWhereTimeout bounds how long CheckWhere waits for DuckDB.
+var CheckWhereTimeout = 10 * time.Second
+
 // CheckWhere refuses a filter that isn't one expression (whereSQL's rules),
 // then has DuckDB bind it in a query over the file, without running it, so a
 // filter naming a column that isn't there, or with a syntax error, gets
-// DuckDB's message.
+// DuckDB's message. It gives up after CheckWhereTimeout.
 func (d *dataset) CheckWhere(where string) error {
 	if strings.TrimSpace(where) == "" {
 		return nil
@@ -131,13 +150,18 @@ func (d *dataset) CheckWhere(where string) error {
 	if err != nil {
 		return err
 	}
-	ctx := context.Background()
-	if err := d.waitBound(ctx); err != nil {
-		return err
+	ctx, cancel := context.WithTimeout(context.Background(), CheckWhereTimeout)
+	defer cancel()
+	err = d.waitBound(ctx)
+	if err == nil {
+		err = d.withConn(ctx, func(c *duckdb.Conn) error {
+			return checkSelect(c, "SELECT count(*) FROM "+d.src+" WHERE "+w)
+		})
 	}
-	return d.withConn(ctx, func(c *duckdb.Conn) error {
-		return checkSelect(c, "SELECT count(*) FROM "+d.src+" WHERE "+w)
-	})
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("DuckDB took over %v to check the filter (does it read from something that blocks?): %w", CheckWhereTimeout, err)
+	}
+	return err
 }
 
 func (d *dataset) countFiltered(ctx context.Context, where string) (int64, error) {

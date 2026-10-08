@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/parquet"
 	"github.com/apache/arrow-go/v18/parquet/file"
 	"github.com/apache/arrow-go/v18/parquet/metadata"
 	"github.com/apache/arrow-go/v18/parquet/pqarrow"
@@ -40,6 +41,10 @@ type dataset struct {
 	bound     chan struct{}
 	bindErr   error
 	duckNames []string
+	duckTypes []string
+	// cellText formats the plain view's cells of each column so they read as
+	// DuckDB's do (see plainCellFunc); nil entries use FormatCell.
+	cellText  []func(arrow.Array, int) string
 	hasRowNum bool // the file has no column of its own named file_row_number
 	closeOnce sync.Once
 }
@@ -49,11 +54,11 @@ type dataset struct {
 func Open(path string, opts Options) (Dataset, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return nil, err
+		return nil, safeErr(err)
 	}
 	f, err := os.Open(abs)
 	if err != nil {
-		return nil, err
+		return nil, safeErr(err)
 	}
 	d, err := open(abs, f, opts)
 	if err != nil {
@@ -66,10 +71,10 @@ func Open(path string, opts Options) (Dataset, error) {
 func open(path string, f *os.File, opts Options) (_ *dataset, err error) {
 	st, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return nil, safeErr(err)
 	}
 	if st.IsDir() {
-		return nil, fmt.Errorf("%s is a directory", Sanitize(path))
+		return nil, safeErr(fmt.Errorf("%s is a directory", path))
 	}
 	d := &dataset{path: path, f: f, size: st.Size(), bound: make(chan struct{})}
 
@@ -80,7 +85,7 @@ func open(path string, f *os.File, opts Options) (_ *dataset, err error) {
 	}
 	connector, err := duckdb.NewConnector(dsn, nil)
 	if err != nil {
-		return nil, err
+		return nil, safeErr(err)
 	}
 	d.db = sql.OpenDB(connector)
 	d.db.SetMaxIdleConns(4)
@@ -89,7 +94,7 @@ func open(path string, f *os.File, opts Options) (_ *dataset, err error) {
 		if err != nil {
 			<-d.bound
 			d.db.Close()
-			err = fmt.Errorf("%s: %w", Sanitize(path), err)
+			err = safeErr(fmt.Errorf("%s: %w", path, err))
 		}
 	}()
 
@@ -140,9 +145,19 @@ func open(path string, f *os.File, opts Options) (_ *dataset, err error) {
 			d.hasRowNum = false
 		}
 	}
-	d.src = "read_parquet(" + pathLiteral(path) + ")"
-	if d.hasRowNum {
-		d.src = "read_parquet(" + pathLiteral(path) + ", file_row_number=true)"
+	d.src = readParquet(path, d.hasRowNum)
+
+	// Wait for DuckDB's bind (it ran alongside the footer parse above), to
+	// show DuckDB's types and to format the plain view's cells to match.
+	// If DuckDB can't read the file, the plain view still works.
+	<-d.bound
+	if d.bindErr == nil && len(d.duckTypes) == len(d.cols) {
+		d.cellText = make([]func(arrow.Array, int) string, len(d.cols))
+		for i := range d.cols {
+			d.cols[i].Type = d.duckTypes[i]
+			int96 := len(d.leaves[i]) == 1 && d.md.Schema.Column(d.leaves[i][0]).PhysicalType() == parquet.Types.Int96
+			d.cellText[i] = plainCellFunc(sc.Field(i).Type, d.duckTypes[i], int96)
+		}
 	}
 	return d, nil
 }
@@ -159,17 +174,37 @@ func countLeaves(n schema.Node) int {
 	return k
 }
 
-// bind has DuckDB read the footer (into its cache) and name the columns.
+// readParquet is DuckDB's table function for the file at path: exactly that
+// file (glob characters escaped), with no columns made up from a hive-style
+// path (/year=2024/), and numbered rows if asked for.
+func readParquet(path string, rowNumbers bool) string {
+	opts := ", hive_partitioning=false"
+	if rowNumbers {
+		opts += ", file_row_number=true"
+	}
+	return "read_parquet(" + pathLiteral(path) + opts + ")"
+}
+
+// bind has DuckDB read the footer (into its cache), and name the columns
+// and their types.
 func (d *dataset) bind() {
 	defer close(d.bound)
-	rows, err := d.db.QueryContext(context.Background(), "SELECT * FROM read_parquet("+pathLiteral(d.path)+") LIMIT 0")
+	rows, err := d.db.QueryContext(context.Background(), "SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM "+readParquet(d.path, false)+")")
 	if err != nil {
 		d.bindErr = duckError(err)
 		return
 	}
 	defer rows.Close()
-	d.duckNames, err = rows.Columns()
-	if err != nil {
+	for rows.Next() {
+		var name, typ string
+		if err := rows.Scan(&name, &typ); err != nil {
+			d.bindErr = duckError(err)
+			return
+		}
+		d.duckNames = append(d.duckNames, name)
+		d.duckTypes = append(d.duckTypes, typ)
+	}
+	if err := rows.Err(); err != nil {
 		d.bindErr = duckError(err)
 	}
 }
@@ -232,7 +267,7 @@ func (d *dataset) Count(ctx context.Context, v View) (int64, error) {
 	return d.countFiltered(ctx, v.Where)
 }
 
-func isPlain(v View) bool { return strings.TrimSpace(v.Where) == "" }
+func isPlain(v View) bool { return v.Plain() }
 
 func (d *dataset) columnIndices(cols []string) ([]int, error) {
 	idx := make([]int, len(cols))
@@ -254,7 +289,8 @@ func emptyWindow(start int64, cols []string) Window {
 	return w
 }
 
-// duckType is DuckDB's name for the type it reads an Arrow type from Parquet as.
+// duckType is DuckDB's name for the type it reads an Arrow type from Parquet
+// as: Column.Type when DuckDB can't read the file (else Open takes DuckDB's).
 func duckType(t arrow.DataType) string {
 	switch t := t.(type) {
 	case *arrow.BooleanType:

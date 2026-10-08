@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/apache/arrow-go/v18/parquet/pqarrow"
 )
 
 func TestOpenSchema(t *testing.T) {
@@ -30,8 +32,17 @@ func TestOpenSchema(t *testing.T) {
 			t.Errorf("%s: type %s, want %s", c.Name, c.Type, w)
 		}
 	}
-	// and they're DuckDB's own names for them
+	// and the fallback mapping (used when DuckDB can't read the file) agrees
 	d := ds.(*dataset)
+	sc, err := pqarrow.FromParquet(d.md.Schema, &pqarrow.ArrowReadProperties{}, d.md.KeyValueMetadata())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, f := range sc.Fields() {
+		if got := duckType(f.Type); got != d.cols[i].Type {
+			t.Errorf("%s: duckType %s, DuckDB says %s", f.Name, got, d.cols[i].Type)
+		}
+	}
 	rows, err := d.db.Query("SELECT column_type FROM (DESCRIBE SELECT * FROM read_parquet(" + pathLiteral(d.path) + "))")
 	if err != nil {
 		t.Fatal(err)

@@ -111,3 +111,20 @@ func isInvisible(r rune) bool {
 	}
 	return false
 }
+
+// safeError is an error whose text is sanitized: arrow-go's and the OS's
+// errors can quote the file's name, its column names or its bytes.
+type safeError struct{ err error }
+
+func (e *safeError) Error() string { return Sanitize(e.err.Error()) }
+func (e *safeError) Unwrap() error { return e.err }
+
+func safeErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := err.(*safeError); ok {
+		return err
+	}
+	return &safeError{err}
+}

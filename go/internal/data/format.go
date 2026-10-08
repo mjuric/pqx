@@ -156,3 +156,55 @@ func formatColumn(arr arrow.Array, lo, hi int) []string {
 	}
 	return out
 }
+
+// plainCellFunc is how the plain view (arrow-go) formats a column of Arrow
+// type at so its cells read as DuckDB's (filtered views) do, given DuckDB's
+// type for the column; nil means FormatCell as is.
+//   - Text that arrow-go reads as binary (Parquet ENUM and JSON): text.
+//   - Nanosecond timestamps that DuckDB reads as microseconds (INT96, and
+//     zone-aware ones): cut to microseconds the way DuckDB does it (INT96
+//     rounded down, others toward zero), and zoned (a Z) as DuckDB's type
+//     says.
+func plainCellFunc(at arrow.DataType, duck string, int96 bool) func(arrow.Array, int) string {
+	switch at := at.(type) {
+	case *arrow.BinaryType, *arrow.LargeBinaryType, *arrow.BinaryViewType:
+		if duck != "VARCHAR" && duck != "JSON" && !strings.HasPrefix(duck, "ENUM") {
+			return nil
+		}
+		return func(arr arrow.Array, i int) string {
+			if arr.IsNull(i) {
+				return Null
+			}
+			var b []byte
+			switch a := arr.(type) {
+			case *array.Binary:
+				b = a.Value(i)
+			case *array.LargeBinary:
+				b = a.Value(i)
+			case *array.BinaryView:
+				b = a.Value(i)
+			default:
+				return FormatCell(arr, i)
+			}
+			return Sanitize(string(b)) // (string() copies)
+		}
+	case *arrow.TimestampType:
+		if at.Unit != arrow.Nanosecond || (duck != "TIMESTAMP" && duck != "TIMESTAMP WITH TIME ZONE") {
+			return nil
+		}
+		zoned := duck == "TIMESTAMP WITH TIME ZONE"
+		return func(arr arrow.Array, i int) string {
+			a, ok := arr.(*array.Timestamp)
+			if !ok || a.IsNull(i) {
+				return FormatCell(arr, i)
+			}
+			v := int64(a.Value(i))
+			us := v / 1000
+			if int96 && v%1000 < 0 {
+				us--
+			}
+			return formatTimestamp(time.UnixMicro(us), zoned)
+		}
+	}
+	return nil
+}
