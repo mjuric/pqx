@@ -359,11 +359,16 @@ func TestExport(t *testing.T) {
 	checkBox(t, d, 150, 42)
 	v := view(d, 150, 42)
 	for _, want := range []string{"Export current view", "where band = 'y' · 3,000 rows · 3 visible columns",
-		filepath.Join(dir, "demo.subset.parquet"), "▐●▌ Parquet (zstd)", "▐●▌ CSV", "▐●▌ JSON (newline-delimited)",
+		"▐●▌ Parquet (zstd)", "▐●▌ CSV", "▐●▌ JSON (newline-delimited)",
 		"▐X▌ Only the visible columns", "▐X▌ Overwrite if the file exists", "Export", "Cancel"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("no %q in\n%s", want, v)
 		}
+	}
+	// the default path (checked as the input's value: a long temporary
+	// directory, as on macOS, doesn't fit the input)
+	if got := d.(*exportDialog).path.Value(); got != filepath.Join(dir, "demo.subset.parquet") {
+		t.Fatalf("default path %q", got)
 	}
 	// CSV: the extension follows
 	press(d, "tab", "down")
