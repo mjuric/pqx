@@ -51,12 +51,7 @@ func (m *Model) View() tea.View {
 // sanitizeTitle drops control characters from the window title (the file
 // name can hold anything).
 func sanitizeTitle(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 || (r >= 0x7f && r < 0xa0) {
-			return -1
-		}
-		return r
-	}, s)
+	return data.Sanitize(s)
 }
 
 const gotoPrompt = "go to row: "

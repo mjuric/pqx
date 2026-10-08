@@ -68,7 +68,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 	path := fs.Arg(0)
 	ds, err := data.Open(path, data.Options{Threads: *threads})
 	if err != nil {
-		fmt.Fprintf(stderr, "pqx: %s: %v\n", path, err)
+		// For file-system errors, say "pqx: FILE: reason" once; Open's own
+		// message would repeat the (absolute) path. Other errors from Open already
+		// name the file.
+		var pe *os.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err
+		}
+		if msg := err.Error(); strings.Contains(msg, path) {
+			fmt.Fprintf(stderr, "pqx: %s\n", msg) // already sanitized and names the file
+		} else {
+			fmt.Fprintf(stderr, "pqx: %s: %s\n", data.Sanitize(path), msg)
+		}
 		return 1
 	}
 	defer ds.Close()
