@@ -21,8 +21,7 @@ type cellFunc func(arrow.Array, int) Value
 //     DuckDB hands over as text) turned back into UUID (duckCell).
 //   - arrow-go's values are converted to what ValueAt gives for DuckDB's
 //     Arrow type of the column (directCell): timestamps and times in DuckDB's
-//     unit (cut toward zero, INT96 rounded down, as DuckDB does), durations as
-//     DuckDB's BIGINT count, Parquet text that arrow-go reads as binary (ENUM,
+//     unit (cut toward zero, INT96 rounded down, as DuckDB does), Parquet text that arrow-go reads as binary (ENUM,
 //     JSON) as strings, fixed-size lists as lists, dictionaries decoded.
 //
 // Decimals wider than 38 digits are the exception: DuckDB reads them as
@@ -87,6 +86,11 @@ func convFor(s, d arrow.DataType, ti duckdb.TypeInfo, int96, top bool) (cellFunc
 		}, true
 	case *arrow.NullType:
 		return func(arrow.Array, int) Value { return nil }, true
+	case *arrow.DurationType:
+		// arrow-go (v18.8) can't read duration columns ("no support for
+		// reading columns of type: duration"); DuckDB reads their stored
+		// counts as BIGINT.
+		return nil, false
 	}
 	if isUUID {
 		fs, ok := s.(*arrow.FixedSizeBinaryType)
@@ -260,14 +264,6 @@ func convFor(s, d arrow.DataType, ti duckdb.TypeInfo, int96, top bool) (cellFunc
 		}, true
 	case (s.ID() == arrow.DATE32 || s.ID() == arrow.DATE64) && (d.ID() == arrow.DATE32 || d.ID() == arrow.DATE64):
 		return ValueAt, true
-	case s.ID() == arrow.DURATION && d.ID() == arrow.INT64:
-		// DuckDB reads a duration's stored count as a BIGINT
-		return func(arr arrow.Array, i int) Value {
-			if arr.IsNull(i) {
-				return nil
-			}
-			return int64(arr.(*array.Duration).Value(i))
-		}, true
 	case arrow.IsDecimal(s.ID()) && arrow.IsDecimal(d.ID()):
 		sd, dd := s.(arrow.DecimalType), d.(arrow.DecimalType)
 		if sd.GetScale() != dd.GetScale() {
