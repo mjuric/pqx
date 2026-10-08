@@ -1,6 +1,6 @@
 # Go prototype: plan
 
-Status: plan, waiting for the user's approval (2026-10-08). Background and the
+Status: approved by the user 2026-10-08; agents A and B at work. Background and the
 open questions are in [native-port.md](native-port.md); results go there too,
 under "Prototype results".
 
@@ -184,8 +184,8 @@ details pane; dialogs; themes; `formats.yaml`; sorting; export; packaging.
 - Go 1.27 (installed at `/root/sdk/go/bin` on this machine); `gofmt`, `go vet`
   and `go test ./...` must pass before each push.
 - Commit and push after each logical unit; open the PR into `native-port`
-  when done. Don't touch anything outside `go/` (and `go.yml` for the agent
-  that adds CI, A).
+  when done. Don't touch anything outside `go/`. CI (`.github/workflows/go.yml`)
+  is in place from the skeleton commit.
 - The real files under `/sdf/data/rubin/.../delivery/` are read-only.
   Generated test files go in the scratchpad or `t.TempDir()`, and are deleted
   after use.
