@@ -1,0 +1,590 @@
+{
+ "help": {
+  "12": "usage: pqx\n       [-h]\n       [-w WHERE]\n       [--accent {blue,cyan,magenta,green,yellow}]\n       [--dim {faint,bright-black}]\n       [--border BORDER]\n       [--theme THEME]\n       [--sample | --no-sample]\n       [--threads THREADS]\n       [--format COL=SPEC]\n       [--version]\n       path\n\nInteractive\nterminal\nexplorer\nfor Parquet\nfiles:\nbrowse,\nfilter\n(SQL),\nprofile,\nplot and\nexport —\nlazily, so\nfiles of\nany size\nopen\ninstantly.\n\npositional arguments:\n  path\n    Parquet\n    file to\n    open\n\noptions:\n  -h, --help\n    show this\n    help\n    message and\n    exit\n  -w WHERE, --where WHERE\n    initial\n    filter: a\n    SQL WHERE\n    expression,\n    or a full\n    'select …\n    from t'\n    query\n  --accent {blue,cyan,magenta,green,yellow}\n    focus\n    colour,\n    from the\n    terminal's\n    palette\n    (default:\n    blue; env\n    PQX_ACCENT)\n  --dim {faint,bright-black}\n    how\n    secondary\n    text is\n    dimmed: the\n    faint\n    attribute\n    (default)\n    or ANSI\n    bright\n    black (env\n    PQX_DIM)\n  --border BORDER\n    colour of\n    unfocused\n    panel\n    borders, an\n    ANSI name\n    such as bri\n    ght_black\n    (default)\n    or white\n    (env\n    PQX_BORDER)\n  --theme THEME\n    use a\n    Textual\n    theme\n    instead of\n    the\n    terminal's\n    own colours\n  --sample\n    sample rows\n    for\n    stats/plots\n    (default:\n    on above\n    200M rows\n    or 8 GiB)\n  --no-sample\n    always scan\n    every row\n    for\n    stats/plots\n  --threads THREADS\n    DuckDB\n    worker\n    threads\n    (default:\n    all cores;\n    lower it on\n    shared\n    machines)\n  --format COL=SPEC\n    display\n    format for\n    a column\n    this\n    session: a\n    Python spec\n    (.3f, .2e,\n    ,d) or a\n    number of\n    digits;\n    repeatable.\n    Formats set\n    in the grid\n    (< > F) are\n    saved to $X\n    DG_CONFIG_H\n    OME/pqx/for\n    mats.yaml\n    (default ~/\n    .config/pqx\n    /formats.ya\n    ml)\n  --version\n    show the\n    version and\n    licence,\n    and exit\n\nExamples:\n  pqx trips.parquet\n  pqx trips.parquet -w \"payment_type = 'card'\"\n  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n\nInside pqx, press ? for keys.\n\nReport bugs at: <https://github.com/mjuric/pqx/issues>\npqx home page: <https://github.com/mjuric/pqx>\nWritten by Mario Juric.\n",
+  "16": "usage: pqx\n           [-h]\n           [-w WHERE]\n           [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}]\n           [--border BORDER]\n           [--theme THEME]\n           [--sample | --no-sample]\n           [--threads THREADS]\n           [--format COL=SPEC]\n           [--version]\n           path\n\nInteractive\nterminal\nexplorer for\nParquet files:\nbrowse, filter\n(SQL),\nprofile, plot\nand export —\nlazily, so\nfiles of any\nsize open\ninstantly.\n\npositional arguments:\n  path\n    Parquet\n    file to\n    open\n\noptions:\n  -h, --help\n    show this\n    help\n    message and\n    exit\n  -w WHERE, --where WHERE\n    initial\n    filter: a\n    SQL WHERE\n    expression,\n    or a full\n    'select …\n    from t'\n    query\n  --accent {blue,cyan,magenta,green,yellow}\n    focus\n    colour,\n    from the\n    terminal's\n    palette\n    (default:\n    blue; env\n    PQX_ACCENT)\n  --dim {faint,bright-black}\n    how\n    secondary\n    text is\n    dimmed: the\n    faint\n    attribute\n    (default)\n    or ANSI\n    bright\n    black (env\n    PQX_DIM)\n  --border BORDER\n    colour of\n    unfocused\n    panel\n    borders, an\n    ANSI name\n    such as bri\n    ght_black\n    (default)\n    or white\n    (env\n    PQX_BORDER)\n  --theme THEME\n    use a\n    Textual\n    theme\n    instead of\n    the\n    terminal's\n    own colours\n  --sample\n    sample rows\n    for\n    stats/plots\n    (default:\n    on above\n    200M rows\n    or 8 GiB)\n  --no-sample\n    always scan\n    every row\n    for\n    stats/plots\n  --threads THREADS\n    DuckDB\n    worker\n    threads\n    (default:\n    all cores;\n    lower it on\n    shared\n    machines)\n  --format COL=SPEC\n    display\n    format for\n    a column\n    this\n    session: a\n    Python spec\n    (.3f, .2e,\n    ,d) or a\n    number of\n    digits;\n    repeatable.\n    Formats set\n    in the grid\n    (< > F) are\n    saved to $X\n    DG_CONFIG_H\n    OME/pqx/for\n    mats.yaml\n    (default ~/\n    .config/pqx\n    /formats.ya\n    ml)\n  --version\n    show the\n    version and\n    licence,\n    and exit\n\nExamples:\n  pqx trips.parquet\n  pqx trips.parquet -w \"payment_type = 'card'\"\n  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n\nInside pqx, press ? for keys.\n\nReport bugs at: <https://github.com/mjuric/pqx/issues>\npqx home page: <https://github.com/mjuric/pqx>\nWritten by Mario Juric.\n",
+  "20": "usage: pqx [-h]\n           [-w WHERE]\n           [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}]\n           [--border BORDER]\n           [--theme THEME]\n           [--sample | --no-sample]\n           [--threads THREADS]\n           [--format COL=SPEC]\n           [--version]\n           path\n\nInteractive\nterminal explorer\nfor Parquet files:\nbrowse, filter\n(SQL), profile,\nplot and export —\nlazily, so files\nof any size open\ninstantly.\n\npositional arguments:\n  path\n    Parquet file\n    to open\n\noptions:\n  -h, --help\n    show this help\n    message and\n    exit\n  -w WHERE, --where WHERE\n    initial\n    filter: a SQL\n    WHERE\n    expression, or\n    a full 'select\n    … from t'\n    query\n  --accent {blue,cyan,magenta,green,yellow}\n    focus colour,\n    from the\n    terminal's\n    palette\n    (default:\n    blue; env\n    PQX_ACCENT)\n  --dim {faint,bright-black}\n    how secondary\n    text is\n    dimmed: the\n    faint\n    attribute\n    (default) or\n    ANSI bright\n    black (env\n    PQX_DIM)\n  --border BORDER\n    colour of\n    unfocused\n    panel borders,\n    an ANSI name\n    such as\n    bright_black\n    (default) or\n    white (env\n    PQX_BORDER)\n  --theme THEME\n    use a Textual\n    theme instead\n    of the\n    terminal's own\n    colours\n  --sample\n    sample rows\n    for\n    stats/plots\n    (default: on\n    above 200M\n    rows or 8 GiB)\n  --no-sample\n    always scan\n    every row for\n    stats/plots\n  --threads THREADS\n    DuckDB worker\n    threads\n    (default: all\n    cores; lower\n    it on shared\n    machines)\n  --format COL=SPEC\n    display format\n    for a column\n    this session:\n    a Python spec\n    (.3f, .2e, ,d)\n    or a number of\n    digits;\n    repeatable.\n    Formats set in\n    the grid (< >\n    F) are saved\n    to $XDG_CONFIG\n    _HOME/pqx/form\n    ats.yaml\n    (default ~/.co\n    nfig/pqx/forma\n    ts.yaml)\n  --version\n    show the\n    version and\n    licence, and\n    exit\n\nExamples:\n  pqx trips.parquet\n  pqx trips.parquet -w \"payment_type = 'card'\"\n  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n\nInside pqx, press ? for keys.\n\nReport bugs at: <https://github.com/mjuric/pqx/issues>\npqx home page: <https://github.com/mjuric/pqx>\nWritten by Mario Juric.\n",
+  "25": "usage: pqx [-h]\n           [-w WHERE]\n           [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}]\n           [--border BORDER]\n           [--theme THEME]\n           [--sample | --no-sample]\n           [--threads THREADS]\n           [--format COL=SPEC]\n           [--version]\n           path\n\nInteractive terminal\nexplorer for Parquet\nfiles: browse, filter\n(SQL), profile, plot\nand export — lazily, so\nfiles of any size open\ninstantly.\n\npositional arguments:\n  path\n    Parquet file to\n    open\n\noptions:\n  -h, --help\n    show this help\n    message and exit\n  -w WHERE, --where WHERE\n    initial filter: a\n    SQL WHERE\n    expression, or a\n    full 'select … from\n    t' query\n  --accent {blue,cyan,magenta,green,yellow}\n    focus colour, from\n    the terminal's\n    palette (default:\n    blue; env\n    PQX_ACCENT)\n  --dim {faint,bright-black}\n    how secondary text\n    is dimmed: the\n    faint attribute\n    (default) or ANSI\n    bright black (env\n    PQX_DIM)\n  --border BORDER\n    colour of unfocused\n    panel borders, an\n    ANSI name such as\n    bright_black\n    (default) or white\n    (env PQX_BORDER)\n  --theme THEME\n    use a Textual theme\n    instead of the\n    terminal's own\n    colours\n  --sample\n    sample rows for\n    stats/plots\n    (default: on above\n    200M rows or 8 GiB)\n  --no-sample\n    always scan every\n    row for stats/plots\n  --threads THREADS\n    DuckDB worker\n    threads (default:\n    all cores; lower it\n    on shared machines)\n  --format COL=SPEC\n    display format for\n    a column this\n    session: a Python\n    spec (.3f, .2e, ,d)\n    or a number of\n    digits; repeatable.\n    Formats set in the\n    grid (< > F) are\n    saved to $XDG_CONFI\n    G_HOME/pqx/formats.\n    yaml (default ~/.co\n    nfig/pqx/formats.ya\n    ml)\n  --version\n    show the version\n    and licence, and\n    exit\n\nExamples:\n  pqx trips.parquet\n  pqx trips.parquet -w \"payment_type = 'card'\"\n  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n\nInside pqx, press ? for keys.\n\nReport bugs at: <https://github.com/mjuric/pqx/issues>\npqx home page: <https://github.com/mjuric/pqx>\nWritten by Mario Juric.\n",
+  "30": "usage: pqx [-h] [-w WHERE]\n           [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}]\n           [--border BORDER]\n           [--theme THEME]\n           [--sample | --no-sample]\n           [--threads THREADS]\n           [--format COL=SPEC]\n           [--version]\n           path\n\nInteractive terminal\nexplorer for Parquet files:\nbrowse, filter (SQL),\nprofile, plot and export —\nlazily, so files of any size\nopen instantly.\n\npositional arguments:\n  path  Parquet file to open\n\noptions:\n  -h, --help\n        show this help\n        message and exit\n  -w WHERE, --where WHERE\n        initial filter: a\n        SQL WHERE\n        expression, or a\n        full 'select … from\n        t' query\n  --accent {blue,cyan,magenta,green,yellow}\n        focus colour, from\n        the terminal's\n        palette (default:\n        blue; env\n        PQX_ACCENT)\n  --dim {faint,bright-black}\n        how secondary text\n        is dimmed: the faint\n        attribute (default)\n        or ANSI bright black\n        (env PQX_DIM)\n  --border BORDER\n        colour of unfocused\n        panel borders, an\n        ANSI name such as\n        bright_black\n        (default) or white\n        (env PQX_BORDER)\n  --theme THEME\n        use a Textual theme\n        instead of the\n        terminal's own\n        colours\n  --sample\n        sample rows for\n        stats/plots\n        (default: on above\n        200M rows or 8 GiB)\n  --no-sample\n        always scan every\n        row for stats/plots\n  --threads THREADS\n        DuckDB worker\n        threads (default:\n        all cores; lower it\n        on shared machines)\n  --format COL=SPEC\n        display format for a\n        column this session:\n        a Python spec (.3f,\n        .2e, ,d) or a number\n        of digits;\n        repeatable. Formats\n        set in the grid (< >\n        F) are saved to $XDG\n        _CONFIG_HOME/pqx/for\n        mats.yaml (default ~\n        /.config/pqx/formats\n        .yaml)\n  --version\n        show the version and\n        licence, and exit\n\nExamples:\n  pqx trips.parquet\n  pqx trips.parquet -w \"payment_type = 'card'\"\n  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n\nInside pqx, press ? for keys.\n\nReport bugs at: <https://github.com/mjuric/pqx/issues>\npqx home page: <https://github.com/mjuric/pqx>\nWritten by Mario Juric.\n",
+  "40": "usage: pqx [-h] [-w WHERE]\n           [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}]\n           [--border BORDER]\n           [--theme THEME]\n           [--sample | --no-sample]\n           [--threads THREADS]\n           [--format COL=SPEC]\n           [--version]\n           path\n\nInteractive terminal explorer for\nParquet files: browse, filter (SQL),\nprofile, plot and export — lazily, so\nfiles of any size open instantly.\n\npositional arguments:\n  path            Parquet file to open\n\noptions:\n  -h, --help      show this help\n                  message and exit\n  -w WHERE, --where WHERE\n                  initial filter: a\n                  SQL WHERE\n                  expression, or a\n                  full 'select … from\n                  t' query\n  --accent {blue,cyan,magenta,green,yellow}\n                  focus colour, from\n                  the terminal's\n                  palette (default:\n                  blue; env\n                  PQX_ACCENT)\n  --dim {faint,bright-black}\n                  how secondary text\n                  is dimmed: the faint\n                  attribute (default)\n                  or ANSI bright black\n                  (env PQX_DIM)\n  --border BORDER\n                  colour of unfocused\n                  panel borders, an\n                  ANSI name such as\n                  bright_black\n                  (default) or white\n                  (env PQX_BORDER)\n  --theme THEME   use a Textual theme\n                  instead of the\n                  terminal's own\n                  colours\n  --sample        sample rows for\n                  stats/plots\n                  (default: on above\n                  200M rows or 8 GiB)\n  --no-sample     always scan every\n                  row for stats/plots\n  --threads THREADS\n                  DuckDB worker\n                  threads (default:\n                  all cores; lower it\n                  on shared machines)\n  --format COL=SPEC\n                  display format for a\n                  column this session:\n                  a Python spec (.3f,\n                  .2e, ,d) or a number\n                  of digits;\n                  repeatable. Formats\n                  set in the grid (< >\n                  F) are saved to $XDG\n                  _CONFIG_HOME/pqx/for\n                  mats.yaml (default ~\n                  /.config/pqx/formats\n                  .yaml)\n  --version       show the version and\n                  licence, and exit\n\nExamples:\n  pqx trips.parquet\n  pqx trips.parquet -w \"payment_type = 'card'\"\n  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n\nInside pqx, press ? for keys.\n\nReport bugs at: <https://github.com/mjuric/pqx/issues>\npqx home page: <https://github.com/mjuric/pqx>\nWritten by Mario Juric.\n",
+  "50": "usage: pqx [-h] [-w WHERE]\n           [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}]\n           [--border BORDER] [--theme THEME]\n           [--sample | --no-sample]\n           [--threads THREADS]\n           [--format COL=SPEC] [--version]\n           path\n\nInteractive terminal explorer for Parquet files:\nbrowse, filter (SQL), profile, plot and export —\nlazily, so files of any size open instantly.\n\npositional arguments:\n  path                  Parquet file to open\n\noptions:\n  -h, --help            show this help message\n                        and exit\n  -w WHERE, --where WHERE\n                        initial filter: a SQL\n                        WHERE expression, or a\n                        full 'select … from t'\n                        query\n  --accent {blue,cyan,magenta,green,yellow}\n                        focus colour, from the\n                        terminal's palette\n                        (default: blue; env\n                        PQX_ACCENT)\n  --dim {faint,bright-black}\n                        how secondary text is\n                        dimmed: the faint\n                        attribute (default) or\n                        ANSI bright black (env\n                        PQX_DIM)\n  --border BORDER       colour of unfocused\n                        panel borders, an ANSI\n                        name such as\n                        bright_black (default)\n                        or white (env\n                        PQX_BORDER)\n  --theme THEME         use a Textual theme\n                        instead of the\n                        terminal's own colours\n  --sample              sample rows for\n                        stats/plots (default: on\n                        above 200M rows or 8\n                        GiB)\n  --no-sample           always scan every row\n                        for stats/plots\n  --threads THREADS     DuckDB worker threads\n                        (default: all cores;\n                        lower it on shared\n                        machines)\n  --format COL=SPEC     display format for a\n                        column this session: a\n                        Python spec (.3f, .2e,\n                        ,d) or a number of\n                        digits; repeatable.\n                        Formats set in the grid\n                        (< > F) are saved to $XD\n                        G_CONFIG_HOME/pqx/format\n                        s.yaml (default ~/.confi\n                        g/pqx/formats.yaml)\n  --version             show the version and\n                        licence, and exit\n\nExamples:\n  pqx trips.parquet\n  pqx trips.parquet -w \"payment_type = 'card'\"\n  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n\nInside pqx, press ? for keys.\n\nReport bugs at: <https://github.com/mjuric/pqx/issues>\npqx home page: <https://github.com/mjuric/pqx>\nWritten by Mario Juric.\n",
+  "60": "usage: pqx [-h] [-w WHERE]\n           [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER]\n           [--theme THEME] [--sample | --no-sample]\n           [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\n\nInteractive terminal explorer for Parquet files: browse,\nfilter (SQL), profile, plot and export — lazily, so files\nof any size open instantly.\n\npositional arguments:\n  path                  Parquet file to open\n\noptions:\n  -h, --help            show this help message and exit\n  -w WHERE, --where WHERE\n                        initial filter: a SQL WHERE\n                        expression, or a full 'select …\n                        from t' query\n  --accent {blue,cyan,magenta,green,yellow}\n                        focus colour, from the terminal's\n                        palette (default: blue; env\n                        PQX_ACCENT)\n  --dim {faint,bright-black}\n                        how secondary text is dimmed: the\n                        faint attribute (default) or ANSI\n                        bright black (env PQX_DIM)\n  --border BORDER       colour of unfocused panel borders,\n                        an ANSI name such as bright_black\n                        (default) or white (env\n                        PQX_BORDER)\n  --theme THEME         use a Textual theme instead of the\n                        terminal's own colours\n  --sample              sample rows for stats/plots\n                        (default: on above 200M rows or 8\n                        GiB)\n  --no-sample           always scan every row for\n                        stats/plots\n  --threads THREADS     DuckDB worker threads (default:\n                        all cores; lower it on shared\n                        machines)\n  --format COL=SPEC     display format for a column this\n                        session: a Python spec (.3f, .2e,\n                        ,d) or a number of digits;\n                        repeatable. Formats set in the\n                        grid (< > F) are saved to\n                        $XDG_CONFIG_HOME/pqx/formats.yaml\n                        (default\n                        ~/.config/pqx/formats.yaml)\n  --version             show the version and licence, and\n                        exit\n\nExamples:\n  pqx trips.parquet\n  pqx trips.parquet -w \"payment_type = 'card'\"\n  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n\nInside pqx, press ? for keys.\n\nReport bugs at: <https://github.com/mjuric/pqx/issues>\npqx home page: <https://github.com/mjuric/pqx>\nWritten by Mario Juric.\n",
+  "72": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER]\n           [--theme THEME] [--sample | --no-sample]\n           [--threads THREADS] [--format COL=SPEC] [--version]\n           path\n\nInteractive terminal explorer for Parquet files: browse, filter (SQL),\nprofile, plot and export — lazily, so files of any size open\ninstantly.\n\npositional arguments:\n  path                  Parquet file to open\n\noptions:\n  -h, --help            show this help message and exit\n  -w WHERE, --where WHERE\n                        initial filter: a SQL WHERE expression, or a\n                        full 'select … from t' query\n  --accent {blue,cyan,magenta,green,yellow}\n                        focus colour, from the terminal's palette\n                        (default: blue; env PQX_ACCENT)\n  --dim {faint,bright-black}\n                        how secondary text is dimmed: the faint\n                        attribute (default) or ANSI bright black (env\n                        PQX_DIM)\n  --border BORDER       colour of unfocused panel borders, an ANSI\n                        name such as bright_black (default) or white\n                        (env PQX_BORDER)\n  --theme THEME         use a Textual theme instead of the terminal's\n                        own colours\n  --sample              sample rows for stats/plots (default: on above\n                        200M rows or 8 GiB)\n  --no-sample           always scan every row for stats/plots\n  --threads THREADS     DuckDB worker threads (default: all cores;\n                        lower it on shared machines)\n  --format COL=SPEC     display format for a column this session: a\n                        Python spec (.3f, .2e, ,d) or a number of\n                        digits; repeatable. Formats set in the grid (<\n                        > F) are saved to\n                        $XDG_CONFIG_HOME/pqx/formats.yaml (default\n                        ~/.config/pqx/formats.yaml)\n  --version             show the version and licence, and exit\n\nExamples:\n  pqx trips.parquet\n  pqx trips.parquet -w \"payment_type = 'card'\"\n  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n\nInside pqx, press ? for keys.\n\nReport bugs at: <https://github.com/mjuric/pqx/issues>\npqx home page: <https://github.com/mjuric/pqx>\nWritten by Mario Juric.\n",
+  "80": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\n\nInteractive terminal explorer for Parquet files: browse, filter (SQL),\nprofile, plot and export — lazily, so files of any size open instantly.\n\npositional arguments:\n  path                  Parquet file to open\n\noptions:\n  -h, --help            show this help message and exit\n  -w WHERE, --where WHERE\n                        initial filter: a SQL WHERE expression, or a full\n                        'select … from t' query\n  --accent {blue,cyan,magenta,green,yellow}\n                        focus colour, from the terminal's palette (default:\n                        blue; env PQX_ACCENT)\n  --dim {faint,bright-black}\n                        how secondary text is dimmed: the faint attribute\n                        (default) or ANSI bright black (env PQX_DIM)\n  --border BORDER       colour of unfocused panel borders, an ANSI name such\n                        as bright_black (default) or white (env PQX_BORDER)\n  --theme THEME         use a Textual theme instead of the terminal's own\n                        colours\n  --sample              sample rows for stats/plots (default: on above 200M\n                        rows or 8 GiB)\n  --no-sample           always scan every row for stats/plots\n  --threads THREADS     DuckDB worker threads (default: all cores; lower it on\n                        shared machines)\n  --format COL=SPEC     display format for a column this session: a Python\n                        spec (.3f, .2e, ,d) or a number of digits; repeatable.\n                        Formats set in the grid (< > F) are saved to\n                        $XDG_CONFIG_HOME/pqx/formats.yaml (default\n                        ~/.config/pqx/formats.yaml)\n  --version             show the version and licence, and exit\n\nExamples:\n  pqx trips.parquet\n  pqx trips.parquet -w \"payment_type = 'card'\"\n  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n\nInside pqx, press ? for keys.\n\nReport bugs at: <https://github.com/mjuric/pqx/issues>\npqx home page: <https://github.com/mjuric/pqx>\nWritten by Mario Juric.\n",
+  "100": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME] [--sample | --no-sample]\n           [--threads THREADS] [--format COL=SPEC] [--version]\n           path\n\nInteractive terminal explorer for Parquet files: browse, filter (SQL), profile, plot and export —\nlazily, so files of any size open instantly.\n\npositional arguments:\n  path                  Parquet file to open\n\noptions:\n  -h, --help            show this help message and exit\n  -w WHERE, --where WHERE\n                        initial filter: a SQL WHERE expression, or a full 'select … from t' query\n  --accent {blue,cyan,magenta,green,yellow}\n                        focus colour, from the terminal's palette (default: blue; env PQX_ACCENT)\n  --dim {faint,bright-black}\n                        how secondary text is dimmed: the faint attribute (default) or ANSI bright\n                        black (env PQX_DIM)\n  --border BORDER       colour of unfocused panel borders, an ANSI name such as bright_black\n                        (default) or white (env PQX_BORDER)\n  --theme THEME         use a Textual theme instead of the terminal's own colours\n  --sample              sample rows for stats/plots (default: on above 200M rows or 8 GiB)\n  --no-sample           always scan every row for stats/plots\n  --threads THREADS     DuckDB worker threads (default: all cores; lower it on shared machines)\n  --format COL=SPEC     display format for a column this session: a Python spec (.3f, .2e, ,d) or\n                        a number of digits; repeatable. Formats set in the grid (< > F) are saved\n                        to $XDG_CONFIG_HOME/pqx/formats.yaml (default ~/.config/pqx/formats.yaml)\n  --version             show the version and licence, and exit\n\nExamples:\n  pqx trips.parquet\n  pqx trips.parquet -w \"payment_type = 'card'\"\n  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n\nInside pqx, press ? for keys.\n\nReport bugs at: <https://github.com/mjuric/pqx/issues>\npqx home page: <https://github.com/mjuric/pqx>\nWritten by Mario Juric.\n",
+  "120": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}] [--dim {faint,bright-black}] [--border BORDER]\n           [--theme THEME] [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC] [--version]\n           path\n\nInteractive terminal explorer for Parquet files: browse, filter (SQL), profile, plot and export — lazily, so files of\nany size open instantly.\n\npositional arguments:\n  path                  Parquet file to open\n\noptions:\n  -h, --help            show this help message and exit\n  -w WHERE, --where WHERE\n                        initial filter: a SQL WHERE expression, or a full 'select … from t' query\n  --accent {blue,cyan,magenta,green,yellow}\n                        focus colour, from the terminal's palette (default: blue; env PQX_ACCENT)\n  --dim {faint,bright-black}\n                        how secondary text is dimmed: the faint attribute (default) or ANSI bright black (env PQX_DIM)\n  --border BORDER       colour of unfocused panel borders, an ANSI name such as bright_black (default) or white (env\n                        PQX_BORDER)\n  --theme THEME         use a Textual theme instead of the terminal's own colours\n  --sample              sample rows for stats/plots (default: on above 200M rows or 8 GiB)\n  --no-sample           always scan every row for stats/plots\n  --threads THREADS     DuckDB worker threads (default: all cores; lower it on shared machines)\n  --format COL=SPEC     display format for a column this session: a Python spec (.3f, .2e, ,d) or a number of digits;\n                        repeatable. Formats set in the grid (< > F) are saved to $XDG_CONFIG_HOME/pqx/formats.yaml\n                        (default ~/.config/pqx/formats.yaml)\n  --version             show the version and licence, and exit\n\nExamples:\n  pqx trips.parquet\n  pqx trips.parquet -w \"payment_type = 'card'\"\n  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n\nInside pqx, press ? for keys.\n\nReport bugs at: <https://github.com/mjuric/pqx/issues>\npqx home page: <https://github.com/mjuric/pqx>\nWritten by Mario Juric.\n",
+  "200": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}] [--dim {faint,bright-black}] [--border BORDER] [--theme THEME] [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\n\nInteractive terminal explorer for Parquet files: browse, filter (SQL), profile, plot and export — lazily, so files of any size open instantly.\n\npositional arguments:\n  path                  Parquet file to open\n\noptions:\n  -h, --help            show this help message and exit\n  -w WHERE, --where WHERE\n                        initial filter: a SQL WHERE expression, or a full 'select … from t' query\n  --accent {blue,cyan,magenta,green,yellow}\n                        focus colour, from the terminal's palette (default: blue; env PQX_ACCENT)\n  --dim {faint,bright-black}\n                        how secondary text is dimmed: the faint attribute (default) or ANSI bright black (env PQX_DIM)\n  --border BORDER       colour of unfocused panel borders, an ANSI name such as bright_black (default) or white (env PQX_BORDER)\n  --theme THEME         use a Textual theme instead of the terminal's own colours\n  --sample              sample rows for stats/plots (default: on above 200M rows or 8 GiB)\n  --no-sample           always scan every row for stats/plots\n  --threads THREADS     DuckDB worker threads (default: all cores; lower it on shared machines)\n  --format COL=SPEC     display format for a column this session: a Python spec (.3f, .2e, ,d) or a number of digits; repeatable. Formats set in the grid (< > F) are saved to\n                        $XDG_CONFIG_HOME/pqx/formats.yaml (default ~/.config/pqx/formats.yaml)\n  --version             show the version and licence, and exit\n\nExamples:\n  pqx trips.parquet\n  pqx trips.parquet -w \"payment_type = 'card'\"\n  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n\nInside pqx, press ? for keys.\n\nReport bugs at: <https://github.com/mjuric/pqx/issues>\npqx home page: <https://github.com/mjuric/pqx>\nWritten by Mario Juric.\n"
+ },
+ "version": "pqx {VERSION}\nCopyright (C) 2026 Mario Juric\nLicense BSD-3-Clause: <https://opensource.org/license/bsd-3-clause>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\n\nWritten by Mario Juric.\n",
+ "cases": [
+  {
+   "args": [],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: the following arguments are required: path\n"
+  },
+  {
+   "args": [
+    "a",
+    "b"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: unrecognized arguments: b\n"
+  },
+  {
+   "args": [
+    "--bogus",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: unrecognized arguments: --bogus\n"
+  },
+  {
+   "args": [
+    "/nonexistent/x.parquet",
+    "--bogus=1",
+    "y"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: unrecognized arguments: --bogus=1 y\n"
+  },
+  {
+   "args": [
+    "--accent",
+    "red",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: argument --accent: invalid choice: 'red' (choose from blue, cyan, magenta, green, yellow)\n"
+  },
+  {
+   "args": [
+    "--acc",
+    "red",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: argument --accent: invalid choice: 'red' (choose from blue, cyan, magenta, green, yellow)\n"
+  },
+  {
+   "args": [
+    "--accent",
+    "cyan",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "--dim",
+    "bold",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: argument --dim: invalid choice: 'bold' (choose from faint, bright-black)\n"
+  },
+  {
+   "args": [
+    "--dim",
+    "bright-black",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "--th",
+    "3",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: ambiguous option: --th could match --theme, --threads\n"
+  },
+  {
+   "args": [
+    "--th=3",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: ambiguous option: --th=3 could match --theme, --threads\n"
+  },
+  {
+   "args": [
+    "--threads",
+    "x",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: argument --threads: invalid int value: 'x'\n"
+  },
+  {
+   "args": [
+    "--threads",
+    "1.5",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: argument --threads: invalid int value: '1.5'\n"
+  },
+  {
+   "args": [
+    "--threads",
+    " 7 ",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "--threads",
+    "1_000",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "--threads=-1",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "--sample",
+    "--no-sample",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: argument --no-sample: not allowed with argument --sample\n"
+  },
+  {
+   "args": [
+    "--no-sample",
+    "--sample",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: argument --sample: not allowed with argument --no-sample\n"
+  },
+  {
+   "args": [
+    "--sample",
+    "--sample",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "--s",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "--no",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "--sample=1",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: argument --sample: ignored explicit argument '1'\n"
+  },
+  {
+   "args": [
+    "-w"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: argument -w/--where: expected one argument\n"
+  },
+  {
+   "args": [
+    "-w",
+    "--bogus",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: argument -w/--where: expected one argument\n"
+  },
+  {
+   "args": [
+    "-w",
+    "-1",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "-w",
+    "-x > 0",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "-wfoo",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "-w=foo",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "--where=",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "--wh",
+    "x",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "/nonexistent/x.parquet",
+    "-w",
+    "x"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "-h=1"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: argument -h/--help: ignored explicit argument '1'\n"
+  },
+  {
+   "args": [
+    "--help=1"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: argument -h/--help: ignored explicit argument '1'\n"
+  },
+  {
+   "args": [
+    "-he",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 0,
+   "stdout": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\n\nInteractive terminal explorer for Parquet files: browse, filter (SQL),\nprofile, plot and export — lazily, so files of any size open instantly.\n\npositional arguments:\n  path                  Parquet file to open\n\noptions:\n  -h, --help            show this help message and exit\n  -w WHERE, --where WHERE\n                        initial filter: a SQL WHERE expression, or a full\n                        'select … from t' query\n  --accent {blue,cyan,magenta,green,yellow}\n                        focus colour, from the terminal's palette (default:\n                        blue; env PQX_ACCENT)\n  --dim {faint,bright-black}\n                        how secondary text is dimmed: the faint attribute\n                        (default) or ANSI bright black (env PQX_DIM)\n  --border BORDER       colour of unfocused panel borders, an ANSI name such\n                        as bright_black (default) or white (env PQX_BORDER)\n  --theme THEME         use a Textual theme instead of the terminal's own\n                        colours\n  --sample              sample rows for stats/plots (default: on above 200M\n                        rows or 8 GiB)\n  --no-sample           always scan every row for stats/plots\n  --threads THREADS     DuckDB worker threads (default: all cores; lower it on\n                        shared machines)\n  --format COL=SPEC     display format for a column this session: a Python\n                        spec (.3f, .2e, ,d) or a number of digits; repeatable.\n                        Formats set in the grid (< > F) are saved to\n                        $XDG_CONFIG_HOME/pqx/formats.yaml (default\n                        ~/.config/pqx/formats.yaml)\n  --version             show the version and licence, and exit\n\nExamples:\n  pqx trips.parquet\n  pqx trips.parquet -w \"payment_type = 'card'\"\n  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n\nInside pqx, press ? for keys.\n\nReport bugs at: <https://github.com/mjuric/pqx/issues>\npqx home page: <https://github.com/mjuric/pqx>\nWritten by Mario Juric.\n",
+   "stderr": ""
+  },
+  {
+   "args": [
+    "--version=1"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: argument --version: ignored explicit argument '1'\n"
+  },
+  {
+   "args": [
+    "--vers"
+   ],
+   "code": 0,
+   "stdout": "pqx {VERSION}\nCopyright (C) 2026 Mario Juric\nLicense BSD-3-Clause: <https://opensource.org/license/bsd-3-clause>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\n\nWritten by Mario Juric.\n",
+   "stderr": ""
+  },
+  {
+   "args": [
+    "/nonexistent/x.parquet",
+    "--version"
+   ],
+   "code": 0,
+   "stdout": "pqx {VERSION}\nCopyright (C) 2026 Mario Juric\nLicense BSD-3-Clause: <https://opensource.org/license/bsd-3-clause>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\n\nWritten by Mario Juric.\n",
+   "stderr": ""
+  },
+  {
+   "args": [
+    "--accent",
+    "red",
+    "--version"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: argument --accent: invalid choice: 'red' (choose from blue, cyan, magenta, green, yellow)\n"
+  },
+  {
+   "args": [
+    "--version",
+    "--accent",
+    "red"
+   ],
+   "code": 0,
+   "stdout": "pqx {VERSION}\nCopyright (C) 2026 Mario Juric\nLicense BSD-3-Clause: <https://opensource.org/license/bsd-3-clause>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\n\nWritten by Mario Juric.\n",
+   "stderr": ""
+  },
+  {
+   "args": [
+    "--help",
+    "--bogus"
+   ],
+   "code": 0,
+   "stdout": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\n\nInteractive terminal explorer for Parquet files: browse, filter (SQL),\nprofile, plot and export — lazily, so files of any size open instantly.\n\npositional arguments:\n  path                  Parquet file to open\n\noptions:\n  -h, --help            show this help message and exit\n  -w WHERE, --where WHERE\n                        initial filter: a SQL WHERE expression, or a full\n                        'select … from t' query\n  --accent {blue,cyan,magenta,green,yellow}\n                        focus colour, from the terminal's palette (default:\n                        blue; env PQX_ACCENT)\n  --dim {faint,bright-black}\n                        how secondary text is dimmed: the faint attribute\n                        (default) or ANSI bright black (env PQX_DIM)\n  --border BORDER       colour of unfocused panel borders, an ANSI name such\n                        as bright_black (default) or white (env PQX_BORDER)\n  --theme THEME         use a Textual theme instead of the terminal's own\n                        colours\n  --sample              sample rows for stats/plots (default: on above 200M\n                        rows or 8 GiB)\n  --no-sample           always scan every row for stats/plots\n  --threads THREADS     DuckDB worker threads (default: all cores; lower it on\n                        shared machines)\n  --format COL=SPEC     display format for a column this session: a Python\n                        spec (.3f, .2e, ,d) or a number of digits; repeatable.\n                        Formats set in the grid (< > F) are saved to\n                        $XDG_CONFIG_HOME/pqx/formats.yaml (default\n                        ~/.config/pqx/formats.yaml)\n  --version             show the version and licence, and exit\n\nExamples:\n  pqx trips.parquet\n  pqx trips.parquet -w \"payment_type = 'card'\"\n  pqx trips.parquet -w \"select vendor, count(*) from t group by 1\"\n\nInside pqx, press ? for keys.\n\nReport bugs at: <https://github.com/mjuric/pqx/issues>\npqx home page: <https://github.com/mjuric/pqx>\nWritten by Mario Juric.\n",
+   "stderr": ""
+  },
+  {
+   "args": [
+    "--",
+    "-x"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: -x: no such file\n"
+  },
+  {
+   "args": [
+    "--",
+    "--version"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: --version: no such file\n"
+  },
+  {
+   "args": [
+    "-"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: -: no such file\n"
+  },
+  {
+   "args": [
+    "-1"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: -1: no such file\n"
+  },
+  {
+   "args": [
+    "-x y"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: -x y: no such file\n"
+  },
+  {
+   "args": [
+    "--format",
+    "x",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: --format expects COL=SPEC, got 'x'\n"
+  },
+  {
+   "args": [
+    "--format",
+    "=1",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: --format expects COL=SPEC, got '=1'\n"
+  },
+  {
+   "args": [
+    "--format",
+    "a=",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: --format expects COL=SPEC, got 'a='\n"
+  },
+  {
+   "args": [
+    "--format",
+    "a = 3",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "--format=a=1",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "--format",
+    "a\u001b]0;T\u0007=1",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "--format",
+    "a'b",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: --format expects COL=SPEC, got \"a'b\"\n"
+  },
+  {
+   "args": [
+    "--format",
+    "a\"b'",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: --format expects COL=SPEC, got 'a\"b\\''\n"
+  },
+  {
+   "args": [
+    "--format",
+    "é​",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: --format expects COL=SPEC, got 'é\\u200b'\n"
+  },
+  {
+   "args": [
+    "--format",
+    "a=.2q",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: --format a=.2q: Unknown format code 'q' for object of type 'float'\n"
+  },
+  {
+   "args": [
+    "--format",
+    "a=99",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: --format a=99: at most 17 digits\n"
+  },
+  {
+   "args": [
+    "--format",
+    "a=\u001b[31m",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: --format a=␛[31m: Invalid format specifier '␛[31m' for object of type 'float'\n"
+  },
+  {
+   "args": [
+    "--theme",
+    "nord",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "--border",
+    "white",
+    "/nonexistent/x.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: /nonexistent/x.parquet: no such file\n"
+  },
+  {
+   "args": [
+    "--accent"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: pqx [-h] [-w WHERE] [--accent {blue,cyan,magenta,green,yellow}]\n           [--dim {faint,bright-black}] [--border BORDER] [--theme THEME]\n           [--sample | --no-sample] [--threads THREADS] [--format COL=SPEC]\n           [--version]\n           path\npqx: error: argument --accent: expected one argument\n"
+  },
+  {
+   "args": [
+    "nope\u001b]0;T\u0007.parquet"
+   ],
+   "code": 2,
+   "stdout": "",
+   "stderr": "pqx: nope␛]0;T␇.parquet: no such file\n"
+  }
+ ]
+}

@@ -153,9 +153,9 @@ func New(accent, dim, border, name string) (*Theme, error) {
 		t.primary = prim.color()
 		t.border = blend(t.bg, prim, borderAlpha).color()
 	}
-	t.Base = t.Style(styled.Style{})
-	t.Accent = t.Style(styled.Style{Fg: "accent"})
-	t.Dim = t.Style(styled.Style{Dim: true})
+	t.Base = t.Lip(styled.Style{})
+	t.Accent = t.Lip(styled.Style{Fg: "accent"})
+	t.Dim = t.Lip(styled.Style{Dim: true})
 	t.Border = t.Base.BorderForeground(t.border)
 	t.FocusBorder = t.Base.BorderForeground(t.primary)
 	if t.named {
@@ -163,14 +163,50 @@ func New(accent, dim, border, name string) (*Theme, error) {
 		t.FocusBorder = t.FocusBorder.BorderBackground(t.bg.color())
 	}
 	t.Prompt = t.Base.Foreground(t.primary)
-	t.Error = t.Style(styled.Style{Fg: "red"})
-	t.Warning = t.Style(styled.Style{Fg: "yellow"})
-	t.Success = t.Style(styled.Style{Fg: "green"})
-	t.Cursor = t.Style(styled.Style{Reverse: true})
-	t.Header = t.Style(styled.Style{Bold: true})
-	t.Selection = t.Style(styled.Style{Reverse: true})
+	t.Error = t.Lip(styled.Style{Fg: "red"})
+	t.Warning = t.Lip(styled.Style{Fg: "yellow"})
+	t.Success = t.Lip(styled.Style{Fg: "green"})
+	t.Cursor = t.Lip(styled.Style{Reverse: true})
+	t.Header = t.Lip(styled.Style{Bold: true})
+	t.Selection = t.Lip(styled.Style{Reverse: true})
 	return t, nil
 }
+
+// Style is the styled.Style for a role (kit.Look): "accent", "dim",
+// "border", "border-focus", "error", "warning", "success", "header",
+// "cursor" (reverse video) or "selection".
+func (t *Theme) Style(role string) styled.Style {
+	switch role {
+	case "accent":
+		return styled.Style{Fg: "accent"}
+	case "border-focus":
+		if t.named {
+			c, _ := toRGB(t.primary)
+			return styled.Style{Fg: styled.Color(fmt.Sprintf("#%02x%02x%02x", c.r, c.g, c.b))}
+		}
+		return styled.Style{Fg: "accent"}
+	case "dim":
+		return styled.Style{Dim: true}
+	case "border":
+		return styled.Style{Fg: "border"}
+	case "error":
+		return styled.Style{Fg: "red"}
+	case "warning":
+		return styled.Style{Fg: "yellow"}
+	case "success":
+		return styled.Style{Fg: "green"}
+	case "header":
+		return styled.Style{Bold: true}
+	case "cursor", "selection":
+		return styled.Style{Reverse: true}
+	}
+	return styled.Style{}
+}
+
+// DarkBG reports whether the background is dark (kit.Look): the named
+// themes are; for the terminal's own background pqx assumes so, as Python
+// pqx's theme does (dark=True).
+func (t *Theme) DarkBG() bool { return true }
 
 // Named reports whether a named theme (fixed palette) is in use.
 func (t *Theme) Named() bool { return t.named }
@@ -220,10 +256,10 @@ func ParseBorder(s string) (color.Color, error) {
 	return nil, fmt.Errorf("unknown colour %q (use an ANSI name such as bright_black or white, or #rrggbb)", s)
 }
 
-// Style is the lipgloss style for a styled.Style. Colours are "" (the
+// Lip is the lipgloss style for a styled.Style. Colours are "" (the
 // default), ANSI names, "color(N)", "#rrggbb", or the roles "accent" and
 // "border".
-func (t *Theme) Style(s styled.Style) lipgloss.Style {
+func (t *Theme) Lip(s styled.Style) lipgloss.Style {
 	st := lipgloss.NewStyle().TabWidth(lipgloss.NoTabConversion)
 	if s.Dim && t.DimMode == "bright-black" {
 		s.Fg, s.Dim = "bright_black", false
@@ -306,7 +342,7 @@ func (t *Theme) Render(x styled.Text) string {
 		if end <= start {
 			return
 		}
-		st := t.Style(cur)
+		st := t.Lip(cur)
 		for i, line := range strings.Split(string(runes[start:end]), "\n") {
 			if i > 0 {
 				b.WriteByte('\n')

@@ -107,11 +107,11 @@ func TestNamedThemes(t *testing.T) {
 		if got := hexOf(th.BorderColor()); !strings.EqualFold(got, w[0]) {
 			t.Errorf("%s border %s, want %s", name, got, w[0])
 		}
-		dim := th.Style(styled.Style{Dim: true})
+		dim := th.Lip(styled.Style{Dim: true})
 		if got := hexOf(dim.GetForeground()); got != w[1] {
 			t.Errorf("%s dim %s, want %s", name, got, w[1])
 		}
-		dimRed := th.Style(styled.Style{Dim: true, Fg: "red"})
+		dimRed := th.Lip(styled.Style{Dim: true, Fg: "red"})
 		if got := hexOf(dimRed.GetForeground()); got != w[2] {
 			t.Errorf("%s dim red %s, want %s", name, got, w[2])
 		}
@@ -125,7 +125,7 @@ func TestNamedThemes(t *testing.T) {
 		if got := hexOf(th.Base.GetForeground()); !strings.EqualFold(got, p.Foreground) {
 			t.Errorf("%s foreground %s", name, got)
 		}
-		if got := hexOf(th.Style(styled.Style{Fg: "color(200)"}).GetForeground()); got != "#ff00d7" {
+		if got := hexOf(th.Lip(styled.Style{Fg: "color(200)"}).GetForeground()); got != "#ff00d7" {
 			t.Errorf("%s color(200) %s", name, got)
 		}
 		if got := hexOf(th.Accent.GetForeground()); got != "#9d65ff" { // ansi blue, as Python's tab titles
@@ -172,5 +172,26 @@ func TestRenderSpans(t *testing.T) {
 	}
 	if th.Render(styled.Text{}) != "" {
 		t.Error("empty text")
+	}
+}
+
+func TestRoles(t *testing.T) {
+	th := mustNew(t, "cyan", "", "", "")
+	for role, want := range map[string]string{
+		"accent": "\x1b[36mx\x1b[m", "border-focus": "\x1b[36mx\x1b[m", "dim": "\x1b[2mx\x1b[m",
+		"border": "\x1b[90mx\x1b[m", "error": "\x1b[31mx\x1b[m", "warning": "\x1b[33mx\x1b[m",
+		"success": "\x1b[32mx\x1b[m", "header": "\x1b[1mx\x1b[m", "cursor": "\x1b[7mx\x1b[m",
+		"selection": "\x1b[7mx\x1b[m",
+	} {
+		if got := th.Render(styled.New("x", th.Style(role))); got != want {
+			t.Errorf("%s: %s, want %s", role, sgr(got), sgr(want))
+		}
+	}
+	nord := mustNew(t, "", "", "", "nord")
+	if got := hexOf(nord.Lip(nord.Style("border-focus")).GetForeground()); got != "#88c0d0" {
+		t.Errorf("nord border-focus %s", got)
+	}
+	if got := hexOf(nord.Lip(nord.Style("border")).GetForeground()); got != "#567380" {
+		t.Errorf("nord border %s", got)
 	}
 }

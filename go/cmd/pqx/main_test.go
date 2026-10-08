@@ -2,44 +2,153 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
+
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/apache/arrow-go/v18/parquet/pqarrow"
+
+	"github.com/mjuric/pqx/go/internal/fmtx"
 )
 
-func TestRun(t *testing.T) {
-	cases := []struct {
-		args     []string
-		code     int
-		out, err string
-	}{
-		{[]string{"--version"}, 0, "pqx (Go prototype) " + version + "\n", ""},
-		{[]string{"-version"}, 0, "pqx (Go prototype) ", ""},
-		{[]string{"--help"}, 0, "usage: pqx [OPTIONS] FILE", ""},
-		{[]string{"-h"}, 0, "usage: pqx", ""},
-		{[]string{}, 2, "", "expected one FILE"},
-		{[]string{"a", "b"}, 2, "", "expected one FILE"},
-		{[]string{"--bogus", "f"}, 2, "", "flag provided but not defined"},
-		{[]string{"--threads", "x", "f"}, 2, "", "invalid value"},
-		{[]string{"--threads", "-1", "f"}, 2, "", "--threads must be 0 or more"},
-		{[]string{"--threads", "4", "/nonexistent/file.parquet"}, 1, "", "pqx: /nonexistent/file.parquet: "},
-		{[]string{"/nonexistent/file.parquet", "--threads", "4"}, 1, "", "pqx: /nonexistent/file.parquet: "},
-		{[]string{"/nonexistent/file.parquet", "--threads=4"}, 1, "", "pqx: /nonexistent/file.parquet: "},
-		{[]string{"/nonexistent/f", "--version"}, 0, "pqx (Go prototype)", ""},
-		{[]string{"/nonexistent/f", "--threads", "-1"}, 2, "", "--threads must be 0 or more"},
-		{[]string{"--", "-odd-name.parquet"}, 1, "", "pqx: -odd-name.parquet: "},
+// TestMain lets the pty tests run this test binary as pqx: with
+// PQX_TEST_MAIN set it is pqx (see pty_test.go).
+func TestMain(m *testing.M) {
+	switch os.Getenv("PQX_TEST_MAIN") {
+	case "":
+		os.Exit(m.Run())
+	case "panic":
+		os.Exit(panicMain(os.Args[1]))
+	default:
+		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 	}
-	for _, c := range cases {
+}
+
+type golden struct {
+	Cases []struct {
+		Args   []string `json:"args"`
+		Code   int      `json:"code"`
+		Stdout string   `json:"stdout"`
+		Stderr string   `json:"stderr"`
+	} `json:"cases"`
+}
+
+// The command lines of internal/opts/testdata/cli.json, run as Python pqx
+// ran them (with $COLUMNS 80): the same exit code and output.
+func TestCommandLinesMatchPython(t *testing.T) {
+	b, err := os.ReadFile("../../internal/opts/testdata/cli.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var g golden
+	if err := json.Unmarshal(b, &g); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("COLUMNS", "80")
+	defer func(v string) { version = v }(version)
+	version = "{VERSION}"
+	stubbed := fmtx.OverrideError(fmtx.ParseOverride("99"), "", nil) == ""
+	for _, c := range g.Cases {
+		if stubbed && strings.Contains(c.Stderr, "pqx: error: --format a=") {
+			t.Logf("skipped until fmtx.OverrideError is implemented: %q", c.Args)
+			continue
+		}
 		var out, errb bytes.Buffer
-		code := run(c.args, &out, &errb)
-		if code != c.code || !strings.Contains(out.String(), c.out) || !strings.Contains(errb.String(), c.err) {
-			t.Errorf("run(%q) = %d, stdout %q, stderr %q", c.args, code, out.String(), errb.String())
+		code := run(c.Args, &out, &errb)
+		if code != c.Code || out.String() != c.Stdout || errb.String() != c.Stderr {
+			t.Errorf("%q: exit %d, stdout %q, stderr %q\nwant exit %d, stdout %q, stderr %q",
+				c.Args, code, cut(out.String()), errb.String(), c.Code, cut(c.Stdout), c.Stderr)
 		}
 	}
-	var out bytes.Buffer
-	run([]string{"--version"}, &out, &out)
-	for _, b := range out.Bytes() {
-		if b >= 0x80 {
-			t.Errorf("--version output isn't ASCII: %q", out.String())
+}
+
+func cut(s string) string {
+	if len(s) > 60 {
+		return s[:60] + "…"
+	}
+	return s
+}
+
+// controls are the C0 (but tab and newline), DEL and C1 characters in s,
+// as test_security.py's controls(), and invalid UTF-8.
+func controls(s string) []rune {
+	var c []rune
+	for _, r := range s {
+		if (r < 0x20 && r != '\t' && r != '\n') || (r >= 0x7f && r < 0xa0) || r == unicode.ReplacementChar {
+			c = append(c, r)
 		}
+	}
+	return c
+}
+
+// Port of test_security.py::test_cli_prints_no_control_characters, plus the
+// command-line errors that quote what was typed.
+func TestCLIPrintsNoControlCharacters(t *testing.T) {
+	dir := t.TempDir()
+	var errb bytes.Buffer
+	if code := run([]string{filepath.Join(dir, "nope\x1b]0;T\x07.parquet")}, &bytes.Buffer{}, &errb); code != 2 {
+		t.Errorf("missing file: exit %d", code)
+	}
+	bad := filepath.Join(dir, "bad\x1b]0;T\x07\u009b.parquet")
+	if err := os.WriteFile(bad, []byte("not a parquet file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := run([]string{bad}, &bytes.Buffer{}, &errb); code != 1 {
+		t.Errorf("bad file: exit %d", code)
+	}
+	for _, args := range [][]string{
+		{"--bogus\x1b]0;T\x07", bad},
+		{"--accent", "\x1b[31m", bad},
+		{"--format", "a\x1b]0;T\x07", bad},
+		{"--th\x1b=1", bad},
+		{"--border", "\x1b[31m", bad},
+		{"--theme", "\x1b]0;T\x07", bad},
+		{bad, "--threads", "-1"},
+		{"\xff\x9b.parquet"},
+	} {
+		if code := run(args, &bytes.Buffer{}, &errb); code == 0 {
+			t.Errorf("%q: exit 0", args)
+		}
+	}
+	err := errb.String()
+	if !strings.Contains(err, "␛]0;T") {
+		t.Errorf("the file name isn't shown with ␛: %q", err)
+	}
+	if c := controls(err); len(c) > 0 {
+		t.Errorf("control characters %q in %q", c, err)
+	}
+}
+
+// writeParquet writes a file of ncols int64 columns c00, c01, … with rows
+// 0..nrows-1 (value row*100 + column).
+func writeParquet(t testing.TB, path string, ncols, nrows int) {
+	t.Helper()
+	var fields []arrow.Field
+	var cols []arrow.Array
+	for c := 0; c < ncols; c++ {
+		fields = append(fields, arrow.Field{Name: fmt.Sprintf("c%02d", c), Type: arrow.PrimitiveTypes.Int64})
+		b := array.NewInt64Builder(memory.DefaultAllocator)
+		for r := 0; r < nrows; r++ {
+			b.Append(int64(r*100 + c))
+		}
+		cols = append(cols, b.NewArray())
+		b.Release()
+	}
+	sc := arrow.NewSchema(fields, nil)
+	rec := array.NewRecordBatch(sc, cols, int64(nrows))
+	tbl := array.NewTableFromRecords(sc, []arrow.RecordBatch{rec})
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pqarrow.WriteTable(tbl, f, 1<<20, nil, pqarrow.DefaultWriterProps()); err != nil {
+		t.Fatal(err)
 	}
 }
