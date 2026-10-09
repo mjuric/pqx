@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -207,10 +208,29 @@ func (t *Theme) sgr(p pen, tinted bool) string {
 	if p.faint {
 		fg = blend(bg, fg, dimFactor)
 	}
-	b.WriteString(sgrColor(t.reduce(fg.color()), "38", 30))
-	b.WriteString(sgrColor(t.reduce(bg.color()), "48", 40))
+	fgc, bgc := t.reduce(fg.color()), t.reduce(bg.color())
+	// a colour the frame already has from the 256-colour palette (asked
+	// for as such) isn't reduced again: that would move the cube's greys
+	// (59, #5f5f5f) to the grey ramp (240, #585858)
+	if c, ok := kept(t.profile, p.fg); ok && !p.faint {
+		fgc = c
+	}
+	if c, ok := kept(t.profile, p.bg); ok {
+		bgc = c
+	}
+	b.WriteString(sgrColor(fgc, "38", 30))
+	b.WriteString(sgrColor(bgc, "48", 40))
 	b.WriteByte('m')
 	return b.String()
+}
+
+// kept is c as it is when the terminal has 256 colours and c is one of
+// them beyond the 16 ANSI colours.
+func kept(p colorprofile.Profile, c color.Color) (color.Color, bool) {
+	if ic, ok := c.(ansi.IndexedColor); ok && ic >= 16 && p == colorprofile.ANSI256 {
+		return ic, true
+	}
+	return nil, false
 }
 
 // themed is c in truecolor under the theme (ANSI colours are Monokai's);
