@@ -287,8 +287,20 @@ func TestFormatRefused(t *testing.T) {
 		if ms := press(d, "enter"); closed(ms) {
 			t.Fatalf("%q accepted", tc.text)
 		}
-		if v := view(d, 150, 42); !strings.Contains(v, "✗ "+fmtx.Sanitize(why, false)) {
-			t.Fatalf("%s", v)
+		// the inline error is the message, cut with "…" to the dialog's width
+		v := view(d, 150, 42)
+		i := strings.Index(v, "✗ ")
+		if i < 0 {
+			t.Fatalf("no error in\n%s", v)
+		}
+		shown, _, _ := strings.Cut(v[i+len("✗ "):], "\n")
+		shown = strings.TrimRight(strings.TrimRight(shown, " │"), " ")
+		if cut, ok := strings.CutSuffix(shown, "…"); ok {
+			if cut == "" || !strings.HasPrefix(why, cut) {
+				t.Fatalf("%q isn't the start of %q\n%s", shown, why, v)
+			}
+		} else if shown != why {
+			t.Fatalf("%q, want %q\n%s", shown, why, v)
 		}
 	}
 }
@@ -303,7 +315,7 @@ func TestColumns(t *testing.T) {
 	checkBox(t, d, 150, 42)
 	v := view(d, 150, 42)
 	for _, want := range []string{"Visible columns  space toggles · Ctrl+A all · Ctrl+N none",
-		"▐X▌ [/]  int64", "▐X▌ diaSourceId  int64", "Apply", "Cancel", "type to filter columns…"} {
+		"▐X▌ [/]  i64", "▐X▌ diaSourceId  i64", "Apply", "Cancel", "type to filter columns…"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("no %q in\n%s", want, v)
 		}
