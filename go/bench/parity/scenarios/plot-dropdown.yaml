@@ -15,7 +15,7 @@ steps:
   - check: stepped-mode
   - click: '(?<=x )ra ▾'
     dx: 1
-    wait: 'type to filter'
+    wait: 'type to filter   ↑↓ move'   # the key bar; the drop-down's box says it too
   - check: dropdown
     expect: ['diaSourceId', 'midpointMjdTai']
   - text: "mag"
