@@ -469,9 +469,13 @@ func TestExportSummaryShowsMarkupAsText(t *testing.T) {
 	name := "[bold]mk[/] [@click=app.quit]x[/]"
 	f, env, _ := setup(t, "/x/e.parquet", []data.Column{{Name: name}, {Name: "s\x1bx"}})
 	env.State.View = data.View{Where: `"` + name + `" = '[/]'`, OrderBy: []data.Sort{{Column: name}}}
+	// (one line, cropped as Python's Label is: the name is cut)
 	v := flat(view(f.Export(), 150, 42))
-	if !strings.Contains(v, "sorted by "+name) || !strings.Contains(v, "'[/]'") {
+	if !strings.Contains(v, `where "`+name+`" = '[/]' · sorted by [bold]mk[/]`) {
 		t.Fatalf("%s", v)
+	}
+	if d := f.Export().(*exportDialog); !strings.Contains(d.summary, "sorted by "+name) {
+		t.Fatalf("%q", d.summary)
 	}
 	env.State.View = data.View{SQL: "select 1"}
 	env.State.Total = -1

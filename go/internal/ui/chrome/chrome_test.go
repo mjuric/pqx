@@ -150,7 +150,7 @@ func TestStatusCounts(t *testing.T) {
 	st.View = data.View{SQL: "select 1 from t"}
 	st.Total = 6
 	c.Update(kit.ViewChangedMsg{})
-	if got := plain(c.StatusLine(150)); got != "✓ 6 rows  ·  SQL result  ·  row 1,234" {
+	if got := plain(c.StatusLine(150)); got != "✓ 6 rows  ·  SQL result  ·  0.00 s  ·  row 1,234" {
 		t.Fatalf("%q", got)
 	}
 	// nothing matches
@@ -405,5 +405,15 @@ func TestCommas(t *testing.T) {
 		if got := Commas(n); got != want {
 			t.Errorf("%d: %q", n, got)
 		}
+	}
+}
+
+// Toast text wraps as Rich wraps it: a word that doesn't fit goes to the
+// next line, one longer than a line is folded, leading spaces stay.
+func TestToastWrap(t *testing.T) {
+	got := wrap("✓ Wrote 23 rows\n→ /a/very/long/path/name.csv\n    ^", 12)
+	want := []string{"✓ Wrote 23", "rows", "→", "/a/very/long", "/path/name.c", "sv", "    ^"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("%q", got)
 	}
 }

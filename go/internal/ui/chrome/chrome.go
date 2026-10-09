@@ -80,7 +80,9 @@ func (c *Chrome) Update(msg tea.Msg) tea.Cmd {
 			c.status = kit.StatusMsg{}
 		}
 		c.viewAt = c.now()
-		c.haveSecs = false
+		// a count already known (the filter keeps them) took no time; its
+		// TotalMsg can also arrive before this message
+		c.countSecs, c.haveSecs = 0, c.env.State.Total >= 0
 		c.hidden = ""
 	case kit.TotalMsg:
 		if c.env.State.Total >= 0 && !c.viewAt.IsZero() {

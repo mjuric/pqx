@@ -105,19 +105,56 @@ func (c *Chrome) toastBox(m kit.NotifyMsg, tw int) string {
 	return b.String()
 }
 
-// wrap word-wraps s to w cells, breaking words longer than w; "\n" starts a
+// wrap word-wraps s to w cells as Rich does: a word that doesn't fit
+// starts a new line, and one longer than a line is folded; "\n" starts a
 // new line.
 func wrap(s string, w int) []string {
 	if s == "" {
 		return nil
 	}
+	w = max(1, w)
 	var out []string
 	for _, para := range strings.Split(s, "\n") {
-		if para == "" {
-			out = append(out, "")
-			continue
+		var line strings.Builder
+		lw := 0
+		flush := func() {
+			out = append(out, strings.TrimRight(line.String(), " "))
+			line.Reset()
+			lw = 0
 		}
-		out = append(out, strings.Split(ansi.Wrap(para, w, " "), "\n")...)
+		// leading spaces stay (DuckDB's "  ^" under the error)
+		body := strings.TrimLeft(para, " ")
+		line.WriteString(para[:len(para)-len(body)])
+		lw = len(para) - len(body)
+		words := strings.Split(body, " ")
+		for i, word := range words {
+			ww := ansi.StringWidth(word)
+			sep := 0
+			if i > 0 {
+				sep = 1
+			}
+			if lw > 0 && lw+sep+ww > w {
+				flush()
+				sep = 0
+			}
+			if lw == 0 || i == 0 {
+				sep = 0
+			}
+			if sep == 1 {
+				line.WriteByte(' ')
+				lw++
+			}
+			for ww > w-lw && ww > 0 { // fold
+				cut := ansi.Truncate(word, w-lw, "")
+				line.WriteString(cut)
+				word = strings.TrimPrefix(word, cut)
+				ww = ansi.StringWidth(word)
+				flush()
+			}
+			line.WriteString(word)
+			lw += ww
+		}
+		flush()
 	}
 	return out
 }

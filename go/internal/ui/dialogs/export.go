@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/fmtx"
@@ -110,11 +111,8 @@ func baseName(p string) string {
 }
 
 func (d *exportDialog) summaryLines(iw int) []string {
-	var out []string
-	for _, l := range wrapText(styled.New(fmtx.Sanitize(d.summary, false), d.env.Look.Style("dim")), iw) {
-		out = append(out, d.env.Look.Render(l))
-	}
-	return out
+	// one line, cropped (Python's Label doesn't wrap it)
+	return []string{ansi.Truncate(text(d.env.Look, fmtx.Sanitize(d.summary, false), d.env.Look.Style("dim")), iw, "")}
 }
 
 func (d *exportDialog) Size(w, h int) (int, int) {
