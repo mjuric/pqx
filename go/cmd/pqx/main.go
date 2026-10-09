@@ -1,17 +1,21 @@
-// Command pqx is the Go prototype of pqx, a terminal explorer for Parquet files.
+// Command pqx is a terminal explorer for Parquet files.
 package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
-	"strings"
+	"runtime/debug"
+	"syscall"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/mjuric/pqx/go/internal/data"
+	"github.com/mjuric/pqx/go/internal/fmtx"
+	"github.com/mjuric/pqx/go/internal/opts"
+	"github.com/mjuric/pqx/go/internal/term"
+	"github.com/mjuric/pqx/go/internal/theme"
 	"github.com/mjuric/pqx/go/internal/ui"
 	"github.com/mjuric/pqx/go/internal/ui/app"
 	"github.com/mjuric/pqx/go/internal/ui/chrome"
@@ -24,78 +28,77 @@ import (
 	"github.com/mjuric/pqx/go/internal/ui/stats"
 )
 
-var version = "0.0.0-proto" // set with -ldflags "-X main.version=..."
-
-const usage = `usage: pqx [OPTIONS] FILE
-
-Explore a Parquet file in the terminal (Go prototype).
-
-options:
-  --threads N   DuckDB threads (default: DuckDB's own choice)
-  --version     print the version and exit
-  -h, --help    print this help and exit
-
-keys: / filter, x clear filter, g go to row (1234, 1.5M, 50%, -1),
-arrows PgUp PgDn Home End Ctrl+Home Ctrl+End move, Esc cancel, q quit.
-`
+var version = "0.0.0.dev0" // set with -ldflags "-X main.version=..."
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("pqx", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	threads := fs.Int("threads", 0, "")
-	showVersion := fs.Bool("version", false, "")
-	help := fs.Bool("help", false, "")
-	fs.BoolVar(help, "h", false, "")
-	if err := fs.Parse(flagsFirst(args)); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprint(stdout, usage)
-			return 0
-		}
-		fmt.Fprintf(stderr, "pqx: %v\n\n%s", err, usage)
-		return 2
+	var out *os.File
+	if f, ok := stdout.(*os.File); ok {
+		out = f
 	}
+	width := opts.Width(os.Getenv, out)
+	o, err := opts.Parse(args, os.Getenv)
+	var ue *opts.UsageError
 	switch {
-	case *help:
-		fmt.Fprint(stdout, usage)
+	case errors.Is(err, opts.ErrHelp):
+		fmt.Fprint(stdout, opts.Help(width))
 		return 0
-	case *showVersion:
-		fmt.Fprintf(stdout, "pqx (Go prototype) %s\n", version)
+	case errors.Is(err, opts.ErrVersion):
+		fmt.Fprintln(stdout, opts.VersionText(version))
 		return 0
-	}
-	if fs.NArg() != 1 {
-		fmt.Fprintf(stderr, "pqx: expected one FILE\n\n%s", usage)
+	case errors.As(err, &ue):
+		fmt.Fprintf(stderr, "%spqx: error: %s\n", opts.Usage(width), ue.Msg)
+		return 2
+	case err != nil:
+		fmt.Fprintf(stderr, "pqx: %s\n", fmtx.Sanitize(err.Error(), false))
 		return 2
 	}
-	if *threads < 0 {
-		fmt.Fprintln(stderr, "pqx: --threads must be 0 or more")
+	path := fmtx.Sanitize(o.Path, false)
+	st, err := os.Stat(o.Path)
+	if err != nil { // as os.path.exists
+		fmt.Fprintf(stderr, "pqx: %s: no such file\n", path)
 		return 2
 	}
-	path := fs.Arg(0)
-	ds, err := data.Open(path, data.Options{Threads: *threads})
-	if err != nil {
-		// For file-system errors, say "pqx: FILE: reason" once; Open's own
-		// message would repeat the (absolute) path. Other errors from Open already
-		// name the file.
+	cantOpen := func(err error) int {
+		// a file-system error names the file again; say it once
 		var pe *os.PathError
 		if errors.As(err, &pe) {
 			err = pe.Err
 		}
-		if msg := err.Error(); strings.Contains(msg, path) {
-			fmt.Fprintf(stderr, "pqx: %s\n", msg) // already sanitized and names the file
-		} else {
-			fmt.Fprintf(stderr, "pqx: %s: %s\n", data.Sanitize(path), msg)
-		}
+		fmt.Fprintf(stderr, "pqx: cannot open %s: %s\n", path, fmtx.Sanitize(err.Error(), false))
 		return 1
 	}
+	switch {
+	case o.Threads < 0:
+		return cantOpen(errors.New("--threads must be at least 1 (or 0 for all cores)"))
+	case o.Threads > maxThreads:
+		return cantOpen(fmt.Errorf("--threads must be at most %d", maxThreads))
+	}
+	ds, err := data.Open(o.Path, data.Options{Threads: o.Threads})
+	if err != nil {
+		return cantOpen(err)
+	}
 	defer ds.Close()
+	look, err := theme.New(o.Accent, o.Dim, o.Border, o.Theme)
+	if err != nil {
+		return cantOpen(err) // (Parse has checked these)
+	}
+	sampling := ds.NumRows() > autoSampleRows || st.Size() > autoSampleBytes
+	if o.Sample != nil {
+		sampling = *o.Sample
+	}
 	env := &kit.Env{
-		DS:    ds,
-		Opts:  kit.Options{Version: version},
-		Look:  app.BasicLook{},
+		DS: ds,
+		Opts: kit.Options{
+			Where:          o.Where,
+			Sampling:       sampling,
+			SessionFormats: o.Formats,
+			Version:        version,
+		},
+		Look:  look,
 		State: &kit.State{Total: ds.NumRows(), Columns: ds.Columns(), FileRow: 0},
 		Tasks: kit.NewTasks(),
 	}
@@ -108,35 +111,49 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Stats:  stats.New(env),
 		Plot:   plot.New(env),
 	}
-	p := tea.NewProgram(app.New(env, parts))
-	if _, err := p.Run(); err != nil {
+	return runApp(app.New(env, parts), stderr)
+}
+
+// maxThreads is the most DuckDB threads --threads may ask for.
+const maxThreads = 4096
+
+// Sampling is on by default above this many rows or this file size
+// (app.py's AUTO_SAMPLE_ROWS and AUTO_SAMPLE_BYTES).
+const (
+	autoSampleRows  = 200_000_000
+	autoSampleBytes = 8 << 30
+)
+
+// runApp runs the app on the terminal, through the input filter and the
+// output wrapper, and puts the terminal back however it ends.
+func runApp(m tea.Model, stderr io.Writer) (code int) {
+	s, err := term.Open()
+	if err != nil {
 		fmt.Fprintf(stderr, "pqx: %v\n", err)
 		return 1
 	}
-	return 0
-}
-
-// flagsFirst moves options ahead of the file name, so that "pqx FILE
-// --threads 4" works as well as "pqx --threads 4 FILE" (the flag package
-// stops at the first argument that isn't an option). "--" ends the options.
-func flagsFirst(args []string) []string {
-	var flags, rest []string
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "--":
-			rest = append(rest, args[i+1:]...)
-			i = len(args)
-		case len(a) > 1 && a[0] == '-':
-			flags = append(flags, a)
-			name := strings.TrimLeft(a, "-")
-			if name == "threads" && i+1 < len(args) { // the one option with a value
-				i++
-				flags = append(flags, args[i])
-			}
-		default:
-			rest = append(rest, a)
+	defer s.Close()
+	data.SetPanicHook(term.RestoreTerminal)
+	defer func() {
+		// Bubble Tea recovers panics in the app and its commands; this is
+		// for the rest of this goroutine
+		if r := recover(); r != nil {
+			s.Close()
+			fmt.Fprintf(stderr, "pqx: internal error: %v\n\n%s", r, debug.Stack())
+			code = 1
 		}
+	}()
+	_, err = s.Run(m)
+	if sig, ok := s.Signal().(syscall.Signal); ok { // SIGTERM, SIGHUP, SIGQUIT
+		s.Close()
+		return 128 + int(sig)
 	}
-	return append(append(flags, "--"), rest...)
+	if err != nil {
+		s.Close()
+		if !errors.Is(err, tea.ErrProgramPanic) { // Bubble Tea has printed the panic
+			fmt.Fprintf(stderr, "pqx: %s\n", fmtx.Sanitize(err.Error(), false))
+		}
+		return 1
+	}
+	return 0
 }

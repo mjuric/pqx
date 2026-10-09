@@ -58,6 +58,7 @@ type duckdbConn = duckdb.Conn
 func (d *dataset) withConn(ctx context.Context, fn func(c *duckdbConn) error) error {
 	done := make(chan error, 1)
 	go func() {
+		defer repanic()
 		conn, err := d.db.Conn(ctx)
 		if err != nil {
 			done <- err
