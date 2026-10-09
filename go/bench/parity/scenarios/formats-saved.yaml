@@ -17,4 +17,6 @@ steps:
   - keys: enter
     toast: '✓ trailLength'
     check: set
+  # compared byte for byte, Python's header comment included: the Go version writes the
+  # same header, so the file stays the same both ways
   - file: "{config}/pqx/formats.yaml"

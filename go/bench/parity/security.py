@@ -104,23 +104,25 @@ def make_evil(d: str, name: str):
     return path, (pwn_completion, pwn_value)
 
 
-#: (keys, marker, what they reach). After the keys the screen must show the marker (a
-#: regex, from what Python pqx shows) within MARKER_WAIT seconds, or the test fails: it
-#: proves the hostile text was really drawn there. None: no marker, just settle.
+#: (keys, marker, what they reach[, "fresh"]). After the keys the screen must show the
+#: marker (a regex, from what Python pqx shows, that only the keys' effect produces)
+#: within MARKER_WAIT seconds, or the test fails: it proves the hostile text was really
+#: drawn there. None: no marker, just settle. "fresh": first wait until no notification
+#: matching the marker shows, so an earlier one can't count.
 #: Row 1 of column `s` holds the SQL injection value; the column whose name starts with
 #: `random()` is the injection through completion.
 SCRIPT = [
     ("right", None, "grid: the string column"),
     ("down", None, "row 1: the SQL injection value"),
-    ("=", r"COPY \(SELECT 1\)", "= on the injection value: it is quoted into the filter"),
+    ("=", r"› s = 'x'' \); COPY \(SELECT 1\)", "= on the injection value: it is quoted into the filter box"),
     ("x", r"SQL WHERE expression", "clear"),
     ("down", None, "row 2: OSC title"),
     ("d", r"file row", "detail pane"),
-    ("y", r"Copied", "copy (OSC 52) from the grid"),
+    ("y", r"✓ Copied s = ", "copy (OSC 52) from the grid", "fresh"),
     ("down down", None, "rows with OSC 52, OSC 8"),
-    ("y", r"Copied .*CLIP-VAL|Copied", "copy a value holding OSC 52"),
+    ("y", r"✓ Copied s = ", "copy a value holding OSC 52 or OSC 8", "fresh"),
     ("tab down down", None, "into the detail pane"),
-    ("y", r"Copied", "copy from the detail pane"),
+    ("y", r"✓ Copied ", "copy from the detail pane", "fresh"),
     ("esc", None, "close the pane"),
     ("down down down down down down", None, "the ESC[2J, C1, tab and bidi rows"),
     ("end", None, "last columns: hostile names, binary, invalid UTF-8"),
@@ -129,7 +131,7 @@ SCRIPT = [
     ("down down down down down", None, "schema rows"),
     ("3", r"Profil", "Stats on a hostile column"),
     ("4", r"mode ", "Plot"),
-    ("5", r"row groups", "Metadata: hostile key-value metadata"),
+    ("5", r"k␛\]0;PWNED-TITLE␇", "Metadata: hostile key-value metadata, drawn sanitized"),
     ("pgdn", None, "more metadata"),
     ("1", None, "back to the grid"),
     ("c", r"Visible columns", "column picker: hostile names"),
@@ -137,7 +139,7 @@ SCRIPT = [
     ("e", r"Export current view", "export dialog"),
     ("esc", None, "close it"),
     ("/", None, "filter box"),
-    ("text:rand", r"COPY \(SELECT 'echo PWNED'\)", "completion offers the hostile name"),
+    ("text:rand", r"› rand.*COPY \(SELECT 'echo PWNED'\)", "completion offers the hostile name in the box"),
     ("right", None, "accept the completion"),
     ("enter", None, "apply it: the name must be quoted, not run"),
     ("esc", None, "leave the box"),
@@ -157,15 +159,25 @@ MARKER_WAIT = 10.0
 #: CSI sequences a terminal app writes itself, by final byte (with the parameters each
 #: may have): cursor moves, erasing, modes, scrolling regions, SGR, reports and queries,
 #: cursor shape, keyboard-protocol settings
-CSI_FINALS = set("ABCDEFGHJKSTXZLMP@`dfhlmnprsuctq") | {"~"}
+CSI_FINALS = set("ABCDEFGHJKSTXZLMP@`dfhlmnprsuq") | {"~"}   # no `t` (window reports), no `c`
 CSI_RE = re.compile(rb"\x1b\[([0-?]*)([ -/]*)([@-~])")
 OSC_RE = re.compile(rb"\x1b\]([^\x07\x1b]*)(\x07|\x1b\\)")
 STRING_RE = re.compile(rb"\x1b([P_^X])([^\x1b\x07]*)(\x1b\\|\x07)")
-ESC2_OK = set(b"78=>McDEH") | {ord("(")}
+ESC2_OK = set(b"78=>MDEH")   # no ESC c (reset); ESC ( only with B, below
 #: code points that reorder or hide text; pqx shows them as ⟨U+XXXX⟩
 HIDDEN = {0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E,
           0x2066, 0x2067, 0x2068, 0x2069, 0xFEFF, 0x061C, 0x2060}
 B64 = re.compile(rb"[A-Za-z0-9+/=]*")
+
+
+#: the file's own sequences, as bytes: none may appear in the output, even where the
+#: parser would accept its shape
+NEEDLES = [x.encode() for x in (
+    OSC_TITLE, OSC52, OSC8, ESC + "[2J" + ESC + "[31mRED", ESC + "[5m", ESC + "[31mRED",
+    C1_CSI + "31mC1", "\x9d0;C1-TITLE\x07", ESC + "]0;JSONTITLE", ESC + "]2;FNAME-TITLE\x07", "\u202e")] + [
+    b"\x9b31mRAW-C1", b"\xff\xfe", ESC.encode() + b"]52;c;" + base64.b64encode(b"echo PWNED\n")]
+#: what the file's OSC 52 and title would put on the clipboard or in a title, decoded
+INJECTED_TEXT = ["echo PWNED\n", ESC, "\x07", "\x9b", "\x9d"]
 
 
 def check_bytes(b: bytes, pwns=()) -> list[str]:
@@ -173,6 +185,10 @@ def check_bytes(b: bytes, pwns=()) -> list[str]:
     writes itself; the text between them must be valid UTF-8 without C1 controls, other
     C0 controls than CR, LF, tab, backspace and BEL, or hidden/bidi code points."""
     fails = []
+    for needle in NEEDLES:
+        j = b.find(needle)
+        if j >= 0:
+            fails.append(f"the file's own sequence reached the terminal: {needle!r} …{b[max(0, j - 30):j + 50]!r}")
 
     def fail(msg, at):
         if len(fails) < 30:
@@ -206,7 +222,9 @@ def check_bytes(b: bytes, pwns=()) -> list[str]:
             body = m.group(1)
             code, _, payload = body.partition(b";")
             if code in (b"0", b"1", b"2"):
-                if not payload.startswith(b"pqx") or re.search(rb"[\x00-\x1f\x7f]|\xc2[\x80-\x9f]", payload):
+                # the app's own title: "pqx", or "pqx " and the file's name (drawn sanitized)
+                if not (payload == b"pqx" or payload.startswith(b"pqx evil")) or re.search(
+                        rb"[\x00-\x1f\x7f]|\xc2[\x80-\x9f]", payload):
                     fail("a window title that isn't the app's own", i)
             elif code == b"52":
                 sel, _, data = payload.partition(b";")
@@ -214,8 +232,11 @@ def check_bytes(b: bytes, pwns=()) -> list[str]:
                     fail("an OSC 52 payload that isn't base64", i)
                 else:
                     try:
-                        if controls(base64.b64decode(data).decode("utf-8", "replace")):
+                        copied = base64.b64decode(data).decode("utf-8", "replace")
+                        if controls(copied):
                             fail("an OSC 52 copy carrying control characters", i)
+                        if any(x in copied for x in INJECTED_TEXT):
+                            fail("an OSC 52 copy carrying text the file injects", i)
                     except ValueError:
                         fail("an OSC 52 payload that isn't base64", i)
             elif code in (b"10", b"11", b"12") and payload == b"?":
@@ -234,8 +255,12 @@ def check_bytes(b: bytes, pwns=()) -> list[str]:
             if not (nxt == b"P" and re.fullmatch(rb"(\+q|\$q)[0-9A-Za-z;]*", m.group(2))):
                 fail("a DCS/APC/PM/SOS string no app writes", i)  # capability queries only
             i = m.end()
+        elif nxt == b"(":
+            if b[i + 2:i + 3] != b"B":
+                fail("a character set other than ASCII (ESC ( B)", i)
+            i += 3
         elif nxt and nxt[0] in ESC2_OK:
-            i += 3 if nxt in (b"(",) else 2
+            i += 2
         else:
             fail(f"a stray ESC {nxt!r}", i)
             i += 2
@@ -266,7 +291,7 @@ def check_bytes(b: bytes, pwns=()) -> list[str]:
 def selftest() -> int:
     """The checks against streams with one fault each (and a clean one)."""
     ok = (b"\x1b[?1049h\x1b[1;1H\x1b[1;2;38;5;12mpqx \xe2\x90\x9b]0;x\x1b[0m\r\n\x1b]52;c;"
-          + base64.b64encode("✓ fine".encode()) + b"\x07\x1b]0;pqx demo.parquet\x07\x1b]22;default\x1b\\"
+          + base64.b64encode("✓ fine".encode()) + b"\x07\x1b]0;pqx evil.parquet\x07\x1b]22;default\x1b\\"
           + b"\x1bP+q544e\x1b\\\x1b[>1u\x1b[?2026$p\x1b7\x1b8\x1b(B")
     cases = {
         "clean": (ok, False),
@@ -283,6 +308,14 @@ def selftest() -> int:
         "OSC 52 with ESC inside": (ok + b"\x1b]52;c;" + base64.b64encode(b"a\x1b]0;x") + b"\x07", True),
         "SO": (ok + b"\x0e", True),
         "stray ESC": (ok + b"\x1bZ", True),
+        "the file's OSC 52 (echo PWNED)": (ok + OSC52.encode(), True),
+        "the file's ESC[2J ESC[31m": (ok + b"\x1b[2J\x1b[31mRED", True),
+        "the unit's ESC[5m": (ok + b"u\x1b[5m", True),
+        "CSI 21t (title report)": (ok + b"\x1b[21t", True),
+        "ESC c (reset)": (ok + b"\x1bc", True),
+        "ESC ( 0 (line drawing)": (ok + b"\x1b(0", True),
+        "a title from the file starting pqx": (ok + b"\x1b]0;pqx pwned\x07", True),
+        "OSC 52 of a newline payload": (ok + b"\x1b]52;c;" + base64.b64encode(b"x\nrm -rf\n") + b"\x07", False),
     }
     bad = 0
     for name, (data, want_fail) in cases.items():
@@ -303,7 +336,9 @@ def run_app(app: str, cmd: str, size, keep: bool) -> tuple[list[str], str]:
             if not s.wait(r"\S", 30):
                 return ["the app drew nothing"], d
             s.settle(0.8, 20)
-            for keys, marker, what in SCRIPT:
+            for keys, marker, what, *opt in SCRIPT:
+                if "fresh" in opt:
+                    s.wait_gone(marker, MARKER_WAIT)
                 if keys.startswith("text:"):
                     s.type(keys[5:])
                 else:
@@ -311,6 +346,8 @@ def run_app(app: str, cmd: str, size, keep: bool) -> tuple[list[str], str]:
                 s.drain(0.3)
                 if marker and not s.wait(marker, MARKER_WAIT):
                     fails.append(f"never reached: {what} (after {keys!r}, no {marker!r} on the screen)")
+                    if keep:
+                        print(f"--- {app}: screen without {marker!r}\n{s.text()}", file=sys.stderr)
                 s.settle(0.4, 8)
                 if s.exited is not None:
                     fails.append(f"the app exited (status {s.exited}) after {keys!r} ({what})")

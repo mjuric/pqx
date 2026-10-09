@@ -347,6 +347,28 @@ def compare_check(a, b):
             "colour_lines": colour_lines, "clipboard": clip}
 
 
+def describe_diff(d, la, lb):
+    """The first difference of a checkpoint, in a line: where, and the two texts around it."""
+    if d["text"]:
+        i, x, y = d["text"][0]
+        if i == "file":
+            return "the exported file differs"
+        j = next((k for k in range(max(len(x), len(y))) if x[k:k + 1] != y[k:k + 1]), 0)
+        lo = max(0, j - 12)
+        more = f" (+{len(d['text']) - 1} more lines)" if len(d["text"]) > 1 else ""
+        return f"line {i}: {la} {x[lo:lo + 40].strip()!r} vs {lb} {y[lo:lo + 40].strip()!r}{more}"
+    if d["clipboard"]:
+        return f"clipboard {d['clipboard'][0]!r} vs {d['clipboard'][1]!r}"
+    for kind in ("style", "colour"):
+        if d[kind]:
+            y, cells = next(iter(d[f"{kind}_lines"].items()))
+            a, b = cells[0][1], cells[0][2]
+            names = [n for n, u, v in zip(STYLE_NAMES, a, b) if u != v]
+            return (f"{kind} on row {y}, {len(cells)} cells from column {cells[0][0]}: "
+                    f"{_fmt_style(a, names)} vs {_fmt_style(b, names)} ({d[kind]} cells in all)")
+    return "differs"
+
+
 def summarize_style_diffs(lines_map, which, limit=6):
     out = []
     for y, cells in list(lines_map.items())[:limit]:
@@ -470,7 +492,12 @@ def load_xfail(path):
         return {}
     with open(path) as fh:
         d = yaml.safe_load(fh) or {}
-    return d.get("xfail") or {}
+    entries = d.get("xfail") or {}
+    for key, e in entries.items():  # only entries that say what fails: no blanket ones
+        if "@" not in key or not isinstance(e, dict) or "status" not in e or "checks" not in e:
+            raise SystemExit(f"{path}: {key}: an entry needs NAME@WxH and status, checks, reason "
+                             f"(regenerate with --write-xfail)")
+    return entries
 
 
 def write_screens_json(path, results):
@@ -526,11 +553,13 @@ def report(scen, results, labels, out, xfail, a, versions, elapsed):
             cb = {c["name"]: c for c in rb["checks"]}
             ndiff = nstyle = ncolour = 0
             failing = []  # the checkpoints that differ (or that the compared app never reached)
+            what = {}  # checkpoint: what differs first, in a few words
             for name in ca:
                 if name not in cb:
                     lines.append(f"  [{name}] missing from {lb}")
                     ndiff += 1
                     failing.append(name)
+                    what[name] = f"{lb} never reached it"
                     continue
                 d = compare_check(ca[name], cb[name])
                 ndiff += bool(d["text"]) + bool(d["clipboard"])
@@ -538,6 +567,7 @@ def report(scen, results, labels, out, xfail, a, versions, elapsed):
                 ncolour += d["colour"]
                 if d["text"] or d["clipboard"] or d["style"] or (d["colour"] and not a.lenient_colours):
                     failing.append(name)
+                    what[name] = describe_diff(d, la, lb)
                 if not (d["text"] or d["style"] or d["colour"] or d["clipboard"]):
                     continue
                 lines.append(f"  [{name}] {len(d['text'])} lines differ, {d['style']} cells differ in style, "
@@ -587,7 +617,7 @@ def report(scen, results, labels, out, xfail, a, versions, elapsed):
                     else:
                         final = "xfail"
             counts[final] = counts.get(final, 0) + 1
-            summary["scenarios"][key] = {"status": final, "raw_status": status, "failing": failing,
+            summary["scenarios"][key] = {"status": final, "raw_status": status, "failing": failing, "what": what,
                                          "text_diffs": ndiff, "style_cells": nstyle, "colour_cells": ncolour,
                                          "errors": errs, "xfail_reason": xf,
                                          "description": sc["description"].strip()}
@@ -632,10 +662,11 @@ def write_xfail(path, summary, old):
             continue
         prev = old.get(key, old.get(key.split("@")[0]))
         why = prev.get("reason") if isinstance(prev, dict) else prev
-        if not why:  # the first error past startup says most
+        if not why:  # the first error past startup, or what differs in the first checkpoints
             mine = [e for e in s["errors"] if e.startswith(summary["b"] + ":")]
             errs = [e for e in mine if ": startup:" not in e] or mine
-            why = errs[0][:160] if errs else f"{s['raw_status']} in {', '.join(map(str, s['failing']))}"
+            diffs = [f"{c}: {s['what'][c]}" for c in s["failing"][:2] if c in s.get("what", {})]
+            why = "; ".join(([errs[0][:160]] if errs else []) + diffs)[:400] or s["raw_status"]
         entries[key] = {"status": s["raw_status"], "checks": s["failing"], "reason": why}
     with open(path, "w") as fh:
         fh.write("# Known gaps of Go pqx against Python pqx, per scenario and size: the status, the\n"

@@ -219,7 +219,10 @@ xfail:
     reason: 'go: step 2 {"keys": "s", "wait": "sorted dec ↑"}: never matched'
 ```
 
-It applies only to Python vs Go runs. A run fails (CHANGED) when a listed entry fails
+Every entry needs the size, status and checks (a blanket `NAME: reason` is refused), and
+the reason generated says what differs first, for example `first: line 48: python
+'columns 1–8 of 16' vs go '…'` or `style on row 7, 112 cells from column 2: bold=True vs
+bold=False`. It applies only to Python vs Go runs. A run fails (CHANGED) when a listed entry fails
 differently: another status, or a checkpoint not in its list; it fails (XPASS) when a
 listed entry passes. `--write-xfail` rewrites the file from the current run, so the
 next run on the same binary is green; reasons already there are kept.
@@ -236,10 +239,14 @@ quotes a file value and the help. After each step that opens something it waits 
 marker of that screen (from Python pqx's text) and fails if it never appears, so a pass
 means the hostile text was really drawn there.
 
-Then it parses every byte the app wrote. Each escape sequence must be one an app writes
-itself: CSI with the usual finals (cursor, erase, modes, SGR, reports, cursor shape,
-keyboard protocol), OSC 0/1/2 only with a title starting `pqx` and no controls, OSC 52
-only with a base64 payload whose text has no controls, OSC 10/11/12 queries, OSC 22,
+Then it checks every byte the app wrote. First, none of the fixture's own sequences may
+appear as bytes (its OSC title, OSC 52, OSC 8, `ESC[2J ESC[31m`, the units' `ESC[5m`, its
+C1 strings, …): a parser alone would accept those, as they are well-formed. Then it
+parses every escape sequence, and each must be one an app writes itself: CSI with the usual finals (cursor, erase, modes, SGR, reports, cursor shape,
+keyboard protocol; not `t`, whose reports type text back), OSC 0/1/2 only with the app's
+own title (`pqx`, or `pqx` and the file's name) and no controls, OSC 52 only with a
+base64 payload whose text has no controls and none of the file's injected text,
+two-byte escapes only `ESC 7 8 = > M D E H` and `ESC ( B` (no reset, no line drawing), OSC 10/11/12 queries, OSC 22,
 DCS only as capability queries (`+q`, `$q`); no APC/PM/SOS, no unterminated sequence.
 The text between them must be valid UTF-8 (a raw 0x80–0x9F byte isn't), with no C1
 control, no C0 control other than CR, LF, tab, backspace and BEL, and no bidi or
