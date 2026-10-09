@@ -477,8 +477,9 @@ func TestPanels(t *testing.T) {
 		t.Fatalf("panels %+v", ps)
 	}
 	scr := d.Screen()
-	x, y := d.Find("╭─ columns  16")
-	if y < 0 || x != 150-SideWidth || !strings.HasSuffix(scr[y][:strings.Index(scr[y], "╭─ columns")], "╮ ") {
+	// on screen the body is 148 wide inside the root's one-column margins
+	x, y := d.Find("┌─ columns  16")
+	if y < 0 || x != 1+148-SideWidth || !strings.HasSuffix(scr[y][:strings.Index(scr[y], "┌─ columns")], "┐ ") {
 		t.Fatalf("list panel at %d,%d:\n%s", x, y, text(scr))
 	}
 	if r := string([]rune(scr[y+1])[x:]); !strings.HasPrefix(r, "│ diaSourceId ") {
