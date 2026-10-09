@@ -238,7 +238,7 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
                 if not s.wait(fill(st["toast"]), st.get("timeout", 10) * T, norm=norm) and not re.search(
                         fill(st["toast"]), plain_text(bytes(s.raw[raw_mark:]))):
                     res["errors"].append(f"{where}: notification {st['toast']!r} never shown")
-                quiet = min(quiet, 0.25)
+                quiet = min(quiet, 0.5)  # (pqx's notifications last 2 s and more)
             if st.get("settle", True) is not False and (sends or "wait" in st or "check" in st or "toast" in st):
                 q = st["settle"] if not isinstance(st.get("settle", True), bool) else quiet
                 if not s.settle(float(q), 15 * T, norm=norm):

@@ -7,6 +7,7 @@ steps:
   - keys: right right right right right right right right right right right right right right right right
   - check: before
   - keys: "-"
+    wait: '^ │ ‹ +c0'   # the grid is drawn again, still scrolled
     toast: 'Hid c15'
     check: hidden
     expect: 'Hid c15 · c brings it back'
