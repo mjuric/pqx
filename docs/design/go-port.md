@@ -254,3 +254,45 @@ agent that tries to break it) for WPs marked ★; a light review for the others.
   subtlest part of the app; WP11 gets the longest review.
 - **Binary size** is about 90 MB, 31 MB compressed; acceptable for wheels
   (PyPI's per-file limit is 100 MB by default).
+
+## Progress
+
+Recorded as the work lands; the PRs have the details.
+
+### Merged into `native-port` (2026-10-08/09)
+
+| PR | what | review |
+|---|---|---|
+| #32 | this plan | owner |
+| #33, #35, #36 | wave 0: the data contract (typed values), the UI contract (`kit`), the root model | integrator |
+| #34 | fixtures, golden files from Python pqx, CI on Linux and macOS with staticcheck | integrator |
+| #37 | WP4 plots: every golden record matches, text and styles | light |
+| #38 | WP2 data analysis and footer | independent, 3 rounds |
+| #39 | WP6 terminal input filter, suspend and signals, themes, the full CLI | independent, 3 rounds |
+| #40 | WP10 dialogs, title bar, status line, key bar, toasts | light |
+| #41 | WP8 Schema and Metadata tabs | light |
+| #42, #48 | WP9 Stats and Plot tabs; Stats' column list as its own panel | light |
+| #43 | WP3 fmtx, cells, config | independent, 3 rounds |
+| #45 | WP1 data views, FetchColumns, FindRow, FetchAround | independent, 3 rounds |
+| #46, #49, #50, #52 | root: panels, inner focus, the tab shown, background tasks, global `m`; Python's layout and square borders; dialogs spliced in (0.08 ms per keystroke); ShortType sanitized for every caller | integrator |
+
+### Decisions taken during the work (integrator, 2026-10-08/09)
+
+Intended differences from Python pqx, each listed in its PR:
+
+- **Safer output.** Everything from the file is sanitized before it reaches the terminal, including type names (`ShortType`), format-error messages and CLI errors, where Python passes some raw.
+- **Exactness.** Decimals wider than 38 digits are exact; float16 subnormals decode right; float32 raw values print in their shortest form.
+- **Sorting a file with its own `file_row_number` column** breaks ties on up to 64 columns, so paging is consistent (Python repeats or skips rows: issue #51).
+- **Export** writes a temporary file of its own and renames it over the target, keeping the umask; it refuses read-only and directory targets (Python's export can truncate the file being explored: issue #44).
+- **Grid.** A number column cut off at the right edge shows blank cells, not a truncated number; a failed column is reported once per view; the cache holds 4,000 rows per view.
+- **Suspend** stops only pqx; SIGHUP and SIGQUIT restore the terminal; SIGINT quits quietly. Known limitation, as in Python: a wrapper that doesn't exec pqx, with SIGTSTP sent to pqx alone, leaves pqx stopped until SIGCONT (Ctrl+Z stops the whole job and works).
+- **formats.yaml** is read as PyYAML's `safe_load` reads it, and Go refuses (never rewrites) the few odd files it can't read the same way; stale temporary files are cleaned up.
+- **Limits** where Python would allocate without bound: 16M cells for histograms and 2-D bins; strftime output capped as Python's buffer is; YAML nesting and merge expansion bounded.
+
+### Found along the way
+
+- **Python pqx bugs:** export truncating the explored file (#44); sort ties (#51); `column_stats` and `load_formats` raise uncaught errors on some inputs; DuckDB's `stddev_samp` loses precision on large offsets (e.g. `diaSourceId`).
+- **arrow-go v18.8.0:** `SeekToRow` on repeated (list, map) columns with several pages per row group returns wrong rows; pqx doesn't seek in such columns. A minimal reproduction is in `internal/data/plain.go`; reporting it upstream is the owner's call.
+- **DuckDB 1.5.6:** binding a file written moments before occasionally fails with "No files found" (also from Python); pqx retries the bind.
+- **arm64:** Go fuses `a*b+c` into one instruction on arm64, which changed bin edges and angle readings in the last bits; such expressions are written so they round as on amd64.
+- **This machine:** pqx's first suspend code stopped its whole process group and froze the session that ran it (fixed). SIGTSTP during a heavy DuckDB query still freezes this sandboxed environment for a while, even with only pqx stopped; **the owner checks this case in a real terminal before the merge to `master`.**
