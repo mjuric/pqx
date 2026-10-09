@@ -166,7 +166,7 @@ func position(vals []data.Value, v data.Value, fr int64) int64 {
 // leftmost is the leftmost scrollable column shown.
 func (h *harness) leftmost() string {
 	h.app.View()
-	return h.g.cols[h.g.left].Name
+	return h.g.cols[leftmost(h.g)].Name
 }
 
 // record is the file row under the cursor.
@@ -184,12 +184,12 @@ func (h *harness) place(fr int64, column, left string, screenRow int) string {
 	h.send(kit.GotoMsg{Row: fr})
 	h.settle()
 	g.curCol = g.byName[column]
-	g.left = g.byName[left]
+	g.sx = g.colStart(g.byName[left])
 	g.top = g.curRow - int64(screenRow)
 	h.exec(g.moved())
 	h.settle()
 	l := h.leftmost()
-	if h.record() != fr || h.screenRow() != screenRow || g.left <= g.pinned() || !g.cursorInView() {
+	if h.record() != fr || h.screenRow() != screenRow || g.sx == 0 || !g.cursorInView() {
 		h.t.Fatalf("placed on file row %d at screen row %d, leftmost %q (cursor in view %v)", h.record(), h.screenRow(), l, g.cursorInView())
 	}
 	return l
@@ -400,7 +400,7 @@ func pinnedPlace(t *testing.T, h *harness) {
 		t.Fatalf("pinned %d", g.pinned())
 	}
 	g.curCol = g.byName["ssObjectId"]
-	g.left = g.byName["mag"]
+	g.sx = g.colStart(g.byName["mag"])
 	h.exec(g.moved())
 	h.settle()
 	if h.leftmost() != "mag" {
@@ -733,14 +733,12 @@ func TestAJumpBeforeTheFirstPageDropsTheKeptRecord(t *testing.T) {
 	h.settle()
 	h.g.curCol = h.g.byName["band"]
 	release := make(chan struct{})
-	var once sync.Once
 	ds.mu.Lock()
 	ds.fetchGate = func(v data.View, start int64) chan struct{} {
-		var ch chan struct{}
 		if v.Where != "" {
-			once.Do(func() { ch = release }) // the filtered view's first read hangs (only it)
+			return release // the filtered view's reads hang (a read the grid replaces too)
 		}
-		return ch
+		return nil
 	}
 	ds.mu.Unlock()
 	h.press("=")

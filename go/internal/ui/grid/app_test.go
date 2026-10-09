@@ -189,11 +189,11 @@ func TestHiddenColumnHints(t *testing.T) {
 	if _, _, _, hr := g.colWindow(); hr == 0 {
 		t.Error("a click on ‹ didn't page left")
 	}
-	before := g.left
+	before := g.sx
 	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: g.x + g.w - 1, Y: g.y + 3})
 	h.settle()
-	if g.left <= before {
-		t.Errorf("a click on › didn't page right: left %d (was %d)", g.left, before)
+	if g.sx <= before {
+		t.Errorf("a click on › didn't page right: scroll %d (was %d)", g.sx, before)
 	}
 	// pinned columns show in the readout
 	h.press("home", "right", "p")
@@ -378,12 +378,12 @@ func TestLinkedColumns(t *testing.T) {
 	st.Current = "mag"
 	h.send(kit.ColumnChangedMsg{From: "schema"})
 	h.settle()
-	if g.curName() != "snr" || h.status.Text != "mag is hidden · c to show" || h.status.Severity != kit.Warning {
-		t.Errorf("hidden current: cursor %q, status %+v", g.curName(), h.status)
+	if g.curName() != "snr" || st.Current != "mag" {
+		t.Errorf("hidden current: cursor %q, current %q (the grid stays put)", g.curName(), st.Current)
 	}
-	h.press("right") // moving clears the hint
-	if h.status.Text != "" || st.Current != g.curName() {
-		t.Errorf("after moving: status %+v, current %q", h.status, st.Current)
+	h.press("right") // moving makes the cursor's column current again
+	if st.Current != g.curName() {
+		t.Errorf("after moving: current %q", st.Current)
 	}
 	st.Current = "mag"
 	h.send(kit.ColumnChangedMsg{From: "schema"})

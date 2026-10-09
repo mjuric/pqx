@@ -17,8 +17,8 @@ func (g *Grid) onViewChanged() tea.Cmd {
 	st := g.st
 	oldNames := g.allNames()
 	leftName := ""
-	if g.left < len(g.cols) && g.left > g.pinned() {
-		leftName = g.cols[g.left].Name
+	if first, last, hl, _ := g.colWindow(); hl > 0 && first <= last {
+		leftName = g.cols[first].Name // (Python's _rebuild_columns)
 	}
 	next := g.next
 	g.next = nil
@@ -46,7 +46,7 @@ func (g *Grid) onViewChanged() tea.Cmd {
 		// back to the view before a filter that failed on its first read
 		g.v = p.v
 		g.prev = nil
-		g.curRow, g.top, g.curCol, g.left = p.curRow, p.top, p.curCol, p.left
+		g.curRow, g.top, g.curCol, g.sx = p.curRow, p.top, p.curCol, p.sx
 		if st.Total >= 0 {
 			g.v.setTotal(st.Total)
 		}
@@ -59,7 +59,7 @@ func (g *Grid) onViewChanged() tea.Cmd {
 	}
 	g.revertErr = nil
 	if !st.View.Plain() {
-		g.prev = &saved{v: g.v, curRow: g.curRow, top: g.top, curCol: g.curCol, left: g.left}
+		g.prev = &saved{v: g.v, curRow: g.curRow, top: g.top, curCol: g.curCol, sx: g.sx}
 	} else {
 		g.prev = nil
 	}
@@ -75,15 +75,9 @@ func (g *Grid) onViewChanged() tea.Cmd {
 		g.v.setTotal(g.ds.NumRows())
 		g.v.confirmed = true
 	}
-	if !old.view.IsSQL() && !st.View.IsSQL() && reflect.DeepEqual(oldNames, g.allNames()) {
-		// the same columns: as wide as they were until the new rows widen
-		// them, so the columns on screen (and the leftmost one kept) stay
-		// where they were (Python fits the new page's widths before it
-		// shows it)
-		for name, w := range old.colW {
-			g.v.colW[name] = w
-		}
-	}
+	// (widths are reserved for the columns the first rows lack when they
+	// arrive, as Python's _apply_page does; the kept leftmost column goes
+	// to the edge then)
 	// the cursor stays on the current column if the view shows it
 	g.curCol = 0
 	if i, ok := g.byName[st.Current]; ok {
@@ -97,11 +91,8 @@ func (g *Grid) onViewChanged() tea.Cmd {
 	} else {
 		kept = notApplied(waiting, "the record isn't kept in this view")
 	}
-	if g.anchorLeft != "" {
-		if i, ok := g.byName[g.anchorLeft]; ok && i >= g.pinned() {
-			g.left = i
-		}
-	}
+	g.sx = 0
+	g.applyAnchor()
 	// (the current column stays as it is: a view without it, a SQL
 	// result, doesn't make another current)
 	g.scrollToCursor()
@@ -110,6 +101,19 @@ func (g *Grid) onViewChanged() tea.Cmd {
 		values = next.values
 	}
 	return tea.Batch(dropped, kept, g.refreshed(), g.replay(replay, values))
+}
+
+// applyAnchor shows the column kept leftmost across a view change at the
+// left edge. Python does it when the view's first rows are shown (their
+// widths decide where the column starts), so it is applied again then.
+func (g *Grid) applyAnchor() {
+	if g.anchorLeft == "" {
+		return
+	}
+	if i, ok := g.byName[g.anchorLeft]; ok && i >= g.pinned() {
+		g.sx = g.colStart(i)
+		g.clampSX()
+	}
 }
 
 // sameView reports whether two views are the same.

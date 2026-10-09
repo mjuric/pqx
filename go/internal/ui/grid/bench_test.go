@@ -59,8 +59,8 @@ func BenchmarkFramePage(b *testing.B) {
 // BenchmarkFrameScroll moves a column sideways each frame (→ at the edge).
 func BenchmarkFrameScroll(b *testing.B) {
 	benchFrame(b, func(g *Grid, i int) {
-		g.left = 10 + i%2
-		g.curCol = g.left
+		g.curCol = 10 + i%2
+		g.sx = g.colStart(g.curCol)
 	})
 }
 

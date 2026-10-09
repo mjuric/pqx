@@ -67,7 +67,7 @@ func hostileFake() *fakeDS {
 
 func TestHostileTextNeverReachesTheScreen(t *testing.T) {
 	ds := hostileFake()
-	h := newHarness(t, ds, 220, 30)
+	h := newHarness(t, ds, 220, 30, hopts{page: 1})
 	check := func(what string) {
 		t.Helper()
 		if bad := rawControls(h.raw()); len(bad) > 0 {
@@ -265,13 +265,13 @@ func TestViewportKeptAcrossViews(t *testing.T) {
 		h.send(kp("left"))
 	}
 	h.settle()
-	left := g.cols[g.left].Name
-	if g.left == 0 {
+	left := g.cols[leftmost(g)].Name
+	if g.sx == 0 {
 		t.Fatal("not scrolled")
 	}
 	h.filterWith("id % 3 = 0")
-	if g.cols[g.left].Name != left {
-		t.Errorf("leftmost column %q after a filter, want %q", g.cols[g.left].Name, left)
+	if g.cols[leftmost(g)].Name != left {
+		t.Errorf("leftmost column %q after a filter, want %q", g.cols[leftmost(g)].Name, left)
 	}
 	// the record on screen row 5 stays there when the filter is cleared
 	h.send(kit.GotoMsg{Row: 700})
@@ -288,8 +288,8 @@ func TestViewportKeptAcrossViews(t *testing.T) {
 	if !h.env.State.View.Plain() || g.curRow != fr || g.curRow-g.top != 5 {
 		t.Errorf("after x: row %d (want file row %d), screen row %d", g.curRow, fr, g.curRow-g.top)
 	}
-	if g.cols[g.left].Name != left {
-		t.Errorf("leftmost column %q after clearing, want %q", g.cols[g.left].Name, left)
+	if g.cols[leftmost(g)].Name != left {
+		t.Errorf("leftmost column %q after clearing, want %q", g.cols[leftmost(g)].Name, left)
 	}
 }
 
@@ -327,7 +327,7 @@ func TestFitVisibleScrollsTheCursorBack(t *testing.T) {
 	h.press("end")
 	h.grid()
 	if !g.cursorInView() {
-		t.Errorf("cursor off screen: left %d, blob %d wide", g.left, g.colWidth("blob"))
+		t.Errorf("cursor off screen: scroll %d, blob %d wide", g.sx, g.colWidth("blob"))
 	}
 	drawnCellsFit(t, h, "binary")
 }
@@ -413,7 +413,7 @@ func TestFailedAndShortReadsAreNotRetried(t *testing.T) {
 // Columns read for rows evicted (or renumbered) meanwhile aren't stored;
 // a failure marks only rows read.
 func TestColumnResultsAreCheckedAgainstTheCache(t *testing.T) {
-	h := newHarness(t, newFake(1000, 4), 120, 30)
+	h := newHarness(t, newFake(1000, 4), 120, 30, hopts{page: 1})
 	g := h.g
 	gen := g.v.gen
 	w := data.Window{Len: 2, FileRows: []int64{900, 901}, Cols: map[string][]data.Value{"zz": {int64(1), int64(2)}}}
@@ -437,7 +437,7 @@ func TestColumnResultsAreCheckedAgainstTheCache(t *testing.T) {
 func TestJumpPastTheEnd(t *testing.T) {
 	ds := newFake(1000, 3)
 	ds.countGate = make(chan struct{})
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	h.filterWith("id % 2 = 0")
 	known := h.g.v.known
 	h.send(kit.GotoMsg{Row: 5000})
@@ -491,11 +491,11 @@ func TestPageLeftAndClickBelowTheRows(t *testing.T) {
 	h := newHarness(t, newFake(5, 60), 120, 30)
 	g := h.g
 	h.press("end")
-	first, _, _, _ := g.colWindow()
+	sx := g.sx
 	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: g.x, Y: g.y + 3})
 	h.settle()
-	if _, last, _, _ := g.colWindow(); last != first-1 || !g.fits(g.left, first-1) || (g.left > 0 && g.fits(g.left-1, first-1)) {
-		t.Errorf("after ‹: left %d, last shown %d, want %d", g.left, last, first-1)
+	if want := max(0, sx-(g.w-2*edgeCells)); g.sx != want {
+		t.Errorf("after ‹: scroll %d, want %d (a table's width less)", g.sx, want)
 	}
 	row, col := g.curRow, g.curCol
 	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: g.x + g.layout()[0].x + 1, Y: g.y + headerRows + 8})
@@ -609,7 +609,7 @@ func secondRound(t *testing.T, width, size int) bool {
 	if !g.cursorInView() {
 		t.Errorf("width %d, %d bytes: cursor off screen", width, size)
 	}
-	return g.left > 0
+	return g.sx > 0
 }
 
 // A grid that gets wider scrolls back left so no space is left empty at the
@@ -626,8 +626,8 @@ func TestWiderGridFillsTheSpace(t *testing.T) {
 	h.press("d")
 	h.grid()
 	n := len(g.cols)
-	if g.left > g.pinned() && g.fits(g.left-1, n-1) {
-		t.Errorf("left %d leaves room: columns %d to %d would fit", g.left, g.left-1, n-1)
+	if g.sx > g.maxSX() {
+		t.Errorf("scroll %d leaves room (at most %d, %d columns)", g.sx, g.maxSX(), n)
 	}
 	if !g.cursorInView() {
 		t.Error("cursor off screen")
@@ -638,8 +638,8 @@ func TestWiderGridFillsTheSpace(t *testing.T) {
 	h.send(tea.WindowSizeMsg{Width: 200, Height: 30})
 	h.settle()
 	h.grid()
-	if g.left > g.pinned() && g.fits(g.left-1, n-1) {
-		t.Errorf("after growing the terminal: left %d leaves room", g.left)
+	if g.sx > g.maxSX() {
+		t.Errorf("after growing the terminal: scroll %d leaves room", g.sx)
 	}
 }
 
@@ -686,5 +686,78 @@ func TestReadColumnsByPositionChecksTheRows(t *testing.T) {
 	moved := colsReq{rows: []int64{0, 1, 2}, fileRows: []int64{0, 3, 4}, cols: []string{"c002"}}
 	if _, err := readColumns(t.Context(), ds, v, moved); err == nil {
 		t.Error("rows that moved were read by position")
+	}
+}
+
+// leftmost is the first scrollable column wholly on screen.
+func leftmost(g *Grid) int {
+	first, last, _, _ := g.colWindow()
+	if last < first {
+		return g.pinned()
+	}
+	return first
+}
+
+// Reads take Python's window of rows around the cursor, and widths fit all
+// of it: a long value 900 rows down widens its column on the first screen.
+func TestWidthsFitPythonsWindow(t *testing.T) {
+	ds := newFake(5000, 4)
+	long := strings.Repeat("z", 30)
+	ds.special = func(name string, fr int64) (data.Value, bool) {
+		if name == "name" && fr == 900 {
+			return long, true
+		}
+		return nil, false
+	}
+	h := newHarness(t, ds, 120, 30)
+	if c := ds.fetches()[0]; c.start != 0 || c.n != 1000 {
+		t.Errorf("first read %+v, want Python's window [0, 1000)", c)
+	}
+	if w := h.g.colWidth("name"); w != len(long) {
+		t.Errorf("name %d wide on the first screen, want %d", w, len(long))
+	}
+}
+
+// A small plain file is read whole (Python's window_cost and
+// LAZY_MIN_SAVING_MS); a big one lazily.
+func TestSmallPlainFilesLoadWhole(t *testing.T) {
+	h := newHarness(t, openFixture(t, "demo"), 120, 40)
+	if c := h.ds.(interface{ Columns() []data.Column }); c == nil {
+		t.Fatal()
+	}
+	if !h.g.wholeIsCheap(0, 1000, 8) {
+		t.Error("demo's first window isn't read whole")
+	}
+	for _, n := range []string{"ingestTime", "detector"} {
+		if _, ok := h.g.v.cell(n, 0); !ok {
+			t.Errorf("%s not read with the first window", n)
+		}
+	}
+	big := newHarness(t, newFake(10_000, 120), 120, 40)
+	if big.g.wholeIsCheap(0, 1000, 8) {
+		t.Error("a big file's window is read whole")
+	}
+}
+
+// A column chosen on another tab (Schema, Stats) goes to the left edge of
+// the hidden table, as DataTable scrolls a table that isn't shown.
+func TestColumnChosenElsewhereGoesToTheLeftEdge(t *testing.T) {
+	h := newHarness(t, newFake(1000, 60), 150, 42)
+	g := h.g
+	h.env.State.Tab = kit.TabSchema
+	h.env.State.Current = "c030"
+	h.send(kit.ColumnChangedMsg{From: "schema"})
+	h.settle()
+	if g.curName() != "c030" || g.sx != min(g.colStart(g.curCol), g.maxSX()) {
+		t.Errorf("cursor on %q, scroll %d, want the column's start %d", g.curName(), g.sx, g.colStart(g.curCol))
+	}
+	// on the Data tab (the details pane) it scrolls only as far as needed
+	h.env.State.Tab = kit.TabData
+	h.press("home")
+	h.env.State.Current = "c030"
+	h.send(kit.ColumnChangedMsg{From: "detail"})
+	h.settle()
+	if _, last, _, _ := g.colWindow(); last != g.curCol {
+		t.Errorf("from the details pane: last shown %d, cursor %d", last, g.curCol)
 	}
 }
