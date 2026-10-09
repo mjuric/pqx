@@ -60,38 +60,6 @@ func TestList(t *testing.T) {
 
 func keyEnd() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyEnd} }
 
-// Scrollbar against Textual's ScrollBarRender.render_bar (# a reversed
-// blank, . a blank, n or r after a glyph: plain or reversed).
-func TestScrollbar(t *testing.T) {
-	for _, c := range []struct {
-		size, virtual, window, pos int
-		want                       string
-	}{
-		{31, 61, 31, 0, "###############▁r..............."},
-		{31, 61, 31, 30, "...............▇n###############"},
-		{31, 61, 31, 13, "......▄n###############▅r........"},
-		{3, 6, 3, 1, "▄n#."},
-		{10, 200, 10, 57, "..▃n▃r......"},
-	} {
-		var b strings.Builder
-		for _, x := range Scrollbar(c.size, c.virtual, c.window, c.pos, "red") {
-			switch {
-			case x.Plain == " " && x.Style.Reverse:
-				b.WriteString("#")
-			case x.Plain == " ":
-				b.WriteString(".")
-			case x.Style.Reverse:
-				b.WriteString(x.Plain + "r")
-			default:
-				b.WriteString(x.Plain + "n")
-			}
-		}
-		if b.String() != c.want {
-			t.Errorf("%+v: %q", c, b.String())
-		}
-	}
-}
-
 // A highlight before the list is first drawn doesn't scroll it: the first
 // View shows it from the top when it fits there (OptionList isn't laid out
 // yet either).

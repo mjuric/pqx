@@ -85,6 +85,7 @@ type debounceMsg struct {
 func New(env *kit.Env) *Pane {
 	p := &Pane{env: env, bins: DefaultBins, stale: true, bodyW: 80}
 	p.list.Width = ListWidth
+	p.list.Bar = env.Look.Style("scrollbar")
 	p.buildList()
 	return p
 }
