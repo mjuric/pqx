@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mjuric/pqx/go/internal/data"
+	"github.com/mjuric/pqx/go/internal/styled"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
 
@@ -492,9 +493,9 @@ func TestViewSmallGrid(t *testing.T) {
 		t.Errorf("cursor cell not underlined without focus: %q", raw)
 	}
 	h.g.Focus()
-	// secondary text is dim
-	if !strings.Contains(h.gridRaw()[1], "\x1b[2m") {
-		t.Error("types aren't dim")
+	// the header is bold, its types dim and bold (DataTable's header style)
+	if want := h.g.styledText("i64", styled.Style{Bold: true, Dim: true}); !strings.Contains(h.gridRaw()[1], want) {
+		t.Errorf("types aren't dim and bold: %q", h.gridRaw()[1])
 	}
 }
 

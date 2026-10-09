@@ -102,15 +102,17 @@ type Grid struct {
 	waiters       []waiter
 	lastRow       int64 // State.Row and FileRow as last announced
 	lastFileRow   int64
-	hiddenHint    string     // the current column is hidden in the grid (status hint)
-	next          *keepReq   // a view on its way that keeps a record (keep.go)
-	kept          *keeping   // the record being looked for in the view shown
-	sent          *data.View // a view "=" asked for, not yet seen as a SetViewMsg
-	onTheWay      *data.View // the last view asked for (SetViewMsg), while it is checked
-	locateSeq     int        // the last lookup's number
-	anchorLeft    string     // the column a new view shows leftmost
-	revertErr     error      // why the view was reverted, for the status line once it is back
-	foundEnd      bool       // a short read found the view's end before its count
+	hiddenHint    string          // the current column is hidden in the grid (status hint)
+	next          *keepReq        // a view on its way that keeps a record (keep.go)
+	kept          *keeping        // the record being looked for in the view shown
+	sent          *data.View      // a view "=" asked for, not yet seen as a SetViewMsg
+	inflight      *data.View      // the "=" view sent, not yet seen
+	after         *kit.SetViewMsg // an "=" view made on the one in flight, sent once that arrives
+	onTheWay      *data.View      // the last view asked for (SetViewMsg), while it is checked
+	locateSeq     int             // the last lookup's number
+	anchorLeft    string          // the column a new view shows leftmost
+	revertErr     error           // why the view was reverted, for the status line once it is back
+	foundEnd      bool            // a short read found the view's end before its count
 	footer        map[string][2]data.Value
 	footerStarted bool
 
@@ -137,6 +139,7 @@ type saved struct {
 func New(env *kit.Env) *Grid {
 	g := &Grid{
 		env: env, st: env.State, ds: env.DS, look: env.Look,
+		focused:   true, // the root starts with the grid focused
 		cellTasks: map[string]bool{}, lastRow: -1, lastFileRow: -2,
 		sgr: map[styled.Style]sgrPair{},
 	}
@@ -289,8 +292,7 @@ func (g *Grid) Update(msg tea.Msg) tea.Cmd {
 	case kit.TotalMsg:
 		return g.onTotal()
 	case kit.SetViewMsg:
-		g.onSetView(msg)
-		return nil
+		return g.onSetView(msg)
 	case kit.ColumnChangedMsg:
 		return g.onColumnChanged(msg)
 	case kit.ColumnsChangedMsg:

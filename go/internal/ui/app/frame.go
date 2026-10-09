@@ -94,28 +94,29 @@ func (a *App) frame(inner string, w, h int, title, subtitle styled.Text, focused
 	return b.String()
 }
 
-// borderLine is a top or bottom border of width w with t in it, after
-// "┌─ ".
+// borderLine is a top or bottom border of width w with t in it: a title
+// left-aligned after "┌─", a subtitle (bottom border) right-aligned before
+// "─┘", as Textual aligns them by default.
 func borderLine(look kit.Look, l, r string, w int, t styled.Text, bs styled.Style) string {
 	if w < 2 {
 		return strings.Repeat(" ", max(0, w))
 	}
-	var b strings.Builder
-	used := 1
-	b.WriteString(look.Render(styled.New(l, bs)))
-	if t.Plain != "" && w > 6 {
-		room := w - 6
-		tt := t
-		if lipgloss.Width(t.Plain) > room {
-			tt = styled.Text{Plain: ansi.Truncate(t.Plain, room, "…")}
-		}
-		b.WriteString(look.Render(styled.New("─ ", bs)))
-		b.WriteString(look.Render(tt))
-		b.WriteString(look.Render(styled.New(" ", bs)))
-		used += 3 + lipgloss.Width(tt.Plain)
+	edge := func(s string) string { return look.Render(styled.New(s, bs)) }
+	if t.Plain == "" || w <= 6 {
+		return edge(l + strings.Repeat("─", w-2) + r)
 	}
-	b.WriteString(look.Render(styled.New(strings.Repeat("─", max(0, w-used-1))+r, bs)))
-	return b.String()
+	tt := t
+	if room := w - 6; lipgloss.Width(t.Plain) > room {
+		tt = truncateStyled(t, room)
+	}
+	// the spaces around the title are the title's (Textual's border titles),
+	// not the border's colour
+	mid := " " + look.Render(tt) + " "
+	fill := strings.Repeat("─", max(0, w-4-lipgloss.Width(tt.Plain)-1))
+	if l == "└" {
+		return edge(l+fill) + mid + edge("─"+r)
+	}
+	return edge(l+"─") + mid + edge(fill+r)
 }
 
 // fitLine pads or cuts s (which may hold SGR sequences) to exactly w cells.
@@ -178,3 +179,32 @@ func (c *basicChrome) KeyBar(w int, hints []kit.KeyHint) string {
 }
 
 func (c *basicChrome) Toasts(w, h int) []kit.Overlay { return nil }
+
+// truncateStyled cuts t to w cells, ending in "…" in the style of the cut
+// character, keeping the styles of what stays (Rich's ellipsis overflow).
+func truncateStyled(t styled.Text, w int) styled.Text {
+	r := []rune(t.Plain)
+	n, cut := 0, len(r)
+	for i, c := range r {
+		cw := ansi.StringWidth(string(c))
+		if n+cw > w-1 {
+			cut = i
+			break
+		}
+		n += cw
+	}
+	if cut >= len(r) {
+		return t
+	}
+	out := styled.Text{Plain: string(r[:cut]) + "…", Style: t.Style, Justify: t.Justify}
+	for _, sp := range t.Spans {
+		a, b := sp.Start, min(sp.End, cut)
+		if sp.Start <= cut && cut < sp.End {
+			b = cut + 1 // the ellipsis takes the cut character's style
+		}
+		if a < b {
+			out.Spans = append(out.Spans, styled.Span{Start: a, End: b, Style: sp.Style})
+		}
+	}
+	return out
+}

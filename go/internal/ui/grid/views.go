@@ -67,9 +67,9 @@ func (g *Grid) onViewChanged() tea.Cmd {
 	g.v = g.newViewData(st.View)
 	g.v.setTotal(st.Total)
 	if !old.view.IsSQL() && !st.View.IsSQL() {
-		// row labels are file rows in both: as wide as they were, so the
-		// columns kept on screen don't move while the new rows arrive
-		g.v.labelW = old.labelW
+		// until the new rows arrive, row labels as wide as they were, so
+		// the columns kept on screen don't move meanwhile
+		g.v.labelW = g.labelWidthOf(old)
 	}
 	if st.View.Plain() {
 		g.v.setTotal(g.ds.NumRows())
@@ -99,7 +99,11 @@ func (g *Grid) onViewChanged() tea.Cmd {
 	// (the current column stays as it is: a view without it, a SQL
 	// result, doesn't make another current)
 	g.scrollToCursor()
-	return tea.Batch(dropped, kept, g.refreshed(), g.replay(replay))
+	var values map[string]data.Value
+	if next != nil {
+		values = next.values
+	}
+	return tea.Batch(dropped, kept, g.refreshed(), g.replay(replay, values))
 }
 
 // sameView reports whether two views are the same.
