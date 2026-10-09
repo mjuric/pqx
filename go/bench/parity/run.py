@@ -349,7 +349,7 @@ def python_bug_applies(pb, ref, other):
         return None
     if pb.get("region") == "keybar":
         r, o = ref["lines"][-1], other["lines"][-1]
-    elif pb.get("region") in ("screen", "status"):
+    elif pb.get("region") in ("screen", "status", "pane"):
         r, o = "\n".join(ref["lines"]), "\n".join(other["lines"])
     else:
         return None
@@ -363,6 +363,16 @@ def mask_region(c, region):
     of it (for a bug that changes the whole checkpoint)."""
     if region == "screen":
         return {**c, "lines": [], "styles": [], "plain": [], "clipboard": []}
+    if region == "pane":  # the details pane: every column from its left border on
+        x = next((ln.index("┌─ row") for ln in c["lines"] if "┌─ row" in ln), None)
+        if x is None:
+            return c
+        c = dict(c)
+        c["lines"] = [ln[:x] for ln in c["lines"]]
+        c["styles"] = [st[:x] + [(None,) * 7] * (len(st) - x) for st in c["styles"]]
+        if c.get("plain"):
+            c["plain"] = [p[:x] + "1" * (len(p) - x) for p in c["plain"]]
+        return c
     if region == "status":  # the grid's status line: "│ ✓ 20,000 rows  ·  row 0", "│ * Counting rows"
         c = dict(c)
         idx = [i for i, ln in enumerate(c["lines"]) if STATUS_LINE.match(ln)]
@@ -422,6 +432,14 @@ def selftest():
     it = {"checks": ["c"], "region": "screen", "ref_shows": r"1e\+46", "other_shows": "10{20}"}
     ok = bool(rule_applies(it, a_, b_, "other_shows")) and not rule_applies(it, b_, a_, "other_shows")
     print(f"{'ok  ' if ok else 'FAIL'} intended, region screen: applies only to the listed difference")
+    bad += not ok
+    pa_, pb_ = pair(" x", " x")
+    pa_["lines"] = ["│ grid ┐ ┌─ row 0 ─┐", "│ 1    │ │ wide 1e+46"]
+    pb_["lines"] = ["│ grid ┐ ┌─ row 0 ─┐", "│ 1    │ │ wide 1000000000000"]
+    pc_ = {**pb_, "lines": ["│ grid ┐ ┌─ row 0 ─┐", "│ 2    │ │ wide 1000000000000"]}
+    ok = (not compare_check(mask_region(pa_, "pane"), mask_region(pb_, "pane"))["text"]
+          and compare_check(mask_region(pa_, "pane"), mask_region(pc_, "pane"))["text"])
+    print(f"{'ok  ' if ok else 'FAIL'} region pane: the pane is left out, the grid beside it isn't")
     bad += not ok
     for name, ref_bar, other_bar, want_masked in [
             ("bug shown, other app right: left out", " enter apply   esc back", " / filter   x clear", True),

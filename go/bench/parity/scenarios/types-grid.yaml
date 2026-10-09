@@ -5,6 +5,12 @@ description: |
 covers:
   - "native-port.md: UTC; wide decimals; emoji and CJK widths"
 fixture: types
+intended:
+  - checks: [detail-null-row]
+    region: pane
+    ref_shows: 'wide +1e\+46'           # Python widens the decimal256 to a float in the pane
+    other_shows: 'wide +10{20}'          # the exact 47-digit value (wraps over more lines)
+    note: "exact wide decimals in the details pane (go-port.md: Progress), as in detail-wrap"
 steps:
   - check: first
     expect: '∅'
