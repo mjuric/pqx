@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/fmtx"
@@ -30,6 +31,9 @@ type exportDialog struct {
 	onlyVis bool
 	over    bool
 	focus   int // exPath … exCancel
+	// radioHi is the format the radio set's (invisible) highlight is on:
+	// arrows move it, Enter or space picks it (Textual's RadioSet).
+	radioHi data.ExportFormat
 
 	rows    map[int]int // dialog row → the control drawn there
 	buttonY int
@@ -107,11 +111,8 @@ func baseName(p string) string {
 }
 
 func (d *exportDialog) summaryLines(iw int) []string {
-	var out []string
-	for _, l := range wrapText(styled.New(fmtx.Sanitize(d.summary, false), d.env.Look.Style("dim")), iw) {
-		out = append(out, d.env.Look.Render(l))
-	}
-	return out
+	// one line, cropped (Python's Label doesn't wrap it)
+	return []string{ansi.Truncate(text(d.env.Look, fmtx.Sanitize(d.summary, false), d.env.Look.Style("dim")), iw, "")}
 }
 
 func (d *exportDialog) Size(w, h int) (int, int) {
@@ -121,7 +122,14 @@ func (d *exportDialog) Size(w, h int) (int, int) {
 	return dialogSize(dialogW, 1+len(d.summaryLines(innerW(dw)))+3+4+2+2+2, w, h)
 }
 
-func (d *exportDialog) Keys() []kit.KeyHint { return nil }
+// Keys: the filter's keys while the path input has focus (Python's key bar
+// takes any focused Input for the filter box), else the screen's.
+func (d *exportDialog) Keys() []kit.KeyHint {
+	if d.focus == exPath {
+		return inputKeys
+	}
+	return nil
+}
 
 func (d *exportDialog) View(w, h int) string {
 	look := d.env.Look
@@ -140,13 +148,12 @@ func (d *exportDialog) View(w, h int) string {
 	}
 	content = append(content, "")
 	for i, name := range formatNames {
-		add(exFormat*100+i, toggle(look, "●", name, data.ExportFormat(i) == d.format,
-			d.focus == exFormat && data.ExportFormat(i) == d.format))
+		add(exFormat*100+i, " "+toggle(look, "●", name, data.ExportFormat(i) == d.format))
 	}
 	content = append(content, "")
-	add(exVisible, toggle(look, "X", "Only the visible columns", d.onlyVis, d.focus == exVisible))
+	add(exVisible, " "+toggle(look, "X", "Only the visible columns", d.onlyVis))
 	content = append(content, "")
-	add(exOverwrite, toggle(look, "X", "Overwrite if the file exists", d.over, d.focus == exOverwrite))
+	add(exOverwrite, " "+toggle(look, "X", "Overwrite if the file exists", d.over))
 	content = append(content, "")
 	row, spans := buttonsRow(look, iw, []string{"Export", "Cancel"}, 0, d.focus-exExport)
 	content = append(content, row)
@@ -162,6 +169,9 @@ func (d *exportDialog) Cursor() *tea.Cursor { return d.path.cursor(1+padX, d.pat
 
 func (d *exportDialog) setFocus(f int) {
 	d.focus = (f + exControls) % exControls
+	if d.focus == exFormat {
+		d.radioHi = d.format
+	}
 	if d.focus == exPath {
 		d.path.focus()
 	} else {
@@ -172,7 +182,7 @@ func (d *exportDialog) setFocus(f int) {
 // setFormat picks a format and gives the path its extension, if it has one
 // of the formats' (Python's fmt_changed).
 func (d *exportDialog) setFormat(f data.ExportFormat) {
-	d.format = f
+	d.format, d.radioHi = f, f
 	p := d.path.Value()
 	ext := splitExt(baseName(p))
 	switch strings.ToLower(ext) {
@@ -217,9 +227,11 @@ func (d *exportDialog) key(k tea.KeyPressMsg) tea.Cmd {
 	case exFormat:
 		switch s {
 		case "up", "left":
-			d.setFormat((d.format + 2) % 3)
+			d.radioHi = (d.radioHi + 2) % 3
 		case "down", "right":
-			d.setFormat((d.format + 1) % 3)
+			d.radioHi = (d.radioHi + 1) % 3
+		case "enter", "space":
+			d.setFormat(d.radioHi)
 		}
 	case exVisible:
 		if activate {

@@ -43,7 +43,8 @@ const formatRows = 6
 
 func (d *formatDialog) Size(w, h int) (int, int) { return dialogSize(smallW, formatRows, w, h) }
 
-func (d *formatDialog) Keys() []kit.KeyHint { return nil }
+// Keys: the filter's keys (Python shows them for any focused Input).
+func (d *formatDialog) Keys() []kit.KeyHint { return inputKeys }
 
 // hint is what can be typed for the column's kind.
 func (d *formatDialog) hint() string {
@@ -59,15 +60,11 @@ func (d *formatDialog) hint() string {
 
 func (d *formatDialog) View(w, h int) string {
 	look := d.env.Look
-	title := styled.New("Format of", styled.Style{Bold: true})
-	title.Append(" ", styled.Style{})
-	title.Append(fmtx.Sanitize(d.col.Name, false), styled.Style{Fg: "cyan"})
-	content := []string{look.Render(title), text(look, d.hint(), look.Style("dim"))}
+	content := []string{line(look, "Format of", styled.Style{Bold: true}, " ", styled.Style{},
+		fmtx.Sanitize(d.col.Name, false), styled.Style{Fg: "cyan"}), text(look, d.hint(), look.Style("dim"))}
 	content = append(content, d.in.lines(look, innerW(w))...)
 	if d.err != "" {
-		e := styled.New("✗", look.Style("error"))
-		e.Append(" "+fmtx.Sanitize(d.err, false), styled.Style{})
-		content = append(content, look.Render(e))
+		content = append(content, line(look, "✗", look.Style("error"), " "+fmtx.Sanitize(d.err, false), styled.Style{}))
 	}
 	return box(look, content, w, h)
 }

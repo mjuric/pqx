@@ -36,7 +36,7 @@ func panicMain(path string) int {
 	env := &kit.Env{DS: ds, Look: app.BasicLook{}, Tasks: kit.NewTasks()}
 	env.State = newState(ds, env.Opts)
 	m := app.New(env, app.Parts{Grid: grid.New(env), Filter: filter.New(env), Chrome: chrome.New(env)})
-	code := runApp(panicky{m}, os.Stderr)
+	code := runApp(panicky{m}, nil, os.Stderr)
 	// the terminal is out of raw mode again: a newline is a newline
 	fmt.Print("after\nexit\n")
 	return code

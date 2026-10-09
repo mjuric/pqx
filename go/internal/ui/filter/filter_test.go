@@ -13,6 +13,7 @@ import (
 
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/styled"
+	"github.com/mjuric/pqx/go/internal/ui/app"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
 
@@ -392,5 +393,84 @@ func TestTheFilterShownIsntAddedAgain(t *testing.T) {
 	r.send(kit.SetViewMsg{View: data.View{Where: "x > 5", OrderBy: []data.Sort{{Column: "x", Desc: true}}}, KeepFileRow: -1})
 	if len(r.env.State.View.OrderBy) != 1 || len(r.f.History()) != 0 {
 		t.Errorf("view %+v history %q", r.env.State.View, r.f.History())
+	}
+}
+
+// Focus selects the text (Textual's select_on_focus): typing replaces it,
+// deleting deletes it, a move ends the selection; the box getting focus
+// back after its filter failed selects nothing.
+func TestTheTextIsSelectedOnFocus(t *testing.T) {
+	r := newRig(t, "")
+	r.f.in.SetValue("x > 1")
+	r.run(r.f.Focus())
+	if !r.f.sel {
+		t.Fatal("not selected")
+	}
+	r.typeText("y")
+	if r.f.Value() != "y" || r.f.sel {
+		t.Errorf("typed over the selection: %q", r.f.Value())
+	}
+	r.f.Blur()
+	r.run(r.f.Focus())
+	r.key(tea.KeyBackspace, 0)
+	if r.f.Value() != "" {
+		t.Errorf("backspace on the selection: %q", r.f.Value())
+	}
+	r.f.in.SetValue("x > 1")
+	r.f.Blur()
+	r.run(r.f.Focus())
+	r.key(tea.KeyLeft, 0)
+	r.typeText("(")
+	if r.f.Value() != "(x > 1" {
+		t.Errorf("← then typing: %q", r.f.Value())
+	}
+	r.f.Blur()
+	r.run(r.f.Focus())
+	r.send(tea.PasteMsg{Content: "a = 1"})
+	if r.f.Value() != "a = 1" {
+		t.Errorf("paste over the selection: %q", r.f.Value())
+	}
+	// a typed filter that fails gets the box back with nothing selected
+	r.f.in.SetValue("bad")
+	r.key(tea.KeyEnter, 0)
+	if !r.f.TypingFocused() || r.f.sel {
+		t.Errorf("after a failure: focused %v, selected %v", r.f.TypingFocused(), r.f.sel)
+	}
+}
+
+// The prompt's space is plain, the hint faint (whatever --dim says), the
+// selection reversed.
+func TestTheBoxLooksAsPythons(t *testing.T) {
+	r := newRig(t, "")
+	r.env.Look = app.BasicLook{}
+	r.run(r.f.Focus())
+	v := r.f.View(200, 1)
+	if !strings.HasPrefix(v, app.BasicLook{}.Render(styled.New("›", app.BasicLook{}.Style("accent")))+" \x1b[2m") {
+		t.Errorf("prompt and hint: %q", v)
+	}
+	if strings.HasSuffix(strings.TrimRight(v, " "), "\x1b[2m") || !strings.HasSuffix(v, "  ") {
+		t.Errorf("padding: %q", v)
+	}
+	r.f.Blur()
+	r.f.in.SetValue("x > 1")
+	r.run(r.f.Focus())
+	if v := r.f.View(60, 1); !strings.Contains(v, "\x1b[7mx > 1") {
+		t.Errorf("selection: %q", v)
+	}
+}
+
+// A sort keeps the row count: nothing is counted again (Python's _sort_by).
+func TestASortKeepsTheCount(t *testing.T) {
+	r := newRig(t, "")
+	desc := []data.Sort{{Column: "x", Desc: true}}
+	n := r.count(kit.TotalMsg{})
+	r.send(kit.SetViewMsg{View: data.View{OrderBy: desc}, KeepFileRow: -1})
+	if r.env.State.Total != 1000 || r.ds.counts != 0 || r.count(kit.TotalMsg{}) != n {
+		t.Errorf("sorted: total %d, %d counts", r.env.State.Total, r.ds.counts)
+	}
+	r.send(kit.SetViewMsg{View: data.View{Where: "x > 1"}, KeepFileRow: -1})
+	r.send(kit.SetViewMsg{View: data.View{Where: "x > 1", OrderBy: desc}, KeepFileRow: -1})
+	if r.env.State.Total != 5 || r.ds.counts != 1 {
+		t.Errorf("filter sorted: total %d, %d counts", r.env.State.Total, r.ds.counts)
 	}
 }

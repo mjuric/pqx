@@ -391,6 +391,15 @@ func shift(msg tea.MouseMsg, x, y int) tea.Msg {
 }
 
 // View implements tea.Model.
+// paint applies a named theme to the whole frame (theme.Theme.Paint), if
+// the look has one.
+func (a *App) paint(frame string) string {
+	if p, ok := a.env.Look.(interface{ Paint(string, int) string }); ok {
+		return p.Paint(frame, a.w)
+	}
+	return frame
+}
+
 func (a *App) View() tea.View {
 	v := tea.NewView("")
 	v.AltScreen = true
@@ -402,7 +411,12 @@ func (a *App) View() tea.View {
 	var base string
 	var cur *tea.Cursor
 	if len(a.dialogs) > 0 && a.baseOK {
-		base = a.base // nothing behind the dialog changed
+		// nothing behind the dialog changed but the key bar, which follows
+		// the dialog's focus
+		base = a.base
+		if i := strings.LastIndexByte(base, '\n'); i >= 0 {
+			base = base[:i+1] + a.keyBar()
+		}
 	} else {
 		base, cur = a.render()
 		a.base, a.baseOK = base, len(a.dialogs) > 0
@@ -411,7 +425,7 @@ func (a *App) View() tea.View {
 		if toasts := a.p.Chrome.Toasts(a.w, a.h); len(toasts) > 0 {
 			base = compose(a.w, a.h, base, toasts)
 		}
-		v.SetContent(base)
+		v.SetContent(a.paint(base))
 		v.Cursor = cur
 		return v
 	}
@@ -421,7 +435,8 @@ func (a *App) View() tea.View {
 		dw, dh := d.Size(a.w, a.h)
 		over = append(over, kit.Overlay{X: x, Y: y, Content: d.View(dw, dh)})
 	}
-	v.SetContent(compose(a.w, a.h, base, over))
+	over = append(over, a.p.Chrome.Toasts(a.w, a.h)...) // notices show over dialogs too
+	v.SetContent(a.paint(compose(a.w, a.h, base, over)))
 	if c, ok := a.dialogs[len(a.dialogs)-1].(kit.Cursored); ok {
 		if cc := c.Cursor(); cc != nil {
 			x, y := a.dialogPos(a.dialogs[len(a.dialogs)-1])
@@ -564,14 +579,22 @@ func (a *App) render() (string, *tea.Cursor) {
 		b.WriteString("\n" + pad + fitLine(l, W) + pad)
 	}
 	b.WriteString("\n")
+	b.WriteString(a.keyBar())
+	return b.String(), cur
+}
+
+// keyBar is the key bar's line: a dialog's own hints, if it has any; else
+// the focused part's (Python leaves the screen's under a dialog whose focus
+// isn't on a text input).
+func (a *App) keyBar() string {
 	var hints []kit.KeyHint
 	if n := len(a.dialogs); n > 0 {
 		hints = a.dialogs[n-1].Keys()
-	} else if p := a.focused(); p != nil {
+	}
+	if p := a.focused(); len(hints) == 0 && p != nil {
 		hints = p.Keys()
 	}
-	b.WriteString(edgeLine(ch.KeyBar(max(1, a.w-2*margin), hints), a.w))
-	return b.String(), cur
+	return edgeLine(a.p.Chrome.KeyBar(max(1, a.w-2*margin), hints), a.w)
 }
 
 // edgeLine is s inside the screen's margin, w cells. (The chrome's title

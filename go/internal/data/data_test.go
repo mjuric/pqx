@@ -493,3 +493,25 @@ func TestFileRowNumberColumn(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+// FullError: DuckDB's whole message (a Parser error with its pointer lines,
+// a Binder error with its candidates), where Error() is the short form.
+func TestFullError(t *testing.T) {
+	_, ds := fixture(t)
+	ctx := context.Background()
+	_, err := ds.Validate(ctx, View{Where: "nosuch > 3", OrderBy: []Sort{{Column: ds.Columns()[0].Name}}})
+	if err == nil || strings.Contains(err.Error(), "\n") {
+		t.Fatalf("short form %q", err)
+	}
+	full := FullError(err)
+	if !strings.HasPrefix(full, `Binder Error: Referenced column "nosuch" not found in FROM clause!`+"\nCandidate bindings: ") || strings.Contains(full, "LINE ") {
+		t.Errorf("binder: %q", full)
+	}
+	_, err = ds.Validate(ctx, View{SQL: "select 1 from t where (1 =)"})
+	if full := FullError(err); err == nil || !strings.HasPrefix(full, "Parser Error: ") || !strings.Contains(full, "\n\nLINE 1: ") {
+		t.Errorf("parser: %q", full)
+	}
+	if FullError(errors.New(" plain ")) != "plain" {
+		t.Error("other errors")
+	}
+}

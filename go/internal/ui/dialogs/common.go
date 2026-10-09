@@ -10,10 +10,7 @@ package dialogs
 import (
 	"strings"
 
-	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mjuric/pqx/go/internal/data"
@@ -48,6 +45,13 @@ func (f *Factory) Export() kit.Dialog { return newExport(f.env) }
 
 // Help implements kit.Dialogs.
 func (f *Factory) Help() kit.Dialog { return newHelp(f.env) }
+
+// inputKeys are the key bar's hints while a dialog's text input has focus:
+// Python's key bar shows the filter box's keys whenever an Input has focus,
+// a dialog's too.
+var inputKeys = []kit.KeyHint{{Key: "enter", Help: "apply"}, {Key: "esc", Help: "back"},
+	{Key: "ctrl+x", Help: "clear"}, {Key: "↑↓", Help: "history"}, {Key: "→", Help: "complete"},
+	{Key: "select … from t", Help: "full query"}}
 
 // The dialogs' sizes (app.tcss: .dialog 80 wide, at most 95% of the
 // screen; .small 60; height auto, at most 90%).
@@ -109,81 +113,22 @@ func fit(s string, w int) string {
 	return s + strings.Repeat(" ", w-n)
 }
 
-// field is a one-line text input in its own bordered box (3 rows), as
-// Textual's Input with pqx's border: dim when unfocused, accent focused.
-type field struct {
-	ti textinput.Model
-}
-
-func newField(value, placeholder string) *field {
-	ti := textinput.New()
-	ti.Prompt = ""
-	ti.Placeholder = placeholder
-	ti.SetVirtualCursor(false) // the terminal's own cursor
-	s := textinput.Styles{}
-	s.Focused.Placeholder = lipgloss.NewStyle().Faint(true)
-	s.Blurred.Placeholder = lipgloss.NewStyle().Faint(true)
-	s.Cursor.Shape = tea.CursorBar
-	ti.SetStyles(s)
-	km := textinput.DefaultKeyMap()
-	km.Paste = key.NewBinding(key.WithDisabled()) // bracketed paste still works
-	km.NextSuggestion = key.NewBinding(key.WithDisabled())
-	km.PrevSuggestion = key.NewBinding(key.WithDisabled())
-	ti.KeyMap = km
-	ti.SetValue(value)
-	ti.CursorEnd()
-	return &field{ti: ti}
-}
-
-func (f *field) Value() string     { return f.ti.Value() }
-func (f *field) SetValue(v string) { f.ti.SetValue(v); f.ti.CursorEnd() }
-func (f *field) focus()            { f.ti.Focus() }
-func (f *field) blur()             { f.ti.Blur() }
-func (f *field) focused() bool     { return f.ti.Focused() }
-func (f *field) update(msg tea.Msg) tea.Cmd {
-	var cmd tea.Cmd
-	f.ti, cmd = f.ti.Update(msg)
-	return cmd
-}
-
-// lines draws the field w cells wide: border, " text ", border.
-func (f *field) lines(look kit.Look, w int) []string {
-	bs := look.Style("border")
-	if f.focused() {
-		bs = look.Style("border-focus")
-	}
-	edge := func(s string) string { return look.Render(styled.New(s, bs)) }
-	f.ti.SetWidth(max(1, w-5))
-	return []string{
-		edge("┌" + strings.Repeat("─", max(0, w-2)) + "┐"),
-		edge("│") + " " + fit(f.ti.View(), max(0, w-4)) + " " + edge("│"),
-		edge("└" + strings.Repeat("─", max(0, w-2)) + "┘"),
-	}
-}
-
-// cursor is the text cursor for the field drawn with its top-left corner at
-// (x, y) of the dialog, or nil when it hasn't focus.
-func (f *field) cursor(x, y int) *tea.Cursor {
-	c := f.ti.Cursor()
-	if c == nil {
-		return nil
-	}
-	c.Position.X += x + 2
-	c.Position.Y += y + 1
-	return c
-}
-
-// button is a Textual Button as pqx styles it: bold, at least 10 cells,
-// the label centred, the primary one in the accent colour, reverse video
-// when focused.
+// button is a Textual Button as pqx styles it: at least 10 cells, the label
+// centred; the label and a cell each side of it bold, the primary one in
+// the accent colour, reverse video when focused.
 func button(look kit.Look, label string, primary, focused bool) string {
-	n := max(10, ansi.StringWidth(label)+2)
-	l := (n - ansi.StringWidth(label)) / 2
+	lw := ansi.StringWidth(label)
+	n := max(10, lw+2)
+	l := (n - lw) / 2
 	s := styled.Style{Bold: true, Reverse: focused}
 	if primary {
 		s.Fg = look.Style("accent").Fg
 	}
-	return look.Render(styled.New(strings.Repeat(" ", l)+label+strings.Repeat(" ", n-l-ansi.StringWidth(label)), s))
+	var t styled.Text
+	t.Append(strings.Repeat(" ", l-1), styled.Style{})
+	t.Append(" "+label+" ", s)
+	t.Append(strings.Repeat(" ", n-l-lw-1), styled.Style{})
+	return look.Render(t)
 }
 
 // buttonsRow is buttons right-aligned in iw cells, two cells apart, and
@@ -211,22 +156,48 @@ func buttonsRow(look kit.Look, iw int, labels []string, primary int, focus int) 
 	return b.String(), spans
 }
 
-// toggle is a check box or radio button: "▐X▌ label" (Textual's toggle
-// button), the mark in the accent colour when on, the label reversed when
-// it has focus.
-func toggle(look kit.Look, mark, label string, on, focused bool) string {
-	ms := look.Style("dim")
+// toggle is a check box or radio button as Textual draws one with the ANSI
+// theme: "▐X▌ label", the half blocks black, the mark in the accent colour
+// and bold on a black background when on, dim white when off. Focus doesn't
+// show (it doesn't in Python either).
+func toggle(look kit.Look, mark, label string, on bool) string {
+	ms := styled.Style{Fg: "white", Bg: "black", Dim: true}
 	if on {
-		ms = styled.Style{Bold: true, Fg: look.Style("accent").Fg}
+		ms = styled.Style{Fg: look.Style("accent").Fg, Bg: "black", Bold: true}
 	}
-	t := styled.New("▐"+mark+"▌", ms)
-	t.Append(" ", styled.Style{})
-	t.Append(label, styled.Style{Reverse: focused})
+	var t styled.Text
+	t.Append("▐", styled.Style{Fg: "black"})
+	t.Append(mark, ms)
+	t.Append("▌", styled.Style{Fg: "black"})
+	t.Append(" "+label, styled.Style{})
+	return look.Render(t)
+}
+
+// selection is a SelectionList entry's box: "▐X▌", the X green when
+// chosen, all plain otherwise (Textual with the ANSI theme).
+func selection(look kit.Look, on bool) string {
+	var t styled.Text
+	t.Append("▐", styled.Style{})
+	if on {
+		t.Append("X", look.Style("success"))
+	} else {
+		t.Append("X", styled.Style{})
+	}
+	t.Append("▌", styled.Style{})
+	return look.Render(t)
+}
+
+// line renders parts, alternating text and style: line(look, "a", st, "b", st2).
+func line(look kit.Look, parts ...any) string {
+	var t styled.Text
+	for i := 0; i+1 < len(parts); i += 2 {
+		t.Append(parts[i].(string), parts[i+1].(styled.Style))
+	}
 	return look.Render(t)
 }
 
 // text renders s in style st.
-func text(look kit.Look, s string, st styled.Style) string { return look.Render(styled.New(s, st)) }
+func text(look kit.Look, s string, st styled.Style) string { return line(look, s, st) }
 
 // clicked reports a left click's position, relative to the dialog.
 func clicked(msg tea.Msg) (int, int, bool) {
