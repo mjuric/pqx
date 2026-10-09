@@ -53,19 +53,13 @@ func (g *Grid) onKey(k tea.KeyPressMsg) tea.Cmd {
 	case "f":
 		g.st.Raw = !g.st.Raw
 		return kit.Send(kit.RawChangedMsg{})
-	case "<":
-		return g.stepDigits(-1)
-	case ">":
-		return g.stepDigits(1)
-	case "F":
-		return g.formatDialog()
-	case "y":
-		return g.withCursorValue("y", g.copyValue)
-	case "i":
-		if name := g.curName(); name != "" {
-			return kit.Send(kit.ColumnStatsMsg{Column: name})
+	case "=", "y", "i", "F", "<", ">":
+		// a record on its way: the key waits to act on it (Python's
+		// _queue_for_keep)
+		if g.queueKey(k, g.curName(), g.fromPane) {
+			return nil
 		}
-		return nil
+		return g.cellKey(k)
 	case "g":
 		return g.gotoDialog()
 	case "x", "ctrl+x":
@@ -168,6 +162,7 @@ func (g *Grid) sortBy(name string) tea.Cmd {
 	if v.IsSQL() {
 		return notice(kit.Warning, "Sort SQL results with ORDER BY in the query", 0)
 	}
+	drop := g.dropKeep("the sort changed before the record was found", false)
 	var order []data.Sort
 	cur := -1
 	for i, s := range v.OrderBy {
@@ -181,20 +176,14 @@ func (g *Grid) sortBy(name string) tea.Cmd {
 	case !v.OrderBy[cur].Desc:
 		order = []data.Sort{{Column: name, Desc: true}}
 	}
-	return kit.Send(kit.SetViewMsg{View: data.View{Where: v.Where, OrderBy: order}, KeepFileRow: -1})
+	return tea.Batch(drop, kit.Send(kit.SetViewMsg{View: data.View{Where: v.Where, OrderBy: order}, KeepFileRow: -1}))
 }
 
-// clearFilter goes back to the whole file, the cursor on the same file row
+// clearFilter goes back to the whole file, the cursor on the same record
+// (the one on its way, if one is looked for), and empties the filter box
 // (Python's action_clear_filter; the sort goes with the filter).
 func (g *Grid) clearFilter() tea.Cmd {
-	if g.st.View.Plain() {
-		return nil
-	}
-	fr := int64(-1)
-	if g.v.loaded(g.curRow) {
-		fr = g.v.fileRow[g.curRow]
-	}
-	return kit.Send(kit.SetViewMsg{View: data.View{}, KeepFileRow: fr})
+	return kit.Send(kit.SetViewMsg{View: data.View{}, KeepFileRow: g.keptFileRow()})
 }
 
 // hideColumn hides the cursor's column, never the last one (Python's
@@ -427,6 +416,7 @@ func (g *Grid) gotoDialog() tea.Cmd {
 // view's end isn't known the rows up to r are taken to exist until a read
 // says otherwise.
 func (g *Grid) gotoRow(r int64) tea.Cmd {
+	drop := g.dropKeep("the view moved before the record was found", true)
 	r = max(0, r)
 	if lim := g.v.limit(); lim >= 0 {
 		r = min(r, max(0, lim-1))
@@ -436,5 +426,5 @@ func (g *Grid) gotoRow(r int64) tea.Cmd {
 	}
 	g.curRow = r
 	g.top = r - int64(g.bodyH()/2)
-	return g.moved()
+	return tea.Batch(drop, g.moved())
 }

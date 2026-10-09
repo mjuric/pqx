@@ -13,6 +13,10 @@ import (
 	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
 
+// borderError is a pane whose border shows an error in red (Python's
+// #filterbox.error).
+type borderError interface{ BorderError() bool }
+
 // tabHint follows the tab strip: Ctrl+← and Ctrl+→ step through the tabs.
 const tabHint = "^← ^→"
 
@@ -61,12 +65,16 @@ func (a *App) tabAt(x, y int) (kit.Tab, bool) {
 
 // frame draws inner (lines of exactly w-4 cells, or fewer lines) in a
 // square border w × h with a title in the top border and a subtitle in
-// the bottom one; the border is the accent colour when focused.
-func (a *App) frame(inner string, w, h int, title, subtitle styled.Text, focused bool, _ kit.Pane) string {
+// the bottom one; the border is the accent colour when focused, and red
+// while the pane reports an error (the filter box after a failed query).
+func (a *App) frame(inner string, w, h int, title, subtitle styled.Text, focused bool, p kit.Pane) string {
 	look := a.env.Look
 	bs := look.Style("border")
 	if focused {
 		bs = look.Style("border-focus")
+	}
+	if e, ok := p.(borderError); ok && e.BorderError() {
+		bs = look.Style("error")
 	}
 	edge := func(s string) string { return look.Render(styled.New(s, bs)) }
 	iw := max(0, w-4)

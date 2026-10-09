@@ -102,12 +102,15 @@ type Grid struct {
 	waiters       []waiter
 	lastRow       int64 // State.Row and FileRow as last announced
 	lastFileRow   int64
-	hiddenHint    string // the current column is hidden in the grid (status hint)
-	keep          *pendingKeep
-	anchorLeft    string // the column a new view shows leftmost
-	anchorRow     int    // the screen row the kept record goes to, or -1
-	revertErr     string // why the view was reverted, for the status line once it is back
-	foundEnd      bool   // a short read found the view's end before its count
+	hiddenHint    string     // the current column is hidden in the grid (status hint)
+	next          *keepReq   // a view on its way that keeps a record (keep.go)
+	kept          *keeping   // the record being looked for in the view shown
+	sent          *data.View // a view "=" asked for, not yet seen as a SetViewMsg
+	onTheWay      *data.View // the last view asked for (SetViewMsg), while it is checked
+	locateSeq     int        // the last lookup's number
+	anchorLeft    string     // the column a new view shows leftmost
+	revertErr     error      // why the view was reverted, for the status line once it is back
+	foundEnd      bool       // a short read found the view's end before its count
 	footer        map[string][2]data.Value
 	footerStarted bool
 
@@ -130,20 +133,11 @@ type saved struct {
 	curCol, left int
 }
 
-// pendingKeep is a SetViewMsg seen on its way to the filter part: when its
-// view arrives, the cursor stays on file row fileRow at screen row
-// screenRow (Python's _anchor_row; the lookup in other views is WP11's).
-type pendingKeep struct {
-	view      data.View
-	fileRow   int64
-	screenRow int
-}
-
 // New makes the grid over env's dataset and state.
 func New(env *kit.Env) *Grid {
 	g := &Grid{
 		env: env, st: env.State, ds: env.DS, look: env.Look,
-		cellTasks: map[string]bool{}, lastRow: -1, lastFileRow: -2, anchorRow: -1,
+		cellTasks: map[string]bool{}, lastRow: -1, lastFileRow: -2,
 		sgr: map[styled.Style]sgrPair{},
 	}
 	if g.st.Hidden == nil {
@@ -289,8 +283,7 @@ func (g *Grid) Update(msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case kit.CancelledMsg:
-		g.onCancelled(msg.Tags)
-		return nil
+		return g.onCancelled(msg.Tags)
 	case kit.ViewChangedMsg:
 		return g.onViewChanged()
 	case kit.TotalMsg:
@@ -320,8 +313,14 @@ func (g *Grid) Update(msg tea.Msg) tea.Cmd {
 // column becomes the current one (Python's cell_highlighted).
 func (g *Grid) moved() tea.Cmd {
 	g.clampCursor()
+	var drop tea.Cmd
+	if g.kept != nil && g.curRow != 0 {
+		// the cursor waits at the top for a record on its way: moving off it
+		// is the user's
+		drop = g.dropKeep("the cursor moved before the record was found", true)
+	}
 	g.scrollToCursor()
-	cmds := []tea.Cmd{g.ensure(), g.announce(true)}
+	cmds := []tea.Cmd{drop, g.ensure(), g.announce(true)}
 	if g.hiddenHint != "" {
 		g.hiddenHint = ""
 		cmds = append(cmds, kit.Send(kit.StatusMsg{}))

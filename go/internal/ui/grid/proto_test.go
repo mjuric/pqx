@@ -207,8 +207,9 @@ func TestBadFilterKeepsView(t *testing.T) {
 	if !h.f.TypingFocused() {
 		t.Error("the filter bar lost focus after an error")
 	}
-	if s := h.screen(); !strings.Contains(s, "✗ unbalanced parentheses") {
-		t.Errorf("no inline error:\n%s", s)
+	// inline: the box's border turns red (Python's #filterbox.error)
+	if top := strings.Split(h.raw(), "\n")[2]; !h.f.BorderError() || !strings.Contains(top, "38;5;1m┌") {
+		t.Errorf("no red border: %q", top)
 	}
 	if h.status.Severity != kit.Error || !strings.Contains(h.status.Text, "unbalanced parentheses") {
 		t.Errorf("status: %+v", h.status)
@@ -338,7 +339,7 @@ func TestFilterReadErrorReverts(t *testing.T) {
 		if g.curRow != 2 {
 			t.Errorf("read first %v: cursor not restored: %d", readFirst, g.curRow)
 		}
-		if !h.noted("Binder Error") || h.status.Severity != kit.Error || !strings.Contains(h.status.Text, "previous view kept") {
+		if !h.noted("Binder Error") || h.status.Severity != kit.Error || h.status.Text != `column "bad" not found` {
 			t.Errorf("read first %v: status %+v, notes %+v", readFirst, h.status, h.notes)
 		}
 		if !strings.Contains(strings.Join(h.grid(), "\n"), "r2") {

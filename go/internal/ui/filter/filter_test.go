@@ -3,6 +3,7 @@ package filter
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -205,14 +206,14 @@ func TestFailedFilter(t *testing.T) {
 		t.Errorf("inline error %q", r.f.Err())
 	}
 	st, _ := r.last(kit.StatusMsg{}).(kit.StatusMsg)
-	if st.Severity != kit.Error || !strings.Contains(st.Text, `did you mean "x"?`) || strings.ContainsAny(st.Text, "\n") {
+	if st.Severity != kit.Error || st.Text != "unknown column \"bad\"\ndid you mean \"x\"?" {
 		t.Errorf("status %q", st.Text)
 	}
-	if !strings.Contains(r.f.View(80, 1), "✗ unknown column") {
-		t.Errorf("view %q", r.f.View(80, 1))
+	if !r.f.BorderError() || strings.Contains(r.f.View(80, 1), "✗") {
+		t.Errorf("border error %v, view %q", r.f.BorderError(), r.f.View(80, 1))
 	}
 	r.typeText(" ")
-	if r.f.Err() != "" {
+	if r.f.Err() != "" || r.f.BorderError() {
 		t.Error("the error stays while typing")
 	}
 }
@@ -247,9 +248,12 @@ func TestHistoryAndCtrlX(t *testing.T) {
 	}
 	r.key(tea.KeyUp, 0) // at the oldest: stays
 	r.key(tea.KeyDown, 0)
-	r.key(tea.KeyDown, 0)
-	if r.f.Value() != "x > 2draft" { // (the box keeps the filter applied)
-		t.Errorf("back down: %q", r.f.Value())
+	if r.f.Value() != "x > 2" {
+		t.Errorf("down: %q", r.f.Value())
+	}
+	r.key(tea.KeyDown, 0) // past the newest: an empty box, as in Python pqx
+	if r.f.Value() != "" {
+		t.Errorf("past the newest: %q", r.f.Value())
 	}
 	// ctrl+x with a filter applied: clears it, keeping the record
 	r.env.State.FileRow = 77
@@ -323,5 +327,70 @@ func TestCursorInTheSanitizedBox(t *testing.T) {
 	end := len([]rune(strings.TrimRight(shown, " ")))
 	if c == nil || c.Position.X != end {
 		t.Errorf("cursor at %+v, the text shown ends at %d: %q", c, end, shown)
+	}
+}
+
+// History: Enter adds a filter unless it is the last one; a view "=" made
+// is added once it applies (so ↑ brings it back first); the filter
+// reverted to, or the one shown, isn't added.
+func TestHistoryEntries(t *testing.T) {
+	r := newRig(t, "")
+	r.run(r.f.Focus())
+	for _, s := range []string{"x > 1", "x > 1", "x > 2"} {
+		r.f.in.SetValue(s)
+		r.key(tea.KeyEnter, 0)
+		r.run(r.f.Focus())
+	}
+	if h := r.f.History(); len(h) != 2 || h[0] != "x > 1" || h[1] != "x > 2" {
+		t.Fatalf("history %q", h)
+	}
+	r.send(kit.SetViewMsg{View: data.View{Where: "(x > 2) and s = 'a'"}, KeepFileRow: 3}) // "="
+	r.send(kit.SetViewMsg{View: data.View{Where: "(x > 2) and s = 'a'"}, KeepFileRow: 3}) // the same view again
+	r.send(kit.SetViewMsg{View: data.View{Where: "x > 2"}, KeepFileRow: KeepRevert})      // a revert
+	r.send(kit.SetViewMsg{View: data.View{Where: "bad"}, KeepFileRow: 3})                 // fails: not added
+	if h := r.f.History(); len(h) != 3 || h[2] != "(x > 2) and s = 'a'" {
+		t.Fatalf("history %q", h)
+	}
+	r.run(r.f.Focus())
+	r.key(tea.KeyUp, 0)
+	if r.f.Value() != "(x > 2) and s = 'a'" {
+		t.Errorf("↑ after =: %q", r.f.Value())
+	}
+}
+
+func TestOpenWithAQueryOrABadFilter(t *testing.T) {
+	r := newRig(t, "select x from t")
+	if !r.env.State.View.IsSQL() || len(r.env.State.Columns) != 1 || r.f.Value() != "select x from t" {
+		t.Errorf("-w select: %+v", r.env.State.View)
+	}
+	r = newRig(t, "bad")
+	if !r.env.State.View.Plain() || !r.f.BorderError() || r.f.Value() != "bad" || r.f.TypingFocused() {
+		t.Errorf("-w bad: %+v border %v box %q", r.env.State.View, r.f.BorderError(), r.f.Value())
+	}
+	if len(r.f.History()) != 0 {
+		t.Errorf("history %q", r.f.History())
+	}
+}
+
+// Completion offers DuckDB's names: name_1 for the second of Name and name.
+func TestCompletionByDuckDBsNames(t *testing.T) {
+	ds, err := data.Open(filepath.Join("..", "..", "..", "testdata", "fixtures", "casedup.parquet"), data.Options{Threads: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.Close()
+	f := New(&kit.Env{DS: ds, Look: look{}, Tasks: kit.NewTasks(), State: &kit.State{Columns: ds.Columns()}})
+	if got := f.suggest("x > 1 and name_"); got != "x > 1 and name_1" {
+		t.Errorf("suggest %q", got)
+	}
+}
+
+// A view with the filter shown (a sort, say) doesn't add it to the history,
+// even when it isn't the last entry (-w isn't in the history).
+func TestTheFilterShownIsntAddedAgain(t *testing.T) {
+	r := newRig(t, "x > 5")
+	r.send(kit.SetViewMsg{View: data.View{Where: "x > 5", OrderBy: []data.Sort{{Column: "x", Desc: true}}}, KeepFileRow: -1})
+	if len(r.env.State.View.OrderBy) != 1 || len(r.f.History()) != 0 {
+		t.Errorf("view %+v history %q", r.env.State.View, r.f.History())
 	}
 }

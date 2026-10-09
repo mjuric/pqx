@@ -303,6 +303,11 @@ type RecordSource interface {
 	// details pane's background read, task "detail") to the grid's cache,
 	// for the current view only; stale windows are ignored.
 	Merge(view View, w data.Window)
+	// QueueKey makes a cell key (= y i F < >) pressed elsewhere (the
+	// details pane, on its field column) wait for the record while it is
+	// Pending, to act on it once it is found; false if no record is
+	// pending, and the key should act now.
+	QueueKey(k tea.KeyPressMsg, column string) bool
 }
 
 // View is a view as seen by parts: the data view and its generation, which

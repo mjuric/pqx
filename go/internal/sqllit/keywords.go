@@ -1,8 +1,8 @@
 // Code generated from DuckDB 1.5.6: SELECT keyword_name FROM duckdb_keywords(). DO NOT EDIT.
 
-package detail
+package sqllit
 
-// keywordList are DuckDB's keywords (lower case), for sqlIdent.
+// keywordList are DuckDB's keywords (lower case), for Ident.
 const keywordList = `
 abort absolute access action add admin after aggregate all also alter always analyse analyze and
 anti any array as asc asof assertion assignment asymmetric at attach attribute authorization

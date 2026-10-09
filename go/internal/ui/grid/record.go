@@ -26,9 +26,12 @@ import (
 var errNotRead = errors.New("couldn't be read")
 
 // Record implements kit.RecordSource: the record under the cursor, with the
-// values of the columns shown that are loaded. Pending is never set here;
-// the record keeping across views (WP11) sets it.
+// values of the columns shown that are loaded; while a record kept across a
+// view change is looked for, that record (Pending, keep.go).
 func (g *Grid) Record() kit.Record {
+	if rec, ok := g.pendingRecord(); ok {
+		return rec
+	}
 	d := g.v
 	if len(g.cols) == 0 || d.limit() == 0 {
 		return kit.Record{Row: -1, FileRow: -1}
@@ -234,7 +237,7 @@ func (g *Grid) onDetailDone() tea.Cmd {
 	return tea.Batch(g.runWaiters(), g.refreshed())
 }
 
-// FieldKey runs the grid's own action for key k ("y", "F", "<", ">") as
+// FieldKey runs the grid's own action for key k ("=", "y", "F", "<", ">") as
 // pressed in the details pane on its field name: the grid's
 // cursor goes to that column first (Python's action_detail_key). The digit
 // keys say where the change shows (" (grid)": the pane shows full
@@ -244,17 +247,6 @@ func (g *Grid) FieldKey(name string, k tea.KeyPressMsg) tea.Cmd {
 	g.fromPane = true
 	defer func() { g.fromPane = false }()
 	return tea.Batch(move, g.onKey(k))
-}
-
-// FieldValue calls fn with the value of column name of the record under the
-// cursor, reading the column first if need be (Python's
-// _with_cursor_value, for "=" in the details pane).
-func (g *Grid) FieldValue(name string, fn func(v data.Value) tea.Cmd) tea.Cmd {
-	move := g.toColumn(name)
-	if g.curName() != name {
-		return move
-	}
-	return tea.Batch(move, g.withCursorValue("=", func(_ string, v data.Value) tea.Cmd { return fn(v) }))
 }
 
 // toColumn puts the cursor on column name, same row, if the grid shows it

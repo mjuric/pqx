@@ -6,18 +6,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/mjuric/pqx/go/internal/data"
-	"github.com/mjuric/pqx/go/internal/ui/kit"
+	"github.com/mjuric/pqx/go/internal/ui/chrome"
 )
-
-// onSetView notes a view on its way to the filter part, so the cursor's
-// record and screen row can be kept when it arrives (Python's _set_view
-// with keep_file_row, and _anchor_row).
-func (g *Grid) onSetView(m kit.SetViewMsg) {
-	g.keep = nil
-	if m.KeepFileRow >= 0 {
-		g.keep = &pendingKeep{view: m.View, fileRow: m.KeepFileRow, screenRow: int(g.curRow - g.top)}
-	}
-}
 
 // onViewChanged switches to State.View: a fresh cache (or the one kept for
 // a view being reverted to), the cursor on the same column, and the same
@@ -30,8 +20,21 @@ func (g *Grid) onViewChanged() tea.Cmd {
 	if g.left < len(g.cols) && g.left > g.pinned() {
 		leftName = g.cols[g.left].Name
 	}
-	keep := g.keep
-	g.keep = nil
+	next := g.next
+	g.next = nil
+	if next != nil && !sameView(next.view, st.View) {
+		next = nil
+	}
+	// a record on its way in the old view: still wanted if the new view
+	// keeps it too (with the keys waiting for it), else given up on
+	var waiting []queued
+	var dropped tea.Cmd
+	if k := g.kept; k != nil {
+		if next != nil && next.fileRow == k.fileRow {
+			waiting, k.queue = k.queue, nil
+		}
+		dropped = g.dropKeep("the view changed before the record was found", false)
+	}
 	g.cancelReads()
 	g.setColumns()
 	g.anchorLeft = ""
@@ -47,33 +50,46 @@ func (g *Grid) onViewChanged() tea.Cmd {
 		if st.Total >= 0 {
 			g.v.setTotal(st.Total)
 		}
-		msg := g.revertErr
-		g.revertErr = ""
-		return tea.Batch(g.refreshed(), kit.Send(kit.StatusMsg{Severity: kit.Error, Text: msg}))
+		var said tea.Cmd
+		if g.revertErr != nil {
+			said = chrome.QueryError(g.revertErr)
+		}
+		g.revertErr = nil
+		return tea.Batch(dropped, g.refreshed(), said)
 	}
-	g.revertErr = ""
+	g.revertErr = nil
 	if !st.View.Plain() {
 		g.prev = &saved{v: g.v, curRow: g.curRow, top: g.top, curCol: g.curCol, left: g.left}
 	} else {
 		g.prev = nil
 	}
+	old := g.v
 	g.v = g.newViewData(st.View)
 	g.v.setTotal(st.Total)
+	if !old.view.IsSQL() && !st.View.IsSQL() {
+		// row labels are file rows in both: as wide as they were, so the
+		// columns kept on screen don't move while the new rows arrive
+		g.v.labelW = old.labelW
+	}
 	if st.View.Plain() {
 		g.v.setTotal(g.ds.NumRows())
 		g.v.confirmed = true
 	}
+	// widths as the values will likely be, so the leftmost column kept
+	// stays leftmost when they arrive (Python's _reserve_widths)
+	g.reserve(nil)
 	// the cursor stays on the current column if the view shows it
 	g.curCol = 0
 	if i, ok := g.byName[st.Current]; ok {
 		g.curCol = i
 	}
 	g.curRow, g.top = 0, 0
-	g.anchorRow = -1
-	if keep != nil && sameView(keep.view, st.View) && st.View.Plain() {
-		// in the plain view a file row is its position
-		g.curRow = keep.fileRow
-		g.top = g.curRow - int64(keep.screenRow)
+	var replay []queued
+	var kept tea.Cmd
+	if next != nil {
+		replay, kept = g.startKeep(next, waiting)
+	} else {
+		kept = notApplied(waiting, "the record isn't kept in this view")
 	}
 	if g.anchorLeft != "" {
 		if i, ok := g.byName[g.anchorLeft]; ok && i >= g.pinned() {
@@ -83,7 +99,7 @@ func (g *Grid) onViewChanged() tea.Cmd {
 	// (the current column stays as it is: a view without it, a SQL
 	// result, doesn't make another current)
 	g.scrollToCursor()
-	return g.refreshed()
+	return tea.Batch(dropped, kept, g.refreshed(), g.replay(replay))
 }
 
 // sameView reports whether two views are the same.

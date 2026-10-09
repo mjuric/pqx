@@ -2,11 +2,9 @@ package detail
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"math"
-	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -16,7 +14,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/charmbracelet/x/ansi"
-	_ "github.com/duckdb/duckdb-go/v2"
 
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/fmtx"
@@ -51,8 +48,7 @@ type fakeGrid struct {
 	views  []kit.View
 	read   func() (kit.View, [][]int64, [][]string, bool)
 	keys   []string // "column key" of FieldKey calls
-	value  data.Value
-	values []string // columns FieldValue was asked for
+	queued []string // "column key" of QueueKey calls while Pending
 }
 
 func (g *fakeGrid) Record() kit.Record { return g.rec }
@@ -70,9 +66,12 @@ func (g *fakeGrid) FieldKey(name string, k tea.KeyPressMsg) tea.Cmd {
 	g.keys = append(g.keys, name+" "+k.String())
 	return nil
 }
-func (g *fakeGrid) FieldValue(name string, fn func(v data.Value) tea.Cmd) tea.Cmd {
-	g.values = append(g.values, name)
-	return fn(g.value)
+func (g *fakeGrid) QueueKey(k tea.KeyPressMsg, column string) bool {
+	if !g.rec.Pending {
+		return false
+	}
+	g.queued = append(g.queued, column+" "+k.String())
+	return true
 }
 
 func col(name string, t arrow.DataType, unit string) data.Column {
@@ -481,93 +480,6 @@ func TestSelectionLook(t *testing.T) {
 	}
 }
 
-func TestEquals(t *testing.T) {
-	cols := []data.Column{col("band", str, ""), col("detector", i64, ""), col("ssObjectId", i64, ""),
-		col("x", f64, ""), col("select", str, ""), col("weird name", i64, ""), col("bell\x07", i64, ""),
-		col("flag", arrow.FixedWidthTypes.Boolean, ""), col("f", f32, ""), col("blob", arrow.BinaryTypes.Binary, ""),
-		col("t", &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"}, ""), col("day", arrow.FixedWidthTypes.Date32, ""),
-		{Name: "Name", Arrow: str, SQLName: "Name_1"}}
-	ts := time.Date(2026, 1, 2, 3, 4, 5, 678901000, time.UTC)
-	rec := kit.Record{Row: 50, FileRow: 15000, Values: map[string]data.Value{
-		"band": "it's \x1b[31m", "detector": int64(29), "ssObjectId": nil, "x": math.NaN(), "select": "s",
-		"weird name": int64(2), "bell\x07": int64(1), "flag": true, "f": float32(0.1), "blob": []byte("x"),
-		"t": data.Timestamp{T: ts, Zoned: true, Unit: time.Microsecond}, "day": data.Date(20454), "Name": "n",
-	}}
-	r := newRig(t, cols, rec, 49, 30)
-	st := r.env.State
-	st.View = data.View{OrderBy: []data.Sort{{Column: "mag"}}}
-	want := map[string]string{
-		"band":       `band = ('it''s ' || chr(27) || '[31m')`,
-		"detector":   "detector = 29",
-		"ssObjectId": "ssObjectId IS NULL",
-		"x":          "isnan(x)",
-		"select":     `"select" = 's'`,
-		"weird name": `"weird name" = 2`,
-		"bell\x07":   "COLUMNS(c -> c = ('bell' || chr(7))) = 1",
-		"flag":       "flag = true",
-		"f":          "f = 0.10000000149011612",
-		"t":          "t = TIMESTAMPTZ '2026-01-02T03:04:05.678901+00:00'",
-		"day":        `"day" = DATE '2026-01-01'`, // (a keyword)
-		"Name":       "Name_1 = 'n'",
-	}
-	for name, cond := range want {
-		st.Current = name
-		r.send(kit.ColumnChangedMsg{From: "grid"})
-		r.msgs = nil
-		r.press("=")
-		m, ok := last[kit.SetViewMsg](r)
-		if !ok || m.View.Where != cond || m.KeepFileRow != 15000 || len(m.View.OrderBy) != 1 {
-			t.Fatalf("%s: %+v", name, r.msgs)
-		}
-	}
-	// added to the filter; parenthesized when it has an OR
-	st.Current = "detector"
-	r.send(kit.ColumnChangedMsg{From: "grid"})
-	for cur, w := range map[string]string{"band = 'r'": "band = 'r' and detector = 29",
-		"a = 1 OR b = 2": "(a = 1 OR b = 2) and detector = 29"} {
-		st.View = data.View{Where: cur}
-		r.press("=")
-		if m, _ := last[kit.SetViewMsg](r); m.View.Where != w {
-			t.Fatalf("%q", m.View.Where)
-		}
-	}
-	// values it can't match; SQL results
-	st.Current = "blob"
-	r.send(kit.ColumnChangedMsg{From: "grid"})
-	r.msgs = nil
-	r.press("=")
-	if m, ok := last[kit.NotifyMsg](r); !ok || m.Text != "Can't filter on this value type" {
-		t.Fatalf("%v", r.msgs)
-	}
-	st.View = data.View{SQL: "select 1"}
-	r.press("=")
-	if m, _ := last[kit.NotifyMsg](r); !strings.Contains(m.Text, "not on SQL results") {
-		t.Fatal(m.Text)
-	}
-	// a value not loaded yet: the grid reads it first
-	st.View = data.View{}
-	st.Current = "detector"
-	r.send(kit.ColumnChangedMsg{From: "grid"})
-	delete(r.g.rec.Values, "detector")
-	r.g.rec.Missing = []string{"detector"}
-	r.send(kit.CursorMsg{})
-	r.g.value = int64(7)
-	r.msgs = nil
-	r.press("=")
-	if m, ok := last[kit.SetViewMsg](r); !ok || m.View.Where != "detector = 7" || len(r.g.values) != 1 {
-		t.Fatalf("%v %v", r.msgs, r.g.values)
-	}
-	// one that couldn't be read
-	r.g.rec.Failed = map[string]error{"detector": errors.New("x")}
-	r.g.rec.Missing = nil
-	r.send(kit.CursorMsg{})
-	r.msgs = nil
-	r.press("=")
-	if m, ok := last[kit.NotifyMsg](r); !ok || !strings.Contains(m.Text, "couldn't be loaded") {
-		t.Fatalf("%v", r.msgs)
-	}
-}
-
 // The background read: after the cursor settles, once; merged into the
 // grid; failures marked there and said once.
 func TestBackgroundRead(t *testing.T) {
@@ -686,16 +598,27 @@ func TestPendingRecord(t *testing.T) {
 	if reads != 0 || r.value("band") != "r" || r.value("ra") != "…" {
 		t.Fatalf("%d reads", reads)
 	}
+	// the cell keys wait for the record (the grid's QueueKey)
 	r.env.State.Current = "ra"
 	r.send(kit.ColumnChangedMsg{From: "grid"})
-	r.press("=")
-	if m, ok := last[kit.NotifyMsg](r); !ok || !strings.Contains(m.Text, "not applied") || len(r.g.values) != 0 {
-		t.Fatalf("%v %v", r.msgs, r.g.values)
+	r.press("=", "y", "i", "F", "<", ">")
+	if strings.Join(r.g.queued, ",") != "ra =,ra y,ra i,ra F,ra <,ra >" || len(r.g.keys) != 0 || len(r.msgs) != 0 {
+		t.Fatalf("queued %q keys %q msgs %v", r.g.queued, r.g.keys, r.msgs)
 	}
+}
+
+// The cell keys act through the grid's own actions on the field's column
+// ("=" builds its filter there, with internal/sqllit); i shows Stats.
+func TestCellKeysGoToTheGrid(t *testing.T) {
+	r := newRig(t, demoCols(), kit.Record{Row: 50, FileRow: 15000, Values: map[string]data.Value{"band": "r"}}, 49, 20)
 	r.env.State.Current = "band"
 	r.send(kit.ColumnChangedMsg{From: "grid"})
-	r.press("=")
-	if m, ok := last[kit.SetViewMsg](r); !ok || m.KeepFileRow != 15000 || m.View.Where != "band = 'r'" {
+	r.press("=", "y", "F", "<", ">")
+	if strings.Join(r.g.keys, ",") != "band =,band y,band F,band <,band >" || len(r.g.queued) != 0 {
+		t.Fatalf("keys %q queued %q", r.g.keys, r.g.queued)
+	}
+	r.press("i")
+	if m, ok := last[kit.ColumnStatsMsg](r); !ok || m.Column != "band" {
 		t.Fatalf("%v", r.msgs)
 	}
 }
@@ -922,81 +845,6 @@ func TestHostileTextIsShownSafely(t *testing.T) {
 	r.send(kit.CursorMsg{})
 	if _, bad := unsafe(r.p.Title().Plain); bad {
 		t.Fatal(r.p.Title().Plain)
-	}
-}
-
-// The DuckDB keywords built in are those of the DuckDB pqx is built with.
-func TestKeywordsAreDuckDBs(t *testing.T) {
-	db, err := sql.Open("duckdb", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	rows, err := db.Query("SELECT lower(keyword_name) FROM duckdb_keywords()")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	live := map[string]bool{}
-	for rows.Next() {
-		var k string
-		if err := rows.Scan(&k); err != nil {
-			t.Fatal(err)
-		}
-		live[k] = true
-	}
-	if !reflect.DeepEqual(live, keywords) {
-		t.Fatalf("DuckDB has %d keywords, keywords.go %d: regenerate keywords.go", len(live), len(keywords))
-	}
-	for _, k := range []string{"select", "from", "order", "asof", "qualify"} {
-		if sqlIdent(k) != `"`+k+`"` {
-			t.Fatalf("%s: %s", k, sqlIdent(k))
-		}
-	}
-	for _, k := range []string{"ra", "band", "detector", "mag", "x_1", "_a"} {
-		if sqlIdent(k) != k {
-			t.Fatalf("%s: %s", k, sqlIdent(k))
-		}
-	}
-	if sqlIdent(`q"uote`) != `"q""uote"` || sqlIdent("a.b") != `"a.b"` || sqlIdent("1a") != `"1a"` {
-		t.Fatal("quoting")
-	}
-}
-
-// The conditions "=" builds are SQL DuckDB runs, matching the value: the
-// infinities, a UUID, controls (C0 and C1) in a value and a name.
-func TestConditionsRunInDuckDB(t *testing.T) {
-	db, err := sql.Open("duckdb", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, err := db.Exec(`CREATE TABLE t AS SELECT 'inf'::DOUBLE AS pinf, '-inf'::DOUBLE AS ninf, 'inf'::FLOAT AS f32inf,
-		'nan'::DOUBLE AS nan, 0.1::FLOAT AS f, '01234567-89ab-cdef-0123-456789abcdef'::UUID AS u,
-		'a' || chr(27) || '[31m' || chr(155) || 'b' AS s, 1 AS "bell` + "\x07" + `", TIMESTAMPTZ '2026-01-02 03:04:05.678901+00' AS ts,
-		DATE '2026-01-01' AS "day", true AS flag, NULL::INT AS n`); err != nil {
-		t.Fatal(err)
-	}
-	uuid := data.UUID{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef}
-	cases := map[string]data.Value{"pinf": math.Inf(1), "ninf": math.Inf(-1), "f32inf": float32(math.Inf(1)),
-		"nan": math.NaN(), "f": float32(0.1), "u": uuid, "s": "a\x1b[31m\u009bb", "bell\x07": int64(1),
-		"ts":  data.Timestamp{T: time.Date(2026, 1, 2, 3, 4, 5, 678901000, time.UTC), Zoned: true, Unit: time.Microsecond},
-		"day": data.Date(20454), "flag": true, "n": nil}
-	for name, v := range cases {
-		cond := condition(name, v)
-		if strings.ContainsFunc(cond, func(r rune) bool { return r < 0x20 || (r >= 0x7F && r < 0xA0) }) {
-			t.Fatalf("%s: control characters in %q", name, cond)
-		}
-		var n int
-		if err := db.QueryRow("SELECT count(*) FROM t WHERE " + cond).Scan(&n); err != nil || n != 1 {
-			t.Fatalf("%s: %q: %d rows, %v", name, cond, n, err)
-		}
-	}
-	if c := condition("u", uuid); c != "u = '01234567-89ab-cdef-0123-456789abcdef'" {
-		t.Fatal(c)
-	}
-	if c := condition("x", math.Inf(-1)); c != "x = '-inf'::DOUBLE" {
-		t.Fatal(c)
 	}
 }
 
