@@ -102,18 +102,21 @@ func (g *Grid) screenRow() int {
 // _record_values).
 func (g *Grid) recordValues(fr int64) map[string]data.Value {
 	d := g.v
+	out := map[string]data.Value{}
+	if fr < 0 {
+		return out // (rows without file rows aren't a record to keep)
+	}
 	r := int64(-1)
 	if g.fileRowAt(g.curRow) == fr {
 		r = g.curRow
 	} else {
 		for row, f := range d.fileRow {
-			if f == fr && (d.view.Plain() || f >= 0) {
+			if f == fr {
 				r = row
 				break
 			}
 		}
 	}
-	out := map[string]data.Value{}
 	if r < 0 || !d.loaded(r) {
 		return out
 	}

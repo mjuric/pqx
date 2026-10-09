@@ -328,3 +328,58 @@ func TestTheRecordIsKeptOnlyForTheViewAskedFor(t *testing.T) {
 		t.Errorf("kept %+v row %d", h.g.kept, h.g.curRow)
 	}
 }
+
+// A view asked for while a record is on its way: the same record keeps the
+// screen row it is going to and the values it came with; another takes the
+// cursor's screen row and its values from the rows read.
+func TestAViewAskedForReusesTheRecordOnItsWayOnlyForTheSameRow(t *testing.T) {
+	h := newHarness(t, newFake(5000, 4), 150, 42)
+	g := h.g
+	g.curRow, g.top = 5, 2
+	g.kept = &keeping{fileRow: 100, screenRow: 7, values: map[string]data.Value{"id": "X"}, phase: "locating"}
+	g.onSetView(kit.SetViewMsg{View: data.View{Where: "id % 3 = 0"}, KeepFileRow: 100})
+	if g.next.screenRow != 7 || g.next.values["id"] != "X" {
+		t.Errorf("same record: %+v", g.next)
+	}
+	g.onSetView(kit.SetViewMsg{View: data.View{Where: "id % 3 = 0"}, KeepFileRow: 5})
+	if g.next.screenRow != 3 || g.next.values["id"] != int64(5) || g.next.values["name"] != "r5" {
+		t.Errorf("another record: %+v", g.next)
+	}
+	g.kept = nil
+	if v := g.recordValues(-1); len(v) != 0 {
+		t.Errorf("values of no record: %v", v)
+	}
+	h.filterWith("select id, name from t") // rows without file rows
+	if v := g.recordValues(-1); len(v) != 0 {
+		t.Errorf("values of a SQL row: %v", v)
+	}
+}
+
+// While the rows around the record are read, other reads neither replace
+// that read nor decide about the record.
+func TestWhileSeekingOtherReadsWait(t *testing.T) {
+	ds := &aroundWrap{fakeDS: newFake(30_000, 6), gate: make(chan struct{})}
+	h := newHarness(t, ds, 150, 42)
+	h.send(kit.GotoMsg{Row: 27_000})
+	h.settle()
+	h.send(kit.SetViewMsg{View: data.View{Where: "id % 3 = 0"}, KeepFileRow: 27_000})
+	h.settle()
+	g := h.g
+	if g.kept == nil || g.kept.phase != "seeking" || g.page == nil || !g.page.around {
+		t.Fatalf("not seeking: %+v", g.kept)
+	}
+	g.top = 5000 // rows not read
+	if cmd := g.ensureRows(); cmd != nil || !g.page.around {
+		t.Error("a read replaced the one around the record")
+	}
+	g.top = 0
+	// a read that isn't the one around the record, holding nothing of it
+	if cmd := g.keepOnPage(fetchReq{n: 5}, 0, data.Window{Len: 5, FileRows: []int64{0, 3, 6, 9, 12}}); cmd != nil || g.kept == nil || g.kept.phase != "seeking" {
+		t.Errorf("an unrelated read decided: %+v", g.kept)
+	}
+	close(ds.gate)
+	h.settle()
+	if h.record() != 27_000 || g.kept != nil {
+		t.Errorf("record %d kept %+v", h.record(), g.kept)
+	}
+}
