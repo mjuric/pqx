@@ -296,3 +296,65 @@ Intended differences from Python pqx, each listed in its PR:
 - **DuckDB 1.5.6:** binding a file written moments before occasionally fails with "No files found" (also from Python); pqx retries the bind.
 - **arm64:** Go fuses `a*b+c` into one instruction on arm64, which changed bin edges and angle readings in the last bits; such expressions are written so they round as on amd64.
 - **This machine:** pqx's first suspend code stopped its whole process group and froze the session that ran it (fixed). SIGTSTP during a heavy DuckDB query still freezes this sandboxed environment for a while, even with only pqx stopped; **the owner checks this case in a real terminal before the merge to `master`.**
+
+### Release packaging (WP13a)
+
+The release machinery: `go/packaging/` (`build.sh`, `make_wheel.py`,
+`make_archive.py`, `smoke.py`, `check_install.py`, all standard-library Python),
+`.github/workflows/go-release.yml` and [the release runbook](../runbooks/release.md).
+README, help and screenshots are WP13b.
+
+- **Wheels** hold only the binary, in `pqx-<v>.data/scripts/` (the ruff/uv layout):
+  no Python code, no dependencies, no `Requires-Python`; `Metadata-Version: 2.4`
+  with `License-Expression: BSD-3-Clause` and the licence under
+  `dist-info/licenses/`. Reproducible (fixed order and timestamps).
+- **No sdist**: building needs Go, a C/C++ toolchain and DuckDB's libraries, so
+  pip on an unsupported platform should say "no matching distribution" rather
+  than try a source build. Consequence: there, pip falls back to Python pqx
+  0.2.x, whose `py3-none-any` wheel matches everywhere.
+- **Platform tags** (D6): `manylinux_2_28_x86_64`, `manylinux_2_28_aarch64`,
+  `macosx_13_0_arm64`, `macosx_13_0_x86_64`, `win_amd64`. macOS 13 is the oldest
+  Go 1.27 supports (its linker's default; DuckDB's libraries say 11.0), so 13.0
+  is the honest tag; the build sets `MACOSX_DEPLOYMENT_TARGET=13.0` and CI checks
+  `minos`. auditwheel finds the Linux wheels meet even `manylinux_2_26`; they
+  keep the `2_28` tag of the container they are built in.
+- **Linux linking**: `-static-libstdc++ -static-libgcc` alone isn't enough,
+  because duckdb-go-bindings adds `-lstdc++` itself; `build.sh` puts a directory
+  holding only `libstdc++.a` first on the library path.
+- **Windows** needs exactly DuckDB's toolchain, MinGW-Builds gcc 14.2.0
+  posix-seh UCRT: MSYS2's gcc 16.2 fails to link DuckDB's libraries (undefined
+  `__emutls_v` symbols from `std::call_once`), and an MSVCRT MinGW lacks the UCRT
+  functions. The workflow downloads it pinned by sha256. One source change was
+  needed for Windows: `internal/data`'s `writable` used `syscall.Access`, which
+  Windows lacks; it moved to `owner_unix.go`, with a read-only-attribute check
+  in `owner_other.go`.
+- **Smoke tests** on all five platforms, Windows included (ConPTY through
+  pywinpty): `pqx --version`, `--help`, open `demo.parquet` in a 200×50 terminal,
+  see the row count and a column name, quit with `q`, exit status 0; then the
+  wheel installed with pip in a fresh venv and run with `uvx`.
+
+Results, run [37892815434](https://github.com/mjuric/pqx/actions/runs/37892815434)
+(2026-10-09, `0.3.0.dev3`, all green):
+
+| target | binary (installed) | wheel | archive | needs | open demo.parquet |
+|---|---|---|---|---|---|
+| linux-amd64 | 94.5 MB | 32.2 MB | 32.0 MB | libc, libm, libpthread, libdl, libresolv; GLIBC_2.25 newest | 0.54 s |
+| linux-arm64 | 85.4 MB | 29.2 MB | 29.1 MB | same; GLIBC_2.25 newest | 0.52 s |
+| darwin-arm64 | 81.7 MB | 26.5 MB | 26.4 MB | libSystem, libc++, libresolv; minos 13.0 | 0.26 s |
+| darwin-amd64 | 86.4 MB | 28.6 MB | 28.5 MB | same; minos 13.0 | 0.80 s |
+| windows-amd64 | 86.3 MB | 30.0 MB | 30.0 MB | KERNEL32, WS2_32, RstrtMgr, UCRT (`api-ms-win-crt-*`) | 1.91 s |
+
+`twine check --strict` and `check-wheel-contents` (W007, "library is empty",
+ignored: expected for a binary-only wheel) pass on all five; about 147 MB per
+release on PyPI (per-file limit 100 MB, per-project 10 GB).
+
+Locally (Rocky 10): a wheel built here installs and runs with pip, pipx,
+`uv tool install` and `uvx`, but needs glibc 2.38 and, through Rocky 10's static
+libstdc++, x86-64-v3 (auditwheel: "requires x86_64_v3"); release wheels come from
+CI only.
+
+Open for the owner: the TestPyPI trusted publisher and `testpypi` environment;
+how to make the workflow dispatchable before the cutover (it must exist on
+`master`, or the tag trigger is enabled); `publish.yml` must go at the cutover;
+third-party licence notices (DuckDB, the Go modules) for the binaries; macOS
+notarization of the archives.
