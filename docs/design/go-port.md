@@ -1,6 +1,6 @@
 # pqx in Go: the full port
 
-Status: **plan approved by the owner 2026-10-08**; wave 0 in progress. Background, measurements and the prototype's results are in
+Status: **plan approved by the owner 2026-10-08**. Waves 0–2 are merged except the grid (#47, in its last CI round); wave 3 (filter and record keeping, details pane) is next. See [Progress](#progress). Background, measurements and the prototype's results are in
 [native-port.md](native-port.md); the prototype's plan is in
 [go-prototype.md](go-prototype.md).
 
