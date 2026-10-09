@@ -20,8 +20,17 @@ func (t *Theme) SetProfile(p colorprofile.Profile) {
 	t.build()
 }
 
-// out is c as it is sent to a terminal of the theme's profile.
+// out is c as it is sent to a terminal of the theme's profile. With a
+// named theme colours stay as they are until Paint, which reduces them.
 func (t *Theme) out(c color.Color) color.Color {
+	if t.named {
+		return c
+	}
+	return t.reduce(c)
+}
+
+// reduce is c for a terminal of the theme's profile.
+func (t *Theme) reduce(c color.Color) color.Color {
 	switch t.profile {
 	case colorprofile.ANSI256:
 		if rgb, ok := c.(color.RGBA); ok {
