@@ -128,9 +128,18 @@ func (g *Grid) reserve(names []string) {
 	}
 	a, b := g.nearRows()
 	d := g.v
+	// Python's window holds the columns within a screen of the view, so
+	// only those further away are reserved; the near ones are being read
+	// and take their values' widths
+	near := map[int]bool{}
+	if d.ids {
+		for _, i := range g.colsNear(1) {
+			near[i] = true
+		}
+	}
 	for _, name := range names {
 		i, ok := g.byName[name]
-		if !ok {
+		if !ok || near[i] {
 			continue
 		}
 		col := d.vals[name]
