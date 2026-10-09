@@ -53,10 +53,19 @@ func numericKind(k Kind) bool {
 	return false
 }
 
+// maxExactDecimal is the widest decimal (in digits) Python pqx holds as a
+// Decimal; DuckDB gives it wider ones as floats.
+const maxExactDecimal = 38
+
 // formatValue is fmt.format_value.
 func formatValue(v data.Value, k Kind, raw bool, width int, ov Override, safe bool) string {
 	if v == nil {
 		return Null
+	}
+	if d, ok := v.(data.Decimal); ok && d.Precision > maxExactDecimal && !raw {
+		// Python pqx gets decimals wider than 38 digits as floats: the grid
+		// shows them as such ("1e+46"); raw (details, copy) stays exact.
+		v = decFloat(d)
 	}
 	var f float64
 	isFloat := false
