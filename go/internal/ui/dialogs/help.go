@@ -1,13 +1,13 @@
 package dialogs
 
 import (
-	"math"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/mjuric/pqx/go/internal/styled"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
+	"github.com/mjuric/pqx/go/internal/ui/scrollbar"
 )
 
 // Author and Homepage are pqx's (pqx/__init__.py).
@@ -57,54 +57,17 @@ func (d *helpDialog) View(w, h int) string {
 	// header, margin, the text, margin, footer
 	d.bodyH = max(1, h-2-2*padY-4)
 	d.clamp()
-	bar := scrollbar(look, d.bodyH, len(d.lines), d.top)
+	bar := scrollbar.Widen(scrollbar.Vertical(d.bodyH, len(d.lines), d.top, look.Style("scrollbar"), ""), scrollbarW)
 	content := []string{head, ""}
 	for i := 0; i < d.bodyH; i++ {
 		l := strings.Repeat(" ", iw-scrollbarW)
 		if k := d.top + i; k < len(d.lines) {
 			l = d.lines[k]
 		}
-		content = append(content, l+bar[i])
+		content = append(content, l+look.Render(bar[i]))
 	}
 	content = append(content, "", text(look, "Esc to close", dim))
 	return box(look, content, w, h)
-}
-
-// scrollbar is Textual's vertical ScrollBarRender for a window of size rows
-// over virtual rows at position: a thumb in bright black (reverse video)
-// with eighth-block ends, as rows scrollbarW wide.
-func scrollbar(look kit.Look, size, virtual, position int) []string {
-	blank := strings.Repeat(" ", scrollbarW)
-	out := make([]string, size)
-	for i := range out {
-		out[i] = blank
-	}
-	if virtual <= size || size <= 0 {
-		return out
-	}
-	bars := []rune("▁▂▃▄▅▆▇ ")
-	nb := len(bars)
-	thumb := max(1, float64(size)/(float64(virtual)/float64(size)))
-	pos := (float64(size) - thumb) * float64(position) / float64(virtual-size)
-	start := int(pos * float64(nb))
-	end := start + int(math.Ceil(thumb*float64(nb)))
-	si, sb := start/nb, start%nb
-	ei, eb := end/nb, end%nb
-	thumbStyle := styled.Style{Fg: "bright_black", Reverse: true}
-	for i := si; i < min(ei, size); i++ {
-		out[i] = text(look, blank, thumbStyle)
-	}
-	if si < size {
-		if c := bars[nb-1-sb]; c != ' ' {
-			out[si] = text(look, strings.Repeat(string(c), scrollbarW), styled.Style{Fg: "bright_black"})
-		}
-	}
-	if ei < size {
-		if c := bars[nb-1-eb]; c != ' ' {
-			out[ei] = text(look, strings.Repeat(string(c), scrollbarW), thumbStyle)
-		}
-	}
-	return out
 }
 
 func (d *helpDialog) clamp() {

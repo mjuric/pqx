@@ -10,6 +10,7 @@ import (
 
 	"github.com/mjuric/pqx/go/internal/sqllit"
 	"github.com/mjuric/pqx/go/internal/styled"
+	"github.com/mjuric/pqx/go/internal/ui/scrollbar"
 )
 
 // Port of tests/test_app.py::test_detail_entry_layout_matches_rich_grid: the
@@ -93,7 +94,7 @@ func TestScrollbarMatchesTextual(t *testing.T) {
 	}
 	bar := styled.Style{Fg: "border"}
 	for i, c := range cases {
-		got := scrollbar(c.Size, c.Total, c.Top, bar)
+		got := scrollbar.Vertical(c.Size, c.Total, c.Top, bar, "")
 		for y, r := range c.Rows {
 			g := got[y]
 			if g.Plain != r[0].(string) || g.Style.Reverse != r[1].(bool) || (g.Style.Fg == "border") != r[2].(bool) {
@@ -101,7 +102,7 @@ func TestScrollbarMatchesTextual(t *testing.T) {
 			}
 		}
 	}
-	if s := scrollbar(10, 10, 0, bar); s[0].Plain != " " || s[0].Style.Reverse {
+	if s := scrollbar.Vertical(10, 10, 0, bar, ""); s[0].Plain != " " || s[0].Style.Reverse {
 		t.Fatal("a bar with nothing to scroll")
 	}
 }

@@ -1,7 +1,6 @@
 package detail
 
 import (
-	"math"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -311,44 +310,4 @@ func entryHeight(value styled.Text, nw, width int) int {
 		n += lineHeight(l, vw)
 	}
 	return n
-}
-
-// Textual's vertical scrollbar glyphs (ScrollBarRender.VERTICAL_BARS).
-var bars = []string{"▁", "▂", "▃", "▄", "▅", "▆", "▇", " "}
-
-// scrollbar is the vertical scrollbar of a view h rows high onto total
-// lines scrolled to top, as Textual draws it (ScrollBarRender.render_bar):
-// one cell per row, the thumb in reverse video of the bar colour, its ends
-// in eighth blocks.
-func scrollbar(h, total, top int, bar styled.Style) []styled.Text {
-	out := make([]styled.Text, h)
-	for i := range out {
-		out[i] = styled.Text{Plain: " "}
-	}
-	if h <= 0 || total <= h {
-		return out
-	}
-	const n = 8
-	thumb := max(1, float64(h)/(float64(total)/float64(h)))
-	pos := (float64(h) - thumb) * (float64(top) / float64(total-h))
-	start := int(pos * n)
-	end := start + int(math.Ceil(thumb*n))
-	si, sb := max(0, start)/n, max(0, start)%n
-	ei, eb := max(0, end)/n, max(0, end)%n
-	rev := bar
-	rev.Reverse = true
-	for i := si; i < min(ei, h); i++ {
-		out[i] = styled.Text{Plain: " ", Style: rev}
-	}
-	if si < h {
-		if c := bars[n-1-sb]; c != " " {
-			out[si] = styled.Text{Plain: c, Style: bar}
-		}
-	}
-	if ei < h {
-		if c := bars[n-1-eb]; c != " " {
-			out[ei] = styled.Text{Plain: c, Style: rev}
-		}
-	}
-	return out
 }

@@ -1,13 +1,13 @@
 package footer
 
 import (
-	"math"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mjuric/pqx/go/internal/styled"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
+	"github.com/mjuric/pqx/go/internal/ui/scrollbar"
 )
 
 // Table is a table with a header and a row cursor, drawn as Textual's
@@ -192,7 +192,7 @@ func (t *Table) View(look kit.Look, w, h int, cur styled.Style) []string {
 	}
 	var vbar []styled.Text
 	if showV {
-		vbar = scrollbar(ch, vh, ch, t.Top, true, sb, thumbBg)
+		vbar = scrollbar.Bar(ch, vh, ch, t.Top, true, sb, thumbBg)
 	}
 	row := func(lt styled.Text, y int) string {
 		s := ansi.Cut(look.Render(lt), t.X, t.X+cw)
@@ -215,56 +215,13 @@ func (t *Table) View(look kit.Look, w, h int, cur styled.Style) []string {
 	}
 	if showH {
 		var b strings.Builder
-		for _, c := range scrollbar(cw, vw, cw, t.X, false, sb, thumbBg) {
+		for _, c := range scrollbar.Bar(cw, vw, cw, t.X, false, sb, thumbBg) {
 			b.WriteString(look.Render(c))
 		}
 		if showV {
 			b.WriteString(look.Render(styled.New(" ", styled.Style{Bg: sb.Bg}))) // the corner
 		}
 		out = append(out, b.String())
-	}
-	return out
-}
-
-// scrollbar is Textual's ScrollBarRender.render_bar: size cells of a bar
-// for a window of window cells at position over virtual cells, the thumb in
-// st's Fg (in reverse, on thumbBg) on a track in its Bg, the thumb's ends in
-// eighths of a cell.
-func scrollbar(size, virtual, window, position int, vertical bool, st styled.Style, thumbBg styled.Color) []styled.Text {
-	bar, back := st.Fg, st.Bg
-	bars := []string{"▉", "▊", "▋", "▌", "▍", "▎", "▏", " "}
-	if vertical {
-		bars = []string{"▁", "▂", "▃", "▄", "▅", "▆", "▇", " "}
-	}
-	out := make([]styled.Text, size)
-	for i := range out {
-		out[i] = styled.New(" ", styled.Style{Bg: back})
-	}
-	if window >= virtual {
-		window = 0
-	}
-	if window == 0 || size == 0 || virtual == 0 || size == virtual {
-		return out
-	}
-	n := len(bars)
-	thumb := math.Max(1, float64(window)/(float64(virtual)/float64(size)))
-	pos := (float64(size) - thumb) * (float64(position) / float64(virtual-window))
-	start := int(pos * float64(n))
-	end := start + int(math.Ceil(thumb*float64(n)))
-	si, sb := max(0, start)/n, max(0, start)%n
-	ei, eb := max(0, end)/n, max(0, end)%n
-	for i := si; i < min(ei, size); i++ {
-		out[i] = styled.New(" ", styled.Style{Fg: bar, Bg: thumbBg, Reverse: true})
-	}
-	if si < size {
-		if c := bars[n-1-sb]; c != " " {
-			out[si] = styled.New(c, styled.Style{Fg: bar, Bg: back, Reverse: !vertical})
-		}
-	}
-	if ei < size {
-		if c := bars[n-1-eb]; c != " " {
-			out[ei] = styled.New(c, styled.Style{Fg: bar, Bg: back, Reverse: vertical})
-		}
 	}
 	return out
 }

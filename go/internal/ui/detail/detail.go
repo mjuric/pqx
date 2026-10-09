@@ -28,6 +28,7 @@ import (
 	"github.com/mjuric/pqx/go/internal/fmtx"
 	"github.com/mjuric/pqx/go/internal/styled"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
+	"github.com/mjuric/pqx/go/internal/ui/scrollbar"
 )
 
 // Part is the pane's name for focus and ColumnChangedMsg.
@@ -837,7 +838,7 @@ func (p *Pane) View(w, h int) string {
 	lines := make([]string, 0, h)
 	var bar []styled.Text
 	if p.bar {
-		bar = p.scrollbar(look.Style("border"))
+		bar = p.scrollbar(look.Style("scrollbar"))
 	}
 	i, skip := p.ti, p.to
 	for y := 0; y < h; {
@@ -885,7 +886,7 @@ func (p *Pane) scrollbar(st styled.Style) []styled.Text {
 			top += hi
 		}
 	}
-	return scrollbar(p.h, total, top, st)
+	return scrollbar.Vertical(p.h, total, top, st, "")
 }
 
 func (p *Pane) withBar(line string, bar []styled.Text, y int) string {

@@ -136,43 +136,6 @@ func TestTable(t *testing.T) {
 	}
 }
 
-// Textual's ScrollBarRender.render_bar for a few cases (textual 8.2.8).
-func TestScrollbar(t *testing.T) {
-	render := func(c []styled.Text) string {
-		var b strings.Builder
-		for _, x := range c {
-			switch {
-			case x.Plain == " " && x.Style.Reverse:
-				b.WriteString("#")
-			case x.Plain == " ":
-				b.WriteString(".")
-			default:
-				b.WriteString(x.Plain)
-				if x.Style.Reverse {
-					b.WriteString("r")
-				}
-			}
-		}
-		return b.String()
-	}
-	for _, c := range []struct {
-		size, virtual, window, pos int
-		vertical                   bool
-		want                       string
-	}{
-		{3, 6, 3, 0, true, "#▄r."},
-		{10, 10, 10, 0, true, ".........."},
-		{10, 20, 10, 10, false, ".....#####"},
-		{10, 30, 10, 5, false, ".▋r###....."},
-		{116, 135, 116, 0, false, strings.Repeat("#", 99) + "▊" + strings.Repeat(".", 16)},
-	} {
-		got := render(scrollbar(c.size, c.virtual, c.window, c.pos, c.vertical, styled.Style{Fg: "k"}, ""))
-		if got != c.want {
-			t.Errorf("%+v: got %q", c, got)
-		}
-	}
-}
-
 // markLook draws reverse cells as "R", bold ones as "B", dim ones as "d".
 type markLook struct{ plainLook }
 

@@ -270,6 +270,7 @@ func (d *Dropdown) View(w, h int) string {
 		}
 	}
 	d.list.Width = d.boxW - 4
+	d.list.Bar = look.Style("scrollbar")
 	lh := max(0, h-2-d.extra())
 	if lh > 0 {
 		for _, l := range strings.Split(d.list.View(iw, lh, look.Render), "\n") {

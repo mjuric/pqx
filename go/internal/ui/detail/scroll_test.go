@@ -13,6 +13,7 @@ import (
 
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
+	"github.com/mjuric/pqx/go/internal/ui/scrollbar"
 )
 
 func exactH(p *Pane, i int) int { return entryHeight(*p.textOf(i), p.nameW, p.cw) }
@@ -237,7 +238,7 @@ func TestScrollbarIsExact(t *testing.T) {
 	for i := range r.p.entries {
 		total += r.p.height(i)
 	}
-	want := scrollbar(10, total, r.p.Top(), r.env.Look.Style("border"))
+	want := scrollbar.Vertical(10, total, r.p.Top(), r.env.Look.Style("border"), "")
 	for y := range want {
 		if want[y].Plain != got[y].Plain || want[y].Style != got[y].Style {
 			t.Fatalf("row %d: %q %+v, want %q %+v (total %d)", y, got[y].Plain, got[y].Style, want[y].Plain, want[y].Style, total)
