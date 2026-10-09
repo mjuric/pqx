@@ -118,6 +118,7 @@ func (f *fakeDS) value(name string, fr int64) data.Value {
 func (f *fakeDS) Path() string           { return "/data/test.parquet" }
 func (f *fakeDS) NumRows() int64         { return f.rows }
 func (f *fakeDS) Columns() []data.Column { return f.cols }
+
 // Info says the file is big (a gigabyte per column), so the plain view is
 // read lazily as on a large file (Python's tests set LAZY_MIN_SAVING_MS to
 // -inf for this).
@@ -125,7 +126,7 @@ func (f *fakeDS) Info() data.FileInfo {
 	return data.FileInfo{Path: f.Path(), Uncompressed: int64(len(f.cols)) << 30, NumLeaves: len(f.cols)}
 }
 
-func (f *fakeDS) RowGroups() []int64     { return []int64{f.rows} }
+func (f *fakeDS) RowGroups() []int64 { return []int64{f.rows} }
 
 func (f *fakeDS) log() []call {
 	f.mu.Lock()

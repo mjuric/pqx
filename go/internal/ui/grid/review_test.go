@@ -738,3 +738,26 @@ func TestSmallPlainFilesLoadWhole(t *testing.T) {
 		t.Error("a big file's window is read whole")
 	}
 }
+
+// A column chosen on another tab (Schema, Stats) goes to the left edge of
+// the hidden table, as DataTable scrolls a table that isn't shown.
+func TestColumnChosenElsewhereGoesToTheLeftEdge(t *testing.T) {
+	h := newHarness(t, newFake(1000, 60), 150, 42)
+	g := h.g
+	h.env.State.Tab = kit.TabSchema
+	h.env.State.Current = "c030"
+	h.send(kit.ColumnChangedMsg{From: "schema"})
+	h.settle()
+	if g.curName() != "c030" || g.sx != min(g.colStart(g.curCol), g.maxSX()) {
+		t.Errorf("cursor on %q, scroll %d, want the column's start %d", g.curName(), g.sx, g.colStart(g.curCol))
+	}
+	// on the Data tab (the details pane) it scrolls only as far as needed
+	h.env.State.Tab = kit.TabData
+	h.press("home")
+	h.env.State.Current = "c030"
+	h.send(kit.ColumnChangedMsg{From: "detail"})
+	h.settle()
+	if _, last, _, _ := g.colWindow(); last != g.curCol {
+		t.Errorf("from the details pane: last shown %d, cursor %d", last, g.curCol)
+	}
+}

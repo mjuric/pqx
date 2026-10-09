@@ -68,6 +68,7 @@ func (g *Grid) View(w, h int) string {
 	}
 	g.fitVisible()
 	g.lastInView = g.cursorInView()
+	g.drawnCol = g.curCol
 	g.drawing = true
 	defer func() { g.drawing = false }()
 	var b strings.Builder

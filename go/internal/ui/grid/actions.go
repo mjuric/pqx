@@ -280,14 +280,22 @@ func (g *Grid) onColumnChanged(m kit.ColumnChangedMsg) tea.Cmd {
 	name := g.st.Current
 	if i, ok := g.byName[name]; ok {
 		g.curCol = i
+		if g.st.Tab != kit.TabData && i >= g.pinned() && i != g.curColShown() {
+			// moved while the Data tab is hidden: DataTable scrolls a
+			// hidden table so the column is at its left edge
+			g.sx = g.colStart(i)
+			g.clampSX()
+		}
 		return g.moved()
 	}
-	if g.st.Hidden[name] {
-		g.hiddenHint = name
-		return kit.Send(kit.StatusMsg{Severity: kit.Warning, Text: fmtx.Sanitize(name, false) + " is hidden · c to show"})
-	}
+	// a hidden current column leaves the grid put; the chrome's status line
+	// says so (Python's _hidden_hint)
 	return nil
 }
+
+// curColShown is the column the cursor was on when the grid was last
+// drawn (-1 before the first draw).
+func (g *Grid) curColShown() int { return g.drawnCol }
 
 // onRaw: "f" switched raw values: every cell formats again.
 func (g *Grid) onRaw() {

@@ -378,12 +378,12 @@ func TestLinkedColumns(t *testing.T) {
 	st.Current = "mag"
 	h.send(kit.ColumnChangedMsg{From: "schema"})
 	h.settle()
-	if g.curName() != "snr" || h.status.Text != "mag is hidden · c to show" || h.status.Severity != kit.Warning {
-		t.Errorf("hidden current: cursor %q, status %+v", g.curName(), h.status)
+	if g.curName() != "snr" || st.Current != "mag" {
+		t.Errorf("hidden current: cursor %q, current %q (the grid stays put)", g.curName(), st.Current)
 	}
-	h.press("right") // moving clears the hint
-	if h.status.Text != "" || st.Current != g.curName() {
-		t.Errorf("after moving: status %+v, current %q", h.status, st.Current)
+	h.press("right") // moving makes the cursor's column current again
+	if st.Current != g.curName() {
+		t.Errorf("after moving: current %q", st.Current)
 	}
 	st.Current = "mag"
 	h.send(kit.ColumnChangedMsg{From: "schema"})
