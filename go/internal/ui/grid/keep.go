@@ -73,13 +73,26 @@ type located struct {
 // onSetView notes a view on its way to the filter part, so the cursor's
 // record and screen row can be kept when it arrives (Python's _set_view
 // with keep_file_row, and _anchor_row).
-func (g *Grid) onSetView(m kit.SetViewMsg) {
+func (g *Grid) onSetView(m kit.SetViewMsg) tea.Cmd {
+	var then tea.Cmd
+	if g.inflight != nil && sameView(m.View, *g.inflight) {
+		// an "=" view arrived: the one made on it goes out now, after it
+		g.inflight = nil
+		if a := g.after; a != nil {
+			g.after = nil
+			g.inflight = &a.View
+			then = kit.Send(*a)
+		} else {
+			g.sent = nil
+		}
+	} else if g.inflight == nil {
+		g.sent = nil
+	}
 	g.next = nil
-	g.sent = nil
 	v := m.View
 	g.onTheWay = &v
 	if m.KeepFileRow < 0 {
-		return
+		return then
 	}
 	k := &keepReq{view: m.View, fileRow: m.KeepFileRow, screenRow: g.screenRow()}
 	if p := g.kept; p != nil && p.fileRow == m.KeepFileRow {
@@ -92,6 +105,7 @@ func (g *Grid) onSetView(m kit.SetViewMsg) {
 		k.queue = append(k.queue, queued{key: key, column: g.st.Current})
 	}
 	g.next = k
+	return then
 }
 
 // screenRow is the cursor's row on the screen.
@@ -281,14 +295,19 @@ func (g *Grid) land(r int64) tea.Cmd {
 	g.top = r - int64(k.screenRow)
 	g.clampCursor()
 	g.scrollRows()
-	return tea.Batch(g.ensure(), g.announce(false), kit.Send(kit.CursorMsg{}), g.replay(k.queue))
+	return tea.Batch(g.ensure(), g.announce(false), kit.Send(kit.CursorMsg{}), g.replay(k.queue, k.values))
 }
 
 // replay runs the keys that waited for the record, each on its column (if
 // it is still shown), all at once as Python pqx does: keys after an "="
 // act on the same record, and a second "=" adds to the view the first one
 // asked for.
-func (g *Grid) replay(queue []queued) tea.Cmd {
+//
+// values are the record's values from the view it came from: an "=" or y
+// on a cell its new view hasn't read yet acts on them at once, rather than
+// waiting for the read, which the view an earlier "=" makes would cancel
+// (dropping the key).
+func (g *Grid) replay(queue []queued, values map[string]data.Value) tea.Cmd {
 	var cmds []tea.Cmd
 	for _, q := range queue {
 		col, ok := g.byName[q.column]
@@ -298,10 +317,26 @@ func (g *Grid) replay(queue []queued) tea.Cmd {
 		g.curCol = col
 		cmds = append(cmds, g.moved())
 		g.fromPane = q.fromPane
-		cmds = append(cmds, g.cellKey(q.key))
+		cmds = append(cmds, g.replayKey(q, values))
 		g.fromPane = false
 	}
 	return tea.Batch(cmds...)
+}
+
+// replayKey runs a queued key on the record under the cursor.
+func (g *Grid) replayKey(q queued, values map[string]data.Value) tea.Cmd {
+	key := q.key.String()
+
+	if key == "=" || key == "y" {
+		_, loaded := g.v.cell(q.column, g.curRow)
+		if v, known := values[q.column]; known && !(loaded && g.v.loaded(g.curRow)) {
+			if key == "=" {
+				return g.filterValue(q.column, v)
+			}
+			return g.copyValue(q.column, v)
+		}
+	}
+	return g.cellKey(q.key)
 }
 
 // QueueKey implements kit.RecordSource: a cell key (= y i F < >) pressed
@@ -393,7 +428,15 @@ func (g *Grid) filterValue(name string, v data.Value) tea.Cmd {
 		nv = data.View{Where: cond}
 	}
 	g.sent = &nv
-	return kit.Send(kit.SetViewMsg{View: nv, KeepFileRow: g.fileRowAt(g.curRow)})
+	m := kit.SetViewMsg{View: nv, KeepFileRow: g.fileRowAt(g.curRow)}
+	if g.inflight != nil {
+		// an earlier "=" view is on its way: this one, made on it, follows
+		// it (two commands' messages can arrive in either order)
+		g.after = &m
+		return nil
+	}
+	g.inflight = &nv
+	return kit.Send(m)
 }
 
 // keptFileRow is the file row x keeps: the record on its way, else the
