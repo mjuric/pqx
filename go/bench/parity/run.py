@@ -29,6 +29,7 @@ import yaml
 HERE = os.path.dirname(os.path.abspath(__file__))
 GO_ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(GO_ROOT, "bench", "pty"))
+import pyte  # noqa: E402
 from ptydrive import SPINNER, Session, key_bytes, styles_changed  # noqa: E402
 
 SCRATCH_DEFAULT = os.environ.get("PQX_PARITY_SCRATCH", os.path.join(tempfile.gettempdir(), "pqx-parity"))
@@ -179,6 +180,7 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
         blink = sorted([y, x] for y, x in blink)
         clip = s.osc52()
         res["checks"].append({"name": name, "lines": lines, "styles": styles, "blink": blink,
+                              "plain": plain_spaces(s.screen.buffer, s.rows, s.cols),
                               "clipboard": [norm_line(c) for c in clip[-1:]], "exited": s.exited})
 
     def changed_since(text, styles):
@@ -318,6 +320,44 @@ def describe_file(path):
 STYLE_NAMES = ("fg", "bg", "bold", "dim", "reverse", "underline", "italic")
 
 
+def plain_spaces(buf, rows, cols):
+    """Per screen row, "1" for each cell that is a space without reverse, underline or
+    strikethrough (its foreground colour can't be seen), else "0"."""
+    return ["".join("1" if (c.data == " " and not c.reverse and not c.underscore and not c.strikethrough)
+                    else "0" for c in (buf[y][x] for x in range(cols))) for y in range(rows)]
+
+
+def selftest():
+    """compare_check on made-up captures: what counts as a style or colour difference."""
+    sp, x = " ", "x"
+
+    def cap(chars, styles):
+        cells = [[pyte.screens.Char(ch, fg, bg, reverse=rev, underscore=und)
+                  for ch, (fg, bg, rev, und) in zip(chars, styles)]]
+        return {"lines": ["".join(chars)], "blink": [],
+                "styles": [[(c.fg, c.bg, c.bold, c.blink, c.reverse, c.underscore, c.italics) for c in cells[0]]],
+                "plain": plain_spaces(cells, 1, len(chars))}
+
+    d0 = ("default", "default", False, False)
+    cases = [  # (name, chars, styles A, styles B, colour cells, style cells)
+        ("space fg ignored", [sp], [d0], [("red", "default", False, False)], 0, 0),
+        ("space bg counts", [sp], [d0], [("default", "blue", False, False)], 1, 0),
+        ("reversed space fg counts", [sp], [("red", "default", True, False)], [("green", "default", True, False)],
+         1, 0),
+        ("underlined space fg counts", [sp], [("red", "default", False, True)], [("green", "default", False, True)],
+         1, 0),
+        ("space reverse counts", [sp], [d0], [("default", "default", True, False)], 0, 1),
+        ("letter fg counts", [x], [d0], [("red", "default", False, False)], 1, 0),
+    ]
+    bad = 0
+    for name, chars, sa, sb, want_c, want_s in cases:
+        d = compare_check(cap(chars, sa), cap(chars, sb))
+        ok = (d["colour"], d["style"]) == (want_c, want_s)
+        print(f"{'ok  ' if ok else 'FAIL'} {name}: colour {d['colour']}, style {d['style']}")
+        bad += not ok
+    return 1 if bad else 0
+
+
 def compare_check(a, b):
     """Differences between two captures of the same checkpoint."""
     if "file" in a or "file" in b:
@@ -331,11 +371,18 @@ def compare_check(a, b):
     style_lines, colour_lines = {}, {}
     same = {i for i in range(min(len(la), len(lb)))} - {t[0] for t in text}
     blink = {tuple(c) for c in a.get("blink", []) + b.get("blink", [])}
+    pa, pb = a.get("plain"), b.get("plain")
     for y in sorted(same):
         ra, rb = a["styles"][y], b["styles"][y]
         for x, (ca, cb) in enumerate(zip(ra, rb)):
             if ca == cb or (y, x) in blink:
                 continue
+            if (pa and pa[y][x] == "1") and (pb and pb[y][x] == "1"):
+                # a space without reverse, underline or strike shows no foreground: its
+                # foreground colour doesn't count (its background and attributes do)
+                ca, cb = (None,) + tuple(ca[1:]), (None,) + tuple(cb[1:])
+                if ca == cb:
+                    continue
             if ca[2:] != cb[2:]:
                 style += 1
                 style_lines.setdefault(y, []).append((x, ca, cb))
@@ -417,7 +464,10 @@ def main(argv=None):
     p.add_argument("--timeout-scale", type=float, default=1.0)
     p.add_argument("--keep-raw", action="store_true", help="save each run's raw terminal output")
     p.add_argument("--list", action="store_true", help="list the scenarios and exit")
+    p.add_argument("--selftest", action="store_true", help="check the style comparison on made-up cells")
     a = p.parse_args(argv)
+    if a.selftest:
+        return selftest()
 
     scen = load_scenarios()
     if a.list:
@@ -504,7 +554,7 @@ def write_screens_json(path, results):
     """Every capture, by "scenario@WxH:app", without the per-cell styles."""
     with open(path, "w") as fh:
         json.dump({f"{n}@{s[0]}x{s[1]}:{lab}": {"errors": r["errors"], "argv": r["argv"], "checks": [
-            {k: v for k, v in c.items() if k != "styles"} for c in r["checks"]]}
+            {k: v for k, v in c.items() if k not in ("styles", "plain")} for c in r["checks"]]}
             for (n, s, lab), r in sorted(results.items())}, fh, ensure_ascii=False, indent=0)
 
 

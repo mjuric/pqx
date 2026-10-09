@@ -106,7 +106,9 @@ Style and colour differences are summarized per screen row: how many cells, whic
 columns, which attributes, and the first cell's values (`reverse=True vs
 reverse=False`). They are compared only on rows whose text is the same, and cells that
 blink (a text cursor) are left out: each checkpoint samples the styles three times over
-0.7 s and drops the cells that changed. Colours are named for the 16 ANSI colours
+0.7 s and drops the cells that changed. The foreground colour of a plain space (no
+reverse, underline or strikethrough) is ignored, as it can't be seen; its background,
+reverse, underline and strikethrough still count (`run.py --selftest` checks these rules). Colours are named for the 16 ANSI colours
 (`brightblack`; a 256-colour index below 16 counts as the same name) and hex otherwise.
 
 ### Normalization
