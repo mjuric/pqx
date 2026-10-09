@@ -10,7 +10,7 @@ import (
 // headers, the Schema tab and Stats, so it must never carry control
 // characters.
 func TestShortTypeIsSafe(t *testing.T) {
-	st := arrow.StructOf(arrow.Field{Name: "\x1b]0;PWN\x07f\u009b31m‮", Type: arrow.PrimitiveTypes.Int64})
+	st := arrow.StructOf(arrow.Field{Name: "\x1b]0;PWN\x07f\u009b31m\u202e", Type: arrow.PrimitiveTypes.Int64})
 	for _, typ := range []arrow.DataType{st, arrow.ListOf(st), arrow.MapOf(arrow.BinaryTypes.String, st)} {
 		got := ShortType(typ)
 		if HasControls(got, false) || got != Sanitize(got, false) {
