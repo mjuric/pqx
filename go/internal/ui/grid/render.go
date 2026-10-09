@@ -58,7 +58,17 @@ func (g *Grid) View(w, h int) string {
 	if w <= 0 || h <= 0 {
 		return ""
 	}
+	if vw := g.viewW(); vw != g.lastViewW {
+		// the row labels widened (rows arrived) or pins changed: a cursor
+		// that was on screen stays there (Python's scroll_cursor_fitted)
+		if g.lastInView && !g.cursorInView() {
+			g.scrollToColumn()
+		}
+		g.lastViewW = vw
+	}
 	g.fitVisible()
+	g.lastInView = g.cursorInView()
+	g.drawnCol = g.curCol
 	g.drawing = true
 	defer func() { g.drawing = false }()
 	var b strings.Builder
@@ -101,7 +111,7 @@ func (g *Grid) View(w, h int) string {
 			g.writeSlot(&b, s, g.styledText(text, st), cells.Width(text), just(c), bold, bold)
 			x += s.sw
 		}
-		b.WriteString(g.styledText(spaces(right-x), bold))
+		b.WriteString(spaces(right - x)) // (past the last column: no header style)
 		edge = " "
 		if line == 0 && hr > 0 {
 			edge = g.styledText("›", bold)
@@ -137,10 +147,11 @@ func (g *Grid) View(w, h int) string {
 				t = &ph
 			}
 			extra := styled.Style{}
+			if s.col < g.pinned() {
+				extra = bold // DataTable's fixed style, the cursor's too
+			}
 			if r == g.curRow && s.col == g.curCol {
-				extra = cur
-			} else if s.col < g.pinned() {
-				extra = bold
+				extra = extra.Plus(cur)
 			}
 			var out string
 			switch {
@@ -178,11 +189,7 @@ func (g *Grid) cursorStyle() styled.Style {
 // style gapSt, padding. A clipped slot is cut at the screen's edge, as
 // DataTable crops it.
 func (g *Grid) writeSlot(b *strings.Builder, s slot, out string, tw int, j styled.Justify, padSt, gapSt styled.Style) {
-	full := s.w
-	if s.clipped && s.col >= 0 {
-		full = g.colWidth(g.cols[s.col].Name)
-	}
-	gap := max(0, full-tw)
+	gap := max(0, s.w-tw)
 	var l, r int
 	switch j {
 	case styled.Right:
@@ -203,7 +210,7 @@ func (g *Grid) writeSlot(b *strings.Builder, s slot, out string, tw int, j style
 	if s.clipped {
 		var cell strings.Builder
 		write(&cell)
-		b.WriteString(ansi.Truncate(cell.String(), s.sw, ""))
+		b.WriteString(ansi.Cut(cell.String(), s.skip, s.skip+s.sw))
 		return
 	}
 	write(b)

@@ -109,7 +109,7 @@ func TestColumnGrowsWhenAWiderCellIsDrawn(t *testing.T) {
 		}
 		return nil, false
 	}
-	h := newHarness(t, ds, 120, 30)
+	h := newHarness(t, ds, 120, 30, hopts{page: 1})
 	g := h.g
 	w0 := g.colWidth("name")
 	if w0 >= len(long) {
@@ -214,8 +214,8 @@ func TestPinningFitsTheColumnsItBringsIntoView(t *testing.T) {
 	h.press("end")
 	h.send(kit.GotoMsg{Row: 503})
 	h.settle()
-	if g.left <= 1 {
-		t.Fatalf("name isn't scrolled off the left: left %d", g.left)
+	if g.fits(1) {
+		t.Fatalf("name isn't scrolled off the left: scroll %d", g.sx)
 	}
 	if g.colWidth("name") >= len(long) {
 		t.Logf("name fitted already, from the rows sampled when it was read")
@@ -245,8 +245,8 @@ func TestCursorStaysInViewAtTheFarRight(t *testing.T) {
 	g := h.g
 	for _, what := range []string{"s", "-", "c", "filter", "f", "f", ">", "<"} {
 		h.press("end")
-		if g.left == 0 || !g.cursorInView() {
-			t.Fatalf("%s: End: left %d, in view %v", what, g.left, g.cursorInView())
+		if g.sx == 0 || !g.cursorInView() {
+			t.Fatalf("%s: End: scroll %d, in view %v", what, g.sx, g.cursorInView())
 		}
 		switch what {
 		case "c":
@@ -262,7 +262,7 @@ func TestCursorStaysInViewAtTheFarRight(t *testing.T) {
 		if !g.cursorInView() {
 			t.Errorf("%s: the cursor's cell is off screen", what)
 		}
-		if strings.Contains(h.grid()[0], "‹") == (g.left == g.pinned()) {
+		if strings.Contains(h.grid()[0], "‹") == (g.sx == 0) {
 			t.Errorf("%s: left marker wrong: %q", what, h.grid()[0])
 		}
 	}
