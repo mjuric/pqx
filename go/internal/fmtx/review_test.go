@@ -64,7 +64,9 @@ func TestStrftimeReviewCases(t *testing.T) {
 		eq(t, "%9999999Y", fo(naive, KindTime, specOv("%9999999Y")), "")
 		eq(t, "many", fo(naive, KindTime, specOv(strings.Repeat("%3000Y", 50))), "")
 	}
-	if d := time.Since(start); d > 200*time.Millisecond {
+	// (formatting it in full took about 11 ms per cell, over 2 s here; the
+	// limit leaves room for busy CI runners and -race)
+	if d := time.Since(start); d > time.Second {
 		t.Errorf("huge widths took %v", d)
 	}
 	s := Format(naive, KindTime, Opts{Override: specOv("%2046Y|"), Unsafe: true})
