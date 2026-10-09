@@ -31,10 +31,13 @@ type harness struct {
 	out  int
 
 	quits   int
+	totals  int // TotalMsg seen
+	views   int // ViewChangedMsg seen
 	notes   []kit.NotifyMsg
 	status  kit.StatusMsg
 	copies  []string
 	dialogs []string
+	cfg     string // XDG_CONFIG_HOME of the test
 }
 
 // fakeDialogs records which dialog was asked for.
@@ -73,6 +76,9 @@ func newHarness(t testing.TB, ds data.Dataset, w, h int, o ...hopts) *harness {
 	if len(o) > 0 {
 		op = o[0]
 	}
+	// never the real formats.yaml
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
 	formats := map[string]fmtx.Override{}
 	for k, v := range op.formats {
 		formats[k] = v
@@ -87,7 +93,7 @@ func newHarness(t testing.TB, ds data.Dataset, w, h int, o ...hopts) *harness {
 		State: &kit.State{Total: ds.NumRows(), Columns: ds.Columns(), Formats: formats, Hidden: map[string]bool{}},
 		Tasks: kit.NewTasks(),
 	}
-	hs := &harness{t: t, env: env, ds: ds, msgs: make(chan tea.Msg, 1000)}
+	hs := &harness{t: t, env: env, ds: ds, msgs: make(chan tea.Msg, 1000), cfg: cfg}
 	if !op.noDlg {
 		env.Dialogs = fakeDialogs{hs}
 	}
@@ -118,6 +124,10 @@ func (h *harness) send(msg tea.Msg) {
 		h.status = m
 	case kit.CopyMsg:
 		h.copies = append(h.copies, m.Text)
+	case kit.TotalMsg:
+		h.totals++
+	case kit.ViewChangedMsg:
+		h.views++
 	}
 	_, cmd := h.app.Update(msg)
 	h.exec(cmd)

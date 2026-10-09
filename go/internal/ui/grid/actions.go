@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/mjuric/pqx/go/internal/cells"
 	"github.com/mjuric/pqx/go/internal/config"
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/fmtx"
@@ -59,7 +60,7 @@ func (g *Grid) onKey(k tea.KeyPressMsg) tea.Cmd {
 	case "F":
 		return g.formatDialog()
 	case "y":
-		return g.withCursorValue(g.copyValue)
+		return g.withCursorValue("y", g.copyValue)
 	case "i":
 		if name := g.curName(); name != "" {
 			return kit.Send(kit.ColumnStatsMsg{Column: name})
@@ -314,7 +315,7 @@ func (g *Grid) onRaw() {
 		w := 0
 		for r := a; r < b; r++ {
 			if v, ok := d.cell(c.Name, r); ok {
-				w = max(w, len([]rune(g.format(c, v).plain)))
+				w = max(w, cells.Width(g.format(c, v).plain))
 			}
 		}
 		g.grow(c.Name, w)
@@ -350,7 +351,7 @@ func (g *Grid) formatDialog() tea.Cmd {
 		return nil
 	}
 	c := g.cols[g.curCol]
-	return g.withCursorValue(func(_ string, v data.Value) tea.Cmd {
+	return g.withCursorValue("F", func(_ string, v data.Value) tea.Cmd {
 		return kit.Send(kit.OpenDialogMsg{Dialog: g.env.Dialogs.Format(c.Column, g.st.Formats[c.Name], v)})
 	})
 }
@@ -424,7 +425,8 @@ func (g *Grid) gotoRow(r int64) tea.Cmd {
 	r = max(0, r)
 	if lim := g.v.limit(); lim >= 0 {
 		r = min(r, max(0, lim-1))
-	} else {
+	}
+	if g.v.total < 0 {
 		g.v.hope = max(g.v.hope, r+1)
 	}
 	g.curRow = r

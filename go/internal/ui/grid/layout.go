@@ -31,6 +31,11 @@ func (g *Grid) format(c column, v any) cellTx {
 		return cellTx{plain: cells.FailedMark, w: 1, style: g.look.Style("error"), just: just(c)}
 	}
 	t := fmtx.Cell(v, c.kind, g.opts(c))
+	if fmtx.HasControls(t.Plain, false) {
+		// fmtx's text is safe, but a cell is one line: tabs and newlines too
+		// are shown as symbols (their spans would no longer line up)
+		t.Plain, t.Spans = fmtx.Sanitize(t.Plain, false), nil
+	}
 	return cellTx{plain: t.Plain, w: cells.Width(t.Plain), style: t.Style, just: t.Justify, spans: t.Spans}
 }
 
@@ -116,7 +121,8 @@ func (g *Grid) header(c column) (string, string) {
 			break
 		}
 	}
-	sub := fmtx.ShortType(c.Arrow)
+	// (a type names the fields of a struct: text from the file)
+	sub := fmtx.Sanitize(fmtx.ShortType(c.Arrow), false)
 	if c.Unit != "" {
 		sub += "·" + fmtx.Sanitize(c.Unit, false)
 	}

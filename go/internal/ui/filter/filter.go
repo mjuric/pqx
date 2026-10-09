@@ -163,9 +163,14 @@ func (f *Filter) View(w, h int) string {
 		f.in.SetWidth(avail)
 	}
 	line := look.Render(styled.New(p, look.Style("accent")))
-	if f.focused || f.in.Value() != "" {
+	switch {
+	case fmtx.HasControls(f.in.Value(), false):
+		// text set by another part (a value of the file, quoted) can hold
+		// control characters: shown as symbols, never as they are
+		line += ansi.Truncate(fmtx.Sanitize(f.in.Value(), false), avail, "…")
+	case f.focused || f.in.Value() != "":
 		line += f.in.View()
-	} else {
+	default:
 		line += look.Render(styled.New(ansi.Truncate(f.hint, max(0, w-ansi.StringWidth(p)), "…"), look.Style("dim")))
 	}
 	if e != "" {
@@ -402,20 +407,20 @@ func (f *Filter) fail(err error) tea.Cmd {
 var (
 	errPrefix  = regexp.MustCompile(`^(Binder|Parser|Catalog|Conversion|Invalid Input|Out of Range) Error:\s*`)
 	notFound   = regexp.MustCompile(`Referenced column ("[^"]+") not found in FROM clause!?`)
-	candidates = regexp.MustCompile(`Candidate bindings: "(?:[^".]+\.)?([^"]+)"`)
+	candidates = regexp.MustCompile(`Candidate bindings: "(?:[^".\n]+\.)?([^"\n]+)"`)
 )
 
 // describe is an error's first line, shortened as Python's _show_error
 // does, and a hint ("did you mean …?").
 func describe(err error) (string, string) {
-	msg := fmtx.Sanitize(strings.TrimSpace(err.Error()), true)
+	msg := strings.TrimSpace(err.Error())
 	first, _, _ := strings.Cut(msg, "\n")
 	first = errPrefix.ReplaceAllString(first, "")
 	first = notFound.ReplaceAllString(first, "unknown column $1")
 	first = strings.TrimRight(first, "!")
 	hint := "edit with /"
 	if m := candidates.FindStringSubmatch(msg); m != nil {
-		hint = `did you mean "` + m[1] + `"?`
+		hint = `did you mean "` + fmtx.Sanitize(trunc(m[1], 80), false) + `"?`
 	}
 	return fmtx.Sanitize(trunc(first, 160), false), hint
 }

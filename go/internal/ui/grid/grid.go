@@ -33,12 +33,12 @@ const Part = "grid"
 // cells of border and padding each side of the panel; the details pane and
 // the column between it and the grid.
 const (
-	margin     = 1
-	aboveRows  = 2 + 3
-	keyRows    = 1
-	panelRows  = 2 + 1 + 1
-	sideCells  = 4
-	detailW    = 53 + 1
+	margin    = 1
+	aboveRows = 2 + 3
+	keyRows   = 1
+	panelRows = 2 + 1 + 1
+	sideCells = 4
+	detailW   = 53 + 1
 )
 
 const (
@@ -49,8 +49,9 @@ const (
 	// pad is the space on each side of a cell (DataTable's cell_padding).
 	pad = 1
 	// cacheLimit is the number of rows the cache keeps per view before it
-	// drops rows far from the screen.
-	cacheLimit = 50_000
+	// drops rows far from the screen (each row holds a value, and once drawn
+	// a formatted cell, per column read).
+	cacheLimit = 4_000
 	// widthSampleRows: rows spread through a window that size a column
 	// whose widest value can't be guessed (Python's WIDTH_SAMPLE_ROWS).
 	widthSampleRows = 16

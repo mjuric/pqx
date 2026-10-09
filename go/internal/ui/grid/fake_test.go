@@ -49,6 +49,11 @@ type fakeDS struct {
 	noColumnsAPI bool
 	// footer, if set, is FooterSummary's answer.
 	footer []data.ChunkSummary
+	// failFrom, if > 0, makes Fetch fail for windows reaching row failFrom.
+	failFrom int64
+	// shortAt, if > 0, makes Fetch return no rows at or past it (the view
+	// is shorter than Count says).
+	shortAt int64
 	// special, if set, overrides truth for some cells.
 	special func(name string, fr int64) (data.Value, bool)
 }
@@ -213,6 +218,12 @@ func (f *fakeDS) Fetch(ctx context.Context, v data.View, start int64, n int, col
 	_, total, err := f.viewRows(v)
 	if err != nil {
 		return data.Window{}, err
+	}
+	if f.failFrom > 0 && start+int64(n) > f.failFrom {
+		return data.Window{}, errors.New("IO Error: \x1b[31mbroken\x1b[0m page")
+	}
+	if f.shortAt > 0 {
+		total = min(total, f.shortAt)
 	}
 	end := min(start+int64(n), total)
 	w := data.Window{Start: start, Cols: map[string][]data.Value{}}

@@ -37,6 +37,8 @@ type viewData struct {
 	labelW  int                          // row-label width, grown likewise
 
 	confirmed bool // a read of this view has succeeded
+
+	noticed map[string]bool // columns whose failure was reported (once per view)
 }
 
 func (g *Grid) newViewData(v data.View) *viewData {
@@ -47,6 +49,7 @@ func (g *Grid) newViewData(v data.View) *viewData {
 		vals:    map[string]map[int64]any{},
 		text:    map[string]map[int64]*cellTx{},
 		colW:    map[string]int{},
+		noticed: map[string]bool{},
 		labelW:  1,
 	}
 	return d
@@ -293,6 +296,14 @@ func readColumns(ctx context.Context, ds data.Dataset, view data.View, req colsR
 		if w.Len < int(hi-lo) {
 			return out, errors.New("the view ended early")
 		}
+		// the view's rows must still be the file rows asked for
+		if w.FileRows != nil {
+			for i, r := range req.rows {
+				if j := int(r - lo); j >= len(w.FileRows) || w.FileRows[j] != req.fileRows[i] {
+					return out, errors.New("the view's rows moved")
+				}
+			}
+		}
 		return out, nil
 	}
 	w, err := ds.FetchColumns(ctx, req.fileRows, req.cols)
@@ -362,6 +373,7 @@ func (g *Grid) onCancelled(tags []string) {
 		switch {
 		case t == "page":
 			g.page = nil
+			g.dropUnloadedWaiters()
 		case t == "cols":
 			g.cols1 = nil
 		case t == "widths":
@@ -387,6 +399,7 @@ func (g *Grid) onPage(r pageResult) tea.Cmd {
 		}
 		req := r.req
 		g.failed = &req
+		g.dropUnloadedWaiters()
 		msg := fmtx.Sanitize(truncRunes(firstLine(r.err), 160), false)
 		return tea.Batch(
 			kit.Send(kit.NotifyMsg{Severity: kit.Error, Title: "✗ Query failed", Text: fmtx.Sanitize(truncRunes(r.err.Error(), 600), true)}),
@@ -481,6 +494,16 @@ func (g *Grid) failedNotice(failed map[string]error) tea.Cmd {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	fresh := false
+	for _, n := range names {
+		if !g.v.noticed[n] {
+			g.v.noticed[n] = true
+			fresh = true
+		}
+	}
+	if !fresh {
+		return nil // said once for this view
+	}
 	first = failed[names[0]]
 	s := "s"
 	if len(failed) == 1 {
@@ -557,32 +580,42 @@ func (g *Grid) labelOf(r int64) int64 {
 	return r
 }
 
-// evict drops cached rows far from the screen.
+// evict drops cached rows far from the screen. It copies what it keeps
+// into new maps: Go's maps don't shrink when entries are deleted.
 func (g *Grid) evict() {
 	n := int64(g.bodyH())
-	lo, hi := g.top-5*n, g.top+6*n
+	lo, hi := g.top-2*n, g.top+3*n
+	keep := func(r int64) bool { return r >= lo && r < hi }
 	d := g.v
-	for r := range d.fileRow {
-		if r < lo || r >= hi {
-			delete(d.fileRow, r)
+	rows := map[int64]int64{}
+	for r, fr := range d.fileRow {
+		if keep(r) {
+			rows[r] = fr
 		}
 	}
-	for _, m := range []map[string]map[int64]any{d.vals} {
-		for _, col := range m {
-			for r := range col {
-				if r < lo || r >= hi {
-					delete(col, r)
-				}
+	d.fileRow = rows
+	vals := map[string]map[int64]any{}
+	for name, col := range d.vals {
+		m := map[int64]any{}
+		for r, v := range col {
+			if keep(r) {
+				m[r] = v
 			}
 		}
+		vals[name] = m
 	}
-	for _, col := range d.text {
-		for r := range col {
-			if r < lo || r >= hi {
-				delete(col, r)
+	d.vals = vals
+	text := map[string]map[int64]*cellTx{}
+	for name, col := range d.text {
+		m := map[int64]*cellTx{}
+		for r, t := range col {
+			if keep(r) {
+				m[r] = t
 			}
 		}
+		text[name] = m
 	}
+	d.text = text
 }
 
 // revert goes back to the view before a filter that failed on its first

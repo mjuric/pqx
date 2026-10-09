@@ -16,16 +16,17 @@ import (
 
 // waiter is an action waiting for the value of (column, row) in view gen.
 type waiter struct {
-	gen  int
-	row  int64
-	name string
-	fn   func(name string, v data.Value) tea.Cmd
+	gen    int
+	row    int64
+	name   string
+	action string // the key: one waits per (row, column, key)
+	fn     func(name string, v data.Value) tea.Cmd
 }
 
 // withCursorValue calls fn with the value under the cursor, reading its
 // column first if need be (Python's _with_cursor_value): one read per
 // column, which every action on it waits for.
-func (g *Grid) withCursorValue(fn func(name string, v data.Value) tea.Cmd) tea.Cmd {
+func (g *Grid) withCursorValue(action string, fn func(name string, v data.Value) tea.Cmd) tea.Cmd {
 	name := g.curName()
 	if name == "" {
 		return nil
@@ -38,7 +39,13 @@ func (g *Grid) withCursorValue(fn func(name string, v data.Value) tea.Cmd) tea.C
 		}
 		return fn(name, v)
 	}
-	g.waiters = append(g.waiters, waiter{gen: d.gen, row: r, name: name, fn: fn})
+	w := waiter{gen: d.gen, row: r, name: name, action: action, fn: fn}
+	for _, o := range g.waiters {
+		if o.gen == w.gen && o.row == w.row && o.name == w.name && o.action == w.action {
+			return nil // pressed again while it waits: once is enough
+		}
+	}
+	g.waiters = append(g.waiters, w)
 	if !d.loaded(r) || g.cellTasks[name] {
 		return g.ensure() // the row's read brings it
 	}
@@ -73,6 +80,19 @@ func (g *Grid) runWaiters() tea.Cmd {
 	}
 	g.waiters = keep
 	return tea.Batch(cmds...)
+}
+
+// dropUnloadedWaiters drops the actions waiting for rows not read: their
+// read was cancelled (Esc) or failed, and they must not fire later when
+// the rows arrive for another reason (Python pops _cell_waiters).
+func (g *Grid) dropUnloadedWaiters() {
+	keep := g.waiters[:0]
+	for _, w := range g.waiters {
+		if w.gen == g.v.gen && g.v.loaded(w.row) {
+			keep = append(keep, w)
+		}
+	}
+	g.waiters = keep
 }
 
 // dropWaiters drops the actions waiting for column name (its read was
@@ -189,7 +209,7 @@ func (g *Grid) startFooter() tea.Cmd {
 	}
 	g.footerStarted = true
 	ds := g.ds
-	return g.env.Tasks.Run("widths", "reading column statistics", false, func(ctx context.Context) tea.Msg {
+	return g.env.Tasks.RunBackground("widths", func(ctx context.Context) tea.Msg {
 		s, err := ds.FooterSummary(ctx)
 		return footerResult{sums: s, err: err}
 	})
