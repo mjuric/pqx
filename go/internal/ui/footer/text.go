@@ -60,7 +60,8 @@ func Slice(t styled.Text, a, b int) styled.Text {
 func Wrap(t styled.Text, w int) []styled.Text { return wrap(t, w, false) }
 
 // WrapCell is Wrap as Rich wraps a table cell's text: the spaces at a break
-// stay at the end of the line as far as they fit.
+// stay at the end of the line as far as they fit, and a word longer than a
+// line is cut to it with "…" (the cell's ellipsis overflow), not folded.
 func WrapCell(t styled.Text, w int) []styled.Text { return wrap(t, w, true) }
 
 func wrap(t styled.Text, w int, keep bool) []styled.Text {
@@ -90,14 +91,38 @@ func wrap(t styled.Text, w int, keep bool) []styled.Text {
 			// divide_line, then rstrip_end)
 			e, next := end, end
 			if end < len(r) && r[end] != ' ' {
+				folded := true
 				for i := end - 1; i > start; i-- {
 					if r[i] == ' ' {
-						e, next = i, i
+						e, next, folded = i, i, false
 						for keep && e < end && r[e] == ' ' {
 							e++
 						}
 						break
 					}
+				}
+				if folded && keep {
+					// a word longer than the line: Rich's table cells
+					// (overflow "ellipsis") cut it to the line with "…" and
+					// drop the rest of it
+					cut := end
+					for cut > start+1 && cellWidth(r[start:cut]) > w-1 {
+						cut--
+					}
+					l := Slice(line, start, cut)
+					l.AppendText(Slice(line, cut, cut+1))
+					rl := []rune(l.Plain)
+					rl[len(rl)-1] = '…'
+					l.Plain = string(rl)
+					out = append(out, l)
+					for next < len(r) && r[next] != ' ' {
+						next++
+					}
+					for next < len(r) && r[next] == ' ' {
+						next++
+					}
+					start = next
+					continue
 				}
 			}
 			for !keep && e > start && end < len(r) && r[e-1] == ' ' {
@@ -133,3 +158,5 @@ func Fit(s string, w int) string {
 	}
 	return s + strings.Repeat(" ", w-n)
 }
+
+func cellWidth(r []rune) int { return ansi.StringWidth(string(r)) }

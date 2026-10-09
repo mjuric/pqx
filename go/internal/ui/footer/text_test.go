@@ -174,3 +174,22 @@ func TestTableStyles(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// In a table cell a word longer than the line is cut with "…", on a line of
+// its own, as Rich's ellipsis overflow does.
+func TestWrapCellCutsLongWords(t *testing.T) {
+	var tx styled.Text
+	tx.Append("demo.parquet", styled.Style{Fg: "cyan"})
+	tx.Append("   /a/very/long/directory/", styled.Style{Dim: true})
+	got := WrapCell(tx, 12)
+	var plain []string
+	for _, l := range got {
+		plain = append(plain, l.Plain)
+	}
+	if strings.Join(plain, "|") != "demo.parquet|/a/very/lon…" {
+		t.Fatalf("%q", plain)
+	}
+	if sp := got[1].Spans; len(sp) == 0 || !sp[len(sp)-1].Style.Dim || sp[len(sp)-1].End != 12 {
+		t.Fatalf("styles %+v", got[1])
+	}
+}

@@ -2,37 +2,4 @@
 # checkpoints that fail, and why. A run fails on anything not listed here: a new
 # failing checkpoint, a changed status, or a listed entry that now passes (XPASS).
 # Regenerate with `run.py --write-xfail`; reasons already here are kept.
-xfail:
-  esc-pane-stats@120x40:
-    status: diff
-    checks:
-    - data
-    reason: 'data: line 36, column 59: python ''                 │ │                    '' vs go ''            ┌───────────────────────────'' (+2 more lines)'
-  metadata-tab@120x40:
-    status: diff
-    checks:
-    - meta
-    - meta-pgdn
-    reason: 'meta: line 8, column 55: python ''ls/a4210df6-…  │ │  0          0  2,500 '' vs go ''ls/a4210df6-c  │ │  0          0  2,500 '' (+18 more lines); meta-pgdn: line 8, column 55: python ''ls/a4210df6-…  │
-      │  0          0  2,500 '' vs go ''ls/a4210df6-c  │ │  0          0  2,500 '' (+18 more lines)'
-  metadata-tab@200x50:
-    status: diff
-    checks:
-    - meta
-    - meta-pgdn
-    reason: 'meta: line 8, column 95: python ''scratchpad/w…  │ │  0          0  2,500 '' vs go ''scratchpad/wp  │ │  0          0  2,500 '' (+15 more lines); meta-pgdn: line 8, column 95: python ''scratchpad/w…  │
-      │  0          0  2,500 '' vs go ''scratchpad/wp  │ │  0          0  2,500 '' (+15 more lines)'
-  tabs@120x40:
-    status: diff
-    checks:
-    - meta
-    - wrap-prev
-    reason: 'meta: line 8, column 55: python ''ls/a4210df6-…  │ │  0          0  2,500 '' vs go ''ls/a4210df6-c  │ │  0          0  2,500 '' (+18 more lines); wrap-prev: line 8, column 55: python ''ls/a4210df6-…  │
-      │  0          0  2,500 '' vs go ''ls/a4210df6-c  │ │  0          0  2,500 '' (+18 more lines)'
-  tabs@200x50:
-    status: diff
-    checks:
-    - meta
-    - wrap-prev
-    reason: 'meta: line 8, column 95: python ''scratchpad/w…  │ │  0          0  2,500 '' vs go ''scratchpad/wp  │ │  0          0  2,500 '' (+15 more lines); wrap-prev: line 8, column 95: python ''scratchpad/w…  │
-      │  0          0  2,500 '' vs go ''scratchpad/wp  │ │  0          0  2,500 '' (+15 more lines)'
+xfail: {}
