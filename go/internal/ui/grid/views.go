@@ -75,9 +75,15 @@ func (g *Grid) onViewChanged() tea.Cmd {
 		g.v.setTotal(g.ds.NumRows())
 		g.v.confirmed = true
 	}
-	// widths as the values will likely be, so the leftmost column kept
-	// stays leftmost when they arrive (Python's _reserve_widths)
-	g.reserve(nil)
+	if !old.view.IsSQL() && !st.View.IsSQL() && reflect.DeepEqual(oldNames, g.allNames()) {
+		// the same columns: as wide as they were until the new rows widen
+		// them, so the columns on screen (and the leftmost one kept) stay
+		// where they were (Python fits the new page's widths before it
+		// shows it)
+		for name, w := range old.colW {
+			g.v.colW[name] = w
+		}
+	}
 	// the cursor stays on the current column if the view shows it
 	g.curCol = 0
 	if i, ok := g.byName[st.Current]; ok {
