@@ -192,7 +192,8 @@ type FileInfo struct {
 	Uncompressed  int64
 }
 
-// KeyValue is one entry of the file's key-value metadata, in file order.
+// KeyValue is one entry of the file's key-value metadata; KeyValueMetadata
+// lists them sorted by key, as PyArrow (and so Python pqx) does.
 type KeyValue struct {
 	Key, Value string // raw
 }

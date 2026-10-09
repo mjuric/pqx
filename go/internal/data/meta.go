@@ -1,6 +1,7 @@
 package data
 
 import (
+	"slices"
 	"strings"
 	"sync"
 	"unicode"
@@ -96,6 +97,8 @@ func (d *dataset) KeyValueMetadata() []KeyValue {
 		at[k] = len(out)
 		out = append(out, KeyValue{Key: k, Value: vals[i]})
 	}
+	// sorted by key, as PyArrow (and so Python pqx) gives them
+	slices.SortFunc(out, func(a, b KeyValue) int { return strings.Compare(a.Key, b.Key) })
 	return out
 }
 

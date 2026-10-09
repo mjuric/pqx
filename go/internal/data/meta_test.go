@@ -65,18 +65,31 @@ func TestKeyValueMetadata(t *testing.T) {
 	if len(kv) != len(raw) || len(kv) < 2 {
 		t.Fatalf("%d entries, the footer has %d", len(kv), len(raw))
 	}
+	// every footer entry, sorted by key as PyArrow gives them
+	want := map[string]string{}
+	for _, e := range raw {
+		want[e.Key] = e.GetValue()
+	}
 	for i, e := range kv {
-		if e.Key != raw[i].Key || e.Value != raw[i].GetValue() {
-			t.Errorf("entry %d: %q, the footer has %q", i, e.Key, raw[i].Key)
+		if i > 0 && kv[i-1].Key >= e.Key {
+			t.Errorf("not sorted at %d: %q after %q", i, e.Key, kv[i-1].Key)
+		}
+		if want[e.Key] != e.Value {
+			t.Errorf("%q: value differs from the footer's", e.Key)
 		}
 	}
-	// a repeated key: listed once, where it first appears, with its last value
+	// a repeated key: listed once, with its last value
 	dup := *raw[0]
 	v := "second"
 	dup.Value = &v
 	ds.md.FileMetaData.KeyValueMetadata = append(raw, &dup)
 	kv2 := ds.KeyValueMetadata()
-	if len(kv2) != len(kv) || kv2[0].Key != kv[0].Key || kv2[0].Value != "second" {
-		t.Errorf("repeated key: %+v", kv2)
+	if len(kv2) != len(kv) {
+		t.Fatalf("repeated key: %+v", kv2)
+	}
+	for _, e := range kv2 {
+		if e.Key == raw[0].Key && e.Value != "second" {
+			t.Errorf("repeated key %q has %q, want its last value", e.Key, e.Value)
+		}
 	}
 }

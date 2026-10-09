@@ -274,3 +274,7 @@ func (g *Grid) failColumn(name string) {
 		}
 	}
 }
+
+// CursorColumn is the column of the cursor ("" if there are none), for the
+// details pane: the current column may be one the grid doesn't show.
+func (g *Grid) CursorColumn() string { return g.curName() }
