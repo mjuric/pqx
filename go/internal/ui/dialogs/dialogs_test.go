@@ -560,7 +560,7 @@ func TestDialogsDoNotShiftTheScreen(t *testing.T) {
 				t.Fatalf("%s: line %d moved beside the dialog:\n%q\n%q", name, i, before[i], after[i])
 			}
 		}
-		if !strings.HasPrefix(before[0], " pqx 0.1.0  ·  demo.parquet") || after[0] != before[0] {
+		if !strings.HasPrefix(before[0], "  pqx 0.1.0  ·  demo.parquet") || after[0] != before[0] {
 			t.Fatalf("%s: title bar %q", name, after[0])
 		}
 		a.Update(kit.CloseDialogMsg{})
