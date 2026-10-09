@@ -7,10 +7,12 @@ threads: 1
 quiet: 1.0
 steps:
   - keys: "3"
-    wait: "Profiled"
+    wait: '✓ Profiled diaSourceId'
   - keys: m
-    toast: "Sampling on"
+    toast: 'Sampling on'
     check: sampling-on
+    expect: '! Profiled diaSourceId, sampled'
   - keys: m
-    toast: "Sampling off"
+    toast: 'Sampling off'
     check: sampling-off
+    expect: '✓ Profiled diaSourceId'

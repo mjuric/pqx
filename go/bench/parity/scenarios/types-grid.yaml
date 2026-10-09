@@ -7,10 +7,14 @@ covers:
 fixture: types
 steps:
   - check: first
+    expect: '∅'
   - keys: right right right right right right right right right right right
   - check: middle
   - keys: end
   - check: end
-  - keys: down down down d
-    wait: "file row"
+  - keys: down down down
+    wait: 'row 3\b'
+  - keys: d
+    wait: 'row 3 · file row 3'
   - check: detail-null-row
+    expect: '∅'

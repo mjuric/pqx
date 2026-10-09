@@ -45,7 +45,7 @@ cd bench/parity
 | `-j N` | 4 | runs at a time. More makes the apps slow to react, and screens can settle before the app has answered |
 | `--threads N` | 4 | passed to both apps as `--threads` (a scenario can ask for 1) |
 | `--size WxH` | the scenario's `sizes`, else 120x40 and 200x50 | repeatable |
-| `--strict-colours` | off | colour differences fail too (else they are only reported) |
+| `--lenient-colours` | off | colour differences are reported but don't fail (by default they fail) |
 | `--keep-raw` | off | save every run's raw terminal output under `<report>/raw/` |
 | `--timeout-scale X` | 1 | multiply every wait, for slow machines |
 | `--write-xfail` | | rewrite `expected_failures.yaml` from this run (keeps the reasons already there) |
@@ -60,10 +60,13 @@ directory is deleted unless it had errors. Two runner invocations must not share
 scratch directory at the same time.
 
 Both apps should report the same version: the title bar's version is normalized to
-`<VER>`, but its length decides what fits on a narrow screen. Build Go with
-`make build VERSION=<python pqx's version>` for the narrow-title scenario.
+`<VER>`, but its length decides what fits on a narrow screen. Scenarios marked
+`same_version: true` (narrow-title) are reported as SKIP when the two `--version`
+outputs differ; build Go with `make build VERSION=<python pqx's version>` to run them.
 
-The full suite (58 scenarios, most at 2 sizes, 2 apps) takes about 11 minutes with `-j 4` for Python against itself, and about 35 minutes against an incomplete Go version (every missed wait runs to its timeout).
+The full suite (80 scenarios, most at 2 sizes, 2 apps) takes about 15 minutes with
+`-j 6` for Python against itself, and much longer against an incomplete Go version
+(every missed wait runs to its timeout). Keep `-j` at 8 or below on shared machines.
 
 ## Reading the report
 
@@ -71,7 +74,7 @@ The full suite (58 scenarios, most at 2 sizes, 2 apps) takes about 11 minutes wi
 
 - `report.txt`: one line per scenario and size, then the details of each that isn't a
   clean pass;
-- `summary.json`: the status and counts per scenario and size;
+- `summary.json`: the status, the failing checkpoints and the counts per scenario and size;
 - `screens.json`: every captured screen (normalized text, clipboard) of every run, by
   `scenario@WxH:app`; `--only` writes `screens-APP.txt` and `screens-APP.json`.
 
@@ -80,12 +83,15 @@ The full suite (58 scenarios, most at 2 sizes, 2 apps) takes about 11 minutes wi
 | PASS | every checkpoint has the same text, the same cell styles and the same clipboard |
 | DIFF | a checkpoint's text (or clipboard, or an exported file) differs |
 | STYLE | the text is the same, but bold, faint, reverse, underline or italic differ somewhere |
+| COLOUR | the text and styles are the same, but colours differ (`--lenient-colours` lets this pass) |
 | ERROR | the compared app failed a step: a `wait` never matched, a notification never showed, it exited |
 | ERROR-REF | the reference failed a step: the scenario is wrong, or the reference is flaky |
-| XFAIL | not a pass, and listed in `expected_failures.yaml` |
+| XFAIL | fails exactly as `expected_failures.yaml` says (the same status, no other checkpoints) |
+| CHANGED | listed, but fails differently: another status, or checkpoints not listed |
 | XPASS | listed in `expected_failures.yaml` but passes: remove it from the list |
+| SKIP | `same_version` scenario, and the two apps report different versions |
 
-The exit status is 0 when every result is PASS or XFAIL.
+The exit status is 0 when every result is PASS, XFAIL or SKIP.
 
 A text difference is shown as the reference's line, the other app's line, and a line
 of `^` under the characters that differ:
@@ -109,9 +115,13 @@ Before comparing, and before deciding a screen has settled, each line goes throu
 (see `NORMALIZE` in `run.py`):
 
 - the version after `pqx ` → `<VER>`;
-- timings (`0.12 s`, `120 ms`, `35µs`) → `<T>`, and a running count's `·  00:03 elapsed` is blanked;
-- a spinner frame before a word → `*`;
-- the run's output directory → `<OUT>`, the fixture directory → `<FIX>`, the slot
+- a timing between pqx's `·` separators (`·  0.12 s  ·`, `· 120 ms`: the status line,
+  the Stats and Plot headers, the export notice) → `<T>`; timings anywhere else are
+  compared as they are;
+- a running count's `·  00:03 elapsed` is blanked (same width, so what follows stays put);
+- a spinner frame at the start of a status line (`│ ⠹ Counting`) → `*`;
+- the run's output directory → `<OUT>`, its config directory → `<CONFIG>`, the fixture
+  directory → `<FIX>`, the slot
   letter in `runs/a/…` → `_`;
 - trailing spaces.
 
@@ -129,17 +139,21 @@ description: |
 covers:                       # the README / help / design lines this checks
   - "README All keys: s | sort by the cursor column (asc → desc → off)"
 fixture: demo                 # <fixtures>/demo.parquet, opened as the last argument
-args: ["-w", "band = 'g'"]    # more arguments (before the file); {fixture} {fixtures} {out} expand
+args: ["-w", "band = 'g'"]    # more arguments (before the file); {fixture} {fixtures} {out} {config} expand
 sizes: [[120, 40]]            # default: 120x40 and 200x50
 ready: "✓ [\\d,]+ rows"        # startup regex (default: the fixture's, in fixtures.yaml)
 threads: 1                    # --threads for this scenario (1 makes DuckDB aggregates repeatable)
 quiet: 1.0                    # seconds of an unchanged screen that count as settled (default 0.5)
 config: "columns:\n  ra: .2f\n"   # a formats.yaml to start with
 file: false                   # don't open a file (for CLI-only scenarios)
+same_version: true            # SKIP unless both apps report the same version
 steps:
   - keys: right right right   # named keys or single characters, space-separated (or a list)
   - keys: s
+    wait: 'sorted ra ↑'       # a marker only the key's effect produces
     check: asc                # capture a checkpoint named asc (after the screen settles)
+    expect: 'ra ↑'            # and the reference must show what the scenario claims
+    expect@120x40: 'row 0'    # a key ending in @WxH applies only at that size
   - text: "band = 'r'"        # type literally ({out} etc. expand)
   - keys: enter
     wait: "✓ [\\d,]+ rows"     # then wait for this regex on the (normalized) screen
@@ -150,12 +164,16 @@ steps:
   - keys: e
     wait: "Export current view"
   - file: "{out}/view.csv"    # compare the exported file (CSV/JSON head, Parquet rows and columns)
+  - click: '(?<= )ra(?= )'    # an SGR mouse click on the first match on the screen (dx/dy to shift)
+  - resize: [100, 30]         # resize the terminal (TIOCSWINSZ and SIGWINCH)
 ```
 
-A step can hold several of these; they run in this order: `keys`, `text`, a wait for
+A step can hold several of these; they run in this order: `keys`, `text`, `click`,
+`resize`, a wait for
 the screen to change (`change`, default up to 1.5 s), `sleep`, `wait`, `wait_gone`,
 `toast`, settle (`settle: false` skips it, a number sets the quiet time), `check`,
-`expect` / `expect_not` (regexes the screen must or must not show, reported as errors),
+`expect` / `expect_not` (regexes the screen must or must not show, reported as errors:
+every scenario asserts with them what it claims, on the reference too),
 `clipboard`, `file`, `exit` (seconds within which the app must exit). After a `toast`
 step the runner waits until the notification is gone (`toast_gone: false` skips that,
 for a message that also stays in the status line).
@@ -168,8 +186,11 @@ followed by a 0.2 s gap so it isn't read as Alt+key.
 
 Writing scenarios that are stable:
 
-- after a key that opens something, `wait` for text that only the new state shows; the
-  quiet-time settle alone can end before a slow app has drawn;
+- after a key that opens something, `wait` for text that only the new state shows (the
+  status line's `row 1,234`, a dialog's title), never for text that may already be on
+  the screen (the key bar, the text just typed); the quiet-time settle alone can end
+  before a slow app has drawn. Settling watches the text and the cell styles (a single
+  blinking cell doesn't count);
 - the key bar can update a moment after the rest of the screen: wait for it too when
   it matters (`wait: "Format of[\\s\\S]*enter apply"`);
 - stats and plots use approximate quantiles: give those scenarios `threads: 1`;
@@ -181,38 +202,71 @@ Writing scenarios that are stable:
 The fixtures (`make_fixtures.py`, facts in `fixtures.yaml`): `demo` (20,000 LSST-like
 rows from `pqx.demo`, the tests' `demo_path`), `slow` (2,000,000 rows, for a count slow
 enough to cancel), `odd` (the tests' `odd_path`: nested types, NaN/inf, a quoted name),
-`types` (one column per Arrow type, wide decimals, CJK), `units` (felis units,
-RAJ2000/DEJ2000), `wide` (60 columns). They can be replaced by go/testdata/fixtures
-once those exist, with `--fixtures`.
+`types` (one column per Arrow type, wide decimals, CJK, a long string), `units` (felis
+units, RAJ2000/DEJ2000), `wide` (60 columns), `notparquet` (a text file).
 
 ## Expected failures
 
-`expected_failures.yaml` lists the scenarios the Go version is known to fail, with a
-reason: `NAME: reason`, or `NAME@WxH: reason` for one size. They apply only to Python
-vs Go runs. A listed scenario that fails is XFAIL (doesn't fail the run); one that
-passes is XPASS, and should be removed from the list. `--write-xfail` rewrites the
-list from the current run.
+`expected_failures.yaml` lists, per scenario and size, how the Go version is known to
+fail: the status (`error`, `diff`, `style`, `colour`), the checkpoints that differ (or
+that it never reached) and a reason:
+
+```yaml
+xfail:
+  sort-cycle@120x40:
+    status: error
+    checks: [asc, desc, off]
+    reason: 'go: step 2 {"keys": "s", "wait": "sorted dec ↑"}: never matched'
+```
+
+It applies only to Python vs Go runs. A run fails (CHANGED) when a listed entry fails
+differently: another status, or a checkpoint not in its list; it fails (XPASS) when a
+listed entry passes. `--write-xfail` rewrites the file from the current run, so the
+next run on the same binary is green; reasons already there are kept.
 
 ## Security test
 
 `security.py` is the port of `tests/test_security.py::test_pty_terminal_never_receives_file_escapes`.
 It writes a file whose values, column names, units, descriptions, key-value metadata
-and file name hold OSC title, OSC 52, OSC 8, CSI, C1 and bidi sequences, drives the app
-through the grid, detail pane, copy, `=`, every tab, the column picker, the export
-dialog, completion, an error that quotes a file value and the help, and checks every
-byte written: none of the file's sequences raw, no C1 control, OSC 52 payloads without
-controls, no OSC kinds other than the app's own, window titles without controls, the
-SQL in the file never ran, and the hostile text drawn as visible stand-ins (␛).
+and file name hold OSC title, OSC 52, OSC 8, CSI, C1, bidi and zero-width sequences,
+binary values and strings that aren't valid UTF-8, and drives the app through `=` on
+the SQL-injection value, the detail pane, copy (grid and pane), every tab, the column
+picker, the export dialog, the completion of a column name that is SQL, an error that
+quotes a file value and the help. After each step that opens something it waits for a
+marker of that screen (from Python pqx's text) and fails if it never appears, so a pass
+means the hostile text was really drawn there.
+
+Then it parses every byte the app wrote. Each escape sequence must be one an app writes
+itself: CSI with the usual finals (cursor, erase, modes, SGR, reports, cursor shape,
+keyboard protocol), OSC 0/1/2 only with a title starting `pqx` and no controls, OSC 52
+only with a base64 payload whose text has no controls, OSC 10/11/12 queries, OSC 22,
+DCS only as capability queries (`+q`, `$q`); no APC/PM/SOS, no unterminated sequence.
+The text between them must be valid UTF-8 (a raw 0x80–0x9F byte isn't), with no C1
+control, no C0 control other than CR, LF, tab, backspace and BEL, and no bidi or
+zero-width code point (U+061C, U+200B–U+200F, U+202A–U+202E, U+2060, U+2066–U+2069,
+U+FEFF). The files the SQL in the fixture would write must not exist, and ␛ must have
+been drawn.
 
 ```sh
 python security.py --app both      # or --app go; --keep keeps the raw output
+python security.py --selftest      # the byte checks against made-up streams, one fault each
 ```
+
+The checks were also run against a wrapper that injects each fault into Python pqx's
+output (raw 0x9B, a DCS string, U+200B, a CSI with an unknown final, a cut-off OSC):
+each is reported.
 
 ## Benchmarks
 
 `../pty/bench.py` times the targets of go-port.md ("Performance targets") in a 200x50
 pty: first screen, PgDn, `g` to the middle row, Ctrl+End, Esc on a slow count, and Right
-arrow on a 300-column screen (key until the screen changes: an upper bound on a frame).
+arrow on a 300-column screen. PgDn, `g` and Ctrl+End are timed until the expected row
+is on the emulated screen, so they include pyte's processing of the redraw (a few ms at
+200x50). The Right-arrow time is taken on the raw pty bytes, without the emulator: from
+the key until the app has written the frame (the end of a synchronized update, or the
+last byte before 30 ms of silence). That includes the app's input handling, its work
+and the pty, so it is an upper bound on go-port.md's "frame" (5 ms, measured inside the
+app), not the same measurement.
 
 ```sh
 python ../pty/bench.py --targets /scratch/dir --apps python,go --runs 3 --json bench.json
@@ -236,6 +290,13 @@ looks odd:
   `l l` before checking it.
 - Stats quantiles (`approx_quantile`) and sampled statistics vary between runs with
   more than one DuckDB thread.
+- A filter that keeps the record under the cursor doesn't keep it, or the leftmost
+  column, when the grid is scrolled right (`keep-viewport-filter`: row 30 → row 0,
+  leftmost c05 → c06), against native-port.md's "Keep the viewport". After `=` and `x`
+  the record and rows are kept (`keep-viewport-equals`).
+- The detail panel shows a decimal256(50, 0) value as `1e+46`, not at full precision.
+- An unknown `--theme` exits with Textual's own message ("Theme 'x' has not been
+  registered. Call 'App.register_theme' …").
 - Two quick Ctrl+← from Schema once ended on Data instead of Metadata: a key sent
   while a tab switch is still in progress can be lost. The scenarios settle between
   them.

@@ -7,8 +7,13 @@ fixture: demo
 steps:
   - keys: right right right
   - keys: s
+    wait: 'sorted dec ↑'
   - check: asc
+    expect: 'dec ↑'
   - keys: s
+    wait: 'sorted dec ↓'
   - check: desc
   - keys: s
+    wait_gone: 'sorted dec'
   - check: off
+    expect_not: '[↑↓]'

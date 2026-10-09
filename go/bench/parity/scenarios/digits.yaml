@@ -12,13 +12,16 @@ steps:
   - keys: "<"
     toast: "✓ ra:"
     check: ra-fewer
+    expect: ['✓ ra: \.4f', 'f64·deg·\.4f', '333\.1529 ']
   - keys: right right right right
   - keys: ">"
     toast: "✓ midpointMjdTai:"
   - keys: ">"
     toast: "✓ midpointMjdTai:"
     check: mjd-more
+    expect: '✓ midpointMjdTai: \.9f'
   - keys: right right right right
   - keys: "<"
     toast: "✓ mag:"
     check: mag-fewer
+    expect: '✓ mag: '

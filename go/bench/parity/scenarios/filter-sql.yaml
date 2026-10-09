@@ -6,8 +6,11 @@ covers:
 fixture: demo
 steps:
   - keys: /
+    wait: 'enter apply'
   - text: "select band, count(*) as n, avg(mag) as mean_mag from t group by 1 order by 1"
   - keys: enter
+    wait: '✓ 6 rows'
   - check: result
+    expect: ['band +n +mean_mag', '^ │ +0 +g +3,?354']
   - keys: down down
   - check: moved

@@ -8,5 +8,6 @@ quiet: 1.0
 steps:
   - keys: right right right right right right right
   - keys: i
-    wait: "Profiled"
+    wait: '✓ Profiled band'
   - check: band
+    expect: ['\bg\b.*3,354|3,354', 'distinct +6']

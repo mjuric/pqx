@@ -29,7 +29,7 @@ import yaml
 HERE = os.path.dirname(os.path.abspath(__file__))
 GO_ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(GO_ROOT, "bench", "pty"))
-from ptydrive import SPINNER, Session  # noqa: E402
+from ptydrive import SPINNER, Session, key_bytes, styles_changed  # noqa: E402
 
 SCRATCH_DEFAULT = os.environ.get("PQX_PARITY_SCRATCH", os.path.join(tempfile.gettempdir(), "pqx-parity"))
 APPS = {
@@ -52,16 +52,16 @@ BLINK = 0.7
 #: before deciding the screen has settled. Each covers something that differs between
 #: runs of the same app, not between apps.
 NORMALIZE = [
-    # the version, wherever pqx prints it after its name ("pqx 0.1.0", "pqx v0.2.0rc3-28-gb4da3e8")
+    # the version after pqx's name ("pqx 0.1.0", "pqx v0.2.0rc3-28-gb4da3e8"): title, help, --version
     (r"(?<=pqx )v?\d+\.\d+(?:\.\d+)?(?:[-+.]?[0-9A-Za-z]+)*(?:\.dirty|-dirty)?", "<VER>"),
-    # timings: "0.12 s", "1.5s", "120 ms", "35µs", "in 2.0 s"
-    (r"\b\d+(?:\.\d+)?\s?(?:ms|µs|us)\b", "<T>"),
-    (r"\b\d+\.\d+\s?s\b", "<T>"),
+    # a timing between pqx's "·" separators, as the status line, the Stats and Plot headers
+    # and the export notice print it ("·  0.12 s  ·", "· 120 ms"); nowhere else
+    (r"(?<=·)(\s+)\d+(?:\.\d+)?\s?(?:ms|µs|us|s)\b", r"\1<T>"),
     # the elapsed time of a running count ("·  00:03 elapsed"), shown only after a while
     # (blanked, not removed, so what is drawn to its right stays in place)
     (r"\s+·\s+\d+:\d\d(?::\d\d)?\s?elapsed\b", lambda m: " " * len(m.group(0))),
-    # a spinner frame in front of a word ("⠹ counting…")
-    (rf"[{SPINNER}](?= \S)", "*"),
+    # a spinner frame at the start of a status line ("│ ⠹ Counting rows")
+    (rf"(?:(?<=^)|(?<=^ )|(?<=│ )|(?<=│  ))[{SPINNER}](?= \S)", "*"),
 ]
 
 
@@ -132,12 +132,14 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
     out_dir = os.path.join(work, "out")
     os.makedirs(out_dir)
     os.makedirs(os.path.join(work, "config"))
-    subs = {"fixtures": fixtures, "out": out_dir, "fixture": os.path.join(fixtures, f"{sc['fixture']}.parquet")}
+    subs = {"fixtures": fixtures, "out": out_dir, "fixture": os.path.join(fixtures, f"{sc['fixture']}.parquet"),
+            "config": os.path.join(work, "config")}
 
     def fill(s):
         return s.format(**subs) if isinstance(s, str) else s
 
-    subs_norm = [(out_dir, "<OUT>"), (fixtures, "<FIX>"), (f"/{slot}/{sc['name']}", f"/_/{sc['name']}")]
+    subs_norm = [(out_dir, "<OUT>"), (subs["config"], "<CONFIG>"), (fixtures, "<FIX>"),
+                 (f"/{slot}/{sc['name']}", f"/_/{sc['name']}")]
     # the slot in a path cut by wrapping or by an input box's edge
     extra = [(r"(?<=runs/)[ab](?=/)", "_")] + sc.get("normalize", [])
     norm_line, norm = make_normalizer(extra, subs_norm)
@@ -169,17 +171,14 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
         for _ in range(2):  # samples 0, BLINK/2 and BLINK s apart: one pair straddles a blink
             s.drain(BLINK / 2)
             later = s.styles()
-            blink |= {(y, x) for y in range(rows) for x in range(cols) if styles[y][x] != later[y][x]}
+            blink |= {(y, x) for y in range(s.rows) for x in range(s.cols) if styles[y][x] != later[y][x]}
         blink = sorted([y, x] for y, x in blink)
         clip = s.osc52()
         res["checks"].append({"name": name, "lines": lines, "styles": styles, "blink": blink,
                               "clipboard": [norm_line(c) for c in clip[-1:]], "exited": s.exited})
 
     def changed_since(text, styles):
-        if s.text() != text:
-            return True
-        now = s.styles()
-        return sum(a != b for ra, rb in zip(styles, now) for a, b in zip(ra, rb)) >= 2
+        return s.text() != text or styles_changed(styles, s.styles())
 
     try:
         ready = sc.get("ready", fixture_facts().get(sc["fixture"], {}).get("ready"))
@@ -190,9 +189,14 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
         for i, st in enumerate(sc["steps"]):
             if isinstance(st, str):
                 st = {"keys": st}
+            # a key ending in @WxH applies only at that size ("expect@120x40": ...)
+            here = f"@{cols}x{rows}"
+            st = {k.split("@")[0]: v for k, v in st.items() if "@" not in k or k.endswith(here)}
+            if not st:
+                continue
             where = f"step {i + 1} {json.dumps(st, ensure_ascii=False)[:80]}"
             quiet = st.get("quiet", sc.get("quiet", QUIET))
-            sends = "keys" in st or "text" in st
+            sends = "keys" in st or "text" in st or "click" in st or "resize" in st
             raw_mark = len(s.raw)
             if sends:
                 before = (s.text(), s.styles())
@@ -200,6 +204,15 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
                 s.keys(*as_keys(st["keys"]), gap=st.get("gap", 0.05))
             if "text" in st:
                 s.type(fill(st["text"]), gap=st.get("gap", 0.0))
+            if "click" in st:
+                # a mouse click on the first place the screen matches a regex (+dx, dy cells)
+                pos = s.find(fill(st["click"]))
+                if pos is None:
+                    raise StepError(f"{where}: nothing on the screen matches {st['click']!r} to click")
+                x, y = pos[0] + st.get("dx", 0), pos[1] + st.get("dy", 0)
+                s.write(key_bytes(f"click:{x},{y}"))
+            if "resize" in st:
+                s.resize(*st["resize"])
             if sends and st.get("change", CHANGE) and st.get("settle", True) is not False:
                 # the app may take a moment to react: wait for a change before
                 # waiting for quiet (a key that changes nothing costs CHANGE seconds)
@@ -370,7 +383,8 @@ def main(argv=None):
     p.add_argument("--jobs", "-j", type=int, default=4, help="runs at a time (default 4; more makes "
                                                                    "the apps slow to react and screens settle late)")
     p.add_argument("--threads", type=int, default=4, help="--threads passed to each app (0: none)")
-    p.add_argument("--strict-colours", action="store_true", help="colour differences fail too")
+    p.add_argument("--lenient-colours", action="store_true",
+                   help="colour differences are reported but don't fail (they fail by default)")
     p.add_argument("--timeout-scale", type=float, default=1.0)
     p.add_argument("--keep-raw", action="store_true", help="save each run's raw terminal output")
     p.add_argument("--list", action="store_true", help="list the scenarios and exit")
@@ -504,15 +518,19 @@ def report(scen, results, labels, out, xfail, a, versions, elapsed):
             ca = {c["name"]: c for c in ra["checks"]}
             cb = {c["name"]: c for c in rb["checks"]}
             ndiff = nstyle = ncolour = 0
+            failing = []  # the checkpoints that differ (or that the compared app never reached)
             for name in ca:
                 if name not in cb:
                     lines.append(f"  [{name}] missing from {lb}")
                     ndiff += 1
+                    failing.append(name)
                     continue
                 d = compare_check(ca[name], cb[name])
                 ndiff += bool(d["text"]) + bool(d["clipboard"])
                 nstyle += d["style"]
                 ncolour += d["colour"]
+                if d["text"] or d["clipboard"] or d["style"] or (d["colour"] and not a.lenient_colours):
+                    failing.append(name)
                 if not (d["text"] or d["style"] or d["colour"] or d["clipboard"]):
                     continue
                 lines.append(f"  [{name}] {len(d['text'])} lines differ, {d['style']} cells differ in style, "
@@ -537,16 +555,35 @@ def report(scen, results, labels, out, xfail, a, versions, elapsed):
             if status == "pass":
                 if ndiff:
                     status = "diff"
-                elif nstyle or (a.strict_colours and ncolour):
+                elif nstyle:
                     status = "style"
-            xf = xfail.get(key, xfail.get(n))
-            final = status
-            if xf is not None:
-                final = "xfail" if status != "pass" else "xpass"
+                elif ncolour and not a.lenient_colours:
+                    status = "colour"
+            if sc.get("same_version") and len(set(versions.values())) > 1:
+                status = "skip"  # what fits depends on the version's length
+                lines = ["  skipped: the two apps report different versions"] + lines
+            final, xf = status, None
+            entry = xfail.get(key, xfail.get(n))
+            if entry is not None:
+                if isinstance(entry, str):  # a scenario-level reason: any failure is expected
+                    entry = {"reason": entry}
+                xf = entry.get("reason", "")
+                if status in ("pass", "skip"):
+                    final = "xpass" if status == "pass" else status
+                else:
+                    new = sorted(set(failing) - set(entry.get("checks", failing)))
+                    was = entry.get("status")
+                    if new or (was and was != status):
+                        final = "changed"
+                        lines.insert(0, f"  changed since expected_failures.yaml: status {was} → {status}"
+                                        + (f"; newly failing checkpoints {new}" if new else ""))
+                    else:
+                        final = "xfail"
             counts[final] = counts.get(final, 0) + 1
-            summary["scenarios"][key] = {"status": final, "raw_status": status, "text_diffs": ndiff,
-                                         "style_cells": nstyle, "colour_cells": ncolour, "errors": errs,
-                                         "xfail_reason": xf, "description": sc["description"].strip()}
+            summary["scenarios"][key] = {"status": final, "raw_status": status, "failing": failing,
+                                         "text_diffs": ndiff, "style_cells": nstyle, "colour_cells": ncolour,
+                                         "errors": errs, "xfail_reason": xf,
+                                         "description": sc["description"].strip()}
             rows.append((key, final, status, sc, errs, lines, xf))
 
     rep = os.path.join(out, "report.txt")
@@ -573,31 +610,33 @@ def report(scen, results, labels, out, xfail, a, versions, elapsed):
     write_screens_json(os.path.join(out, "screens.json"), results)
     if a.write_xfail:
         write_xfail(a.xfail, summary, xfail)
-    bad = sum(v for k, v in counts.items() if k not in ("pass", "xfail"))
+    bad = sum(v for k, v in counts.items() if k not in ("pass", "xfail", "skip"))
     print(f"\n{la} vs {lb}: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
           + f"\nreport: {rep}\nsummary: {os.path.join(out, 'summary.json')}", file=sys.stderr)
     return 1 if bad else 0
 
 
 def write_xfail(path, summary, old):
+    """One entry per scenario and size that doesn't pass: its status, its failing
+    checkpoints and a reason (kept from the old file when there is one)."""
     entries = {}
     for key, s in summary["scenarios"].items():
-        if s["raw_status"] == "pass":
+        if s["raw_status"] in ("pass", "skip"):
             continue
-        name = key.split("@")[0]
-        why = old.get(key) or old.get(name)
+        prev = old.get(key, old.get(key.split("@")[0]))
+        why = prev.get("reason") if isinstance(prev, dict) else prev
         if not why:  # the first error past startup says most
             mine = [e for e in s["errors"] if e.startswith(summary["b"] + ":")]
             errs = [e for e in mine if ": startup:" not in e] or mine
-            why = errs[0][:160] if errs else f"{s['raw_status']}: {s['text_diffs']} checkpoints differ"
-        entries[name] = why  # by scenario: both sizes
+            why = errs[0][:160] if errs else f"{s['raw_status']} in {', '.join(s['failing'])}"
+        entries[key] = {"status": s["raw_status"], "checks": s["failing"], "reason": why}
     with open(path, "w") as fh:
-        fh.write("# Known gaps of Go pqx against Python pqx, by scenario (optionally NAME@WxH).\n"
-                 "# The runner reports these as XFAIL, and as XPASS once they pass: then remove them.\n"
+        fh.write("# Known gaps of Go pqx against Python pqx, per scenario and size: the status, the\n"
+                 "# checkpoints that fail, and why. A run fails on anything not listed here: a new\n"
+                 "# failing checkpoint, a changed status, or a listed entry that now passes (XPASS).\n"
                  "# Regenerate with `run.py --write-xfail`; reasons already here are kept.\n")
         yaml.safe_dump({"xfail": dict(sorted(entries.items()))}, fh, allow_unicode=True, width=200,
                        sort_keys=False)
-
 
 if __name__ == "__main__":
     sys.exit(main())

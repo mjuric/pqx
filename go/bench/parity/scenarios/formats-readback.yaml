@@ -1,0 +1,13 @@
+description: |
+  A formats.yaml written by hand (a spec and a digit count) is read at startup.
+covers:
+  - "README Column formats: columns: fare_amount: .2f, trip_distance: 3"
+fixture: demo
+sizes: [[120, 40]]
+config: |
+  columns:
+    ra: .2f   # a format spec
+    mag: 3    # 3 significant digits
+steps:
+  - check: first
+    expect: ['f64·deg·\.2f', '333\.15 ']

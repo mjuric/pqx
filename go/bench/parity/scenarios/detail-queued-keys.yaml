@@ -1,0 +1,20 @@
+description: |
+  Keys pressed while `=` looks the record up are queued and applied after it: `=` then
+  ↓ at once in the detail panel ends on the next field of the same record.
+covers:
+  - "native-port.md: = keeps the cursor on the record, and keys pressed while it looks the record up are queued."
+fixture: slow
+sizes: [[120, 40]]
+steps:
+  - keys: pgdn pgdn down
+    wait: 'row 55\b'
+  - keys: d
+    wait: 'row 55 · file row 55'
+  - keys: tab
+    wait: '↑↓ column'
+  - keys: down down down down down down down
+  - keys: "= down"
+    gap: 0
+    wait: '› band = '
+  - check: after
+    expect: ['row \d+ · file row 55', '↑↓ column']

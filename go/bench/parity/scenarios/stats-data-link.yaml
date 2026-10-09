@@ -1,0 +1,18 @@
+description: |
+  Data, Schema and Stats stay on the same column: a column chosen in Stats is the
+  grid's column back on Data, and Schema's.
+covers:
+  - "README All keys: Data, Schema and Stats stay on the same column"
+fixture: demo
+threads: 1
+steps:
+  - keys: "3"
+    wait: '✓ Profiled diaSourceId'
+  - keys: down down down
+    wait: '✓ Profiled decErr|✓ Profiled dec\b'
+  - keys: "1"
+    wait: '/ filter'
+  - check: data
+  - keys: "2"
+    wait: 'null %'
+  - check: schema

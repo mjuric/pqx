@@ -1,11 +1,14 @@
 description: |
-  Clicking a header sorts by that column, as `s` does.
+  Clicking a header (found by its text) sorts by that column, as `s` does: ascending,
+  then descending. ra has no ties.
 covers:
   - "README All keys: clicking a header does the same"
 fixture: demo
 sizes: [[120, 40]]
 steps:
-  - keys: "click:38,8"
+  - click: '(?<= )ra(?= )'
+    wait: 'sorted ra ↑'
   - check: click-1
-  - keys: "click:38,8"
+  - click: '(?<= )ra ↑'
+    wait: 'sorted ra ↓'
   - check: click-2

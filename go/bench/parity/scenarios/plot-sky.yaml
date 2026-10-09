@@ -9,6 +9,9 @@ threads: 1
 quiet: 1.0
 steps:
   - keys: "4"
+    wait: '✓ Binned ra × dec'
   - check: sky
+    expect: ['mode sky ▾', 'centre 0° ▾', '% of sky']
   - keys: r
+    wait: 'centre 180° ▾'
   - check: rotated

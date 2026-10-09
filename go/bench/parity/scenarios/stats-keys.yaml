@@ -8,7 +8,7 @@ quiet: 1.0
 steps:
   - keys: right right right right right right right right
   - keys: "3"
-    wait: "Profiled"
+    wait: '✓ Profiled psfFlux'
   # Python pqx sometimes draws the first histogram at a stale width (seen at 120x40);
   # toggling log counts twice redraws it at the panel's width
   - keys: l l
@@ -19,5 +19,6 @@ steps:
   - check: log-values
   - keys: "["
   - check: fewer-bins
-  - keys: "] ]"
+  - keys: "]"
+  - keys: "]"
   - check: more-bins

@@ -1,0 +1,12 @@
+description: |
+  An unknown `--theme` is an error: pqx says so and exits.
+covers:
+  - "go-port.md D2: other names are an error listing these"
+fixture: demo
+sizes: [[120, 30]]
+args: ["--theme", "nosuchtheme"]
+ready: null
+steps:
+  - exit: 15
+  - check: output
+    expect: 'nosuchtheme'

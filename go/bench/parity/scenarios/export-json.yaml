@@ -6,14 +6,23 @@ covers:
 fixture: demo
 steps:
   - keys: /
+    wait: 'enter apply'
   - text: "select band, count(*) as n from t group by 1 order by 1"
   - keys: enter
+    wait: '✓ 6 rows'
   - keys: e
-    wait: "Export current view"
+    wait: 'Export current view'
   - check: dialog
   - keys: ctrl+u
   - text: "bands.json"
   - keys: enter
-    toast: "Wrote"
+    toast: 'Wrote 6 rows'
     check: done
   - file: "{out}/bands.json"
+  - keys: e
+    wait: 'Export current view'
+  - keys: ctrl+u
+  - text: "never.csv"
+  - keys: esc
+    wait_gone: 'Export current view'
+  - file: "{out}/never.csv"   # Esc with a path typed: nothing written

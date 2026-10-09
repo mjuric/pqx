@@ -183,6 +183,17 @@ class TermFilter:
         return True
 
 
+def styles_changed(a, b) -> bool:
+    """Whether two style grids differ in more than one cell."""
+    n = 0
+    for ra, rb in zip(a, b):
+        if ra != rb:
+            n += sum(x != y for x, y in zip(ra, rb))
+            if n > 1:
+                return True
+    return len(a) != len(b)
+
+
 def cell_style(c) -> tuple:
     """The style of a pyte cell: (fg, bg, bold, dim, reverse, underline, italic)."""
     return (c.fg, c.bg, c.bold, c.blink, c.reverse, c.underscore, c.italics)
@@ -196,6 +207,7 @@ class Session:
         self.screen = Screen(cols, rows, self._answer)
         self.stream = pyte.ByteStream(self.screen)
         self.filter = TermFilter()
+        self.parse_errors = []
         self.t0 = time.perf_counter()
         self.exited = None
         self._last_write = 0.0
@@ -238,7 +250,13 @@ class Session:
             self._reap()
             return False
         self.raw += data
-        self.stream.feed(self.filter.feed(data))
+        try:
+            self.stream.feed(self.filter.feed(data))
+        except (TypeError, ValueError, IndexError, KeyError) as e:
+            # a sequence pyte can't take (wrong parameter count, say): note it, start the
+            # parser afresh, and carry on; the raw bytes are kept for the checks
+            self.parse_errors.append(f"{type(e).__name__}: {e}")
+            self.stream = pyte.ByteStream(self.screen)
         return True
 
     def _reap(self):
@@ -314,19 +332,41 @@ class Session:
         return True
 
     def settle(self, quiet: float = 0.4, timeout: float = 15.0, norm=None) -> bool:
-        """Until the (normalized) screen text has not changed for `quiet` seconds."""
+        """Until neither the (normalized) screen text nor the cell styles have changed
+        for `quiet` seconds. A style change of a single cell (a blinking text cursor)
+        doesn't count; a cursor moving in a grid changes many."""
         end = time.perf_counter() + timeout
-        last = None
+        last = last_styles = None
         since = time.perf_counter()
         while time.perf_counter() < end:
             t = self.text()
             t = norm(t) if norm else t
-            if t != last:
-                last, since = t, time.perf_counter()
+            st = self.styles()
+            if t != last or last_styles is None or styles_changed(last_styles, st):
+                last, last_styles, since = t, st, time.perf_counter()
             elif time.perf_counter() - since >= quiet:
                 return True
             self.pump(0.02)
         return False
+
+    def resize(self, cols: int, rows: int):
+        """Change the terminal size, as a terminal window does (TIOCSWINSZ and SIGWINCH)."""
+        self.cols, self.rows = cols, rows
+        self.screen.resize(rows, cols)
+        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        try:
+            os.kill(self.pid, signal.SIGWINCH)
+        except ProcessLookupError:
+            pass
+
+    def find(self, rx):
+        """(x, y), 1-based, of the first match of `rx` on the screen, or None."""
+        rx = re.compile(rx) if isinstance(rx, str) else rx
+        for y, line in enumerate(self.screen.display):
+            m = rx.search(line)
+            if m:
+                return m.start() + 1, y + 1
+        return None
 
     def osc52(self) -> list[str]:
         """The clipboard writes (OSC 52) so far, decoded."""

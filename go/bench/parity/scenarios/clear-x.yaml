@@ -5,8 +5,12 @@ covers:
 fixture: demo
 steps:
   - keys: /
+    wait: 'enter apply'
   - text: "detector < 10"
   - keys: enter
+    wait: '% of 20k'
   - check: filtered
   - keys: x
+    wait: '✓ 20,000 rows'
   - check: cleared
+    expect: '› SQL WHERE'

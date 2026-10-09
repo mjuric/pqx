@@ -8,7 +8,10 @@ fixture: demo
 steps:
   - keys: right right right
   - keys: "2"
+    wait: 'null %'
   - check: schema
+    expect: ['diaSourceId +i64', 'ssObjectId .*13,934 +69\.7%', 'Declination coordinate']
   - keys: down down
   - keys: "1"
+    wait: '/ filter'
   - check: data-follows

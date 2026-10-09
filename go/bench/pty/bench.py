@@ -12,8 +12,12 @@ to the middle row and Ctrl+End, each until the expected row is on the screen. A 
 is recognised by its label and its COLUMN value, read from the file with pyarrow
 (default: the first string or integer column). `--esc` applies a filter whose count
 takes seconds, waits for the count to show, presses Esc and times until the screen
-says it was cancelled. `--frame` times Right arrow presses on a wide file, key until
-the screen changes (an upper bound on a frame).
+says it was cancelled. `--frame` times Right arrow presses on a wide file, from the key
+until the app has written the frame, on the raw pty bytes.
+
+PgDn, `g` and Ctrl+End are timed until the expected row is on the emulated screen, so
+they include pyte's processing of the redraw (a few ms at 200x50); the first screen also
+includes process start.
 
 Prints each run as it goes, then a table of medians against the targets (and the Go
 prototype's numbers, where a regression of more than 20% is a bug), and writes all
@@ -179,8 +183,12 @@ def run_esc(cmd, path, threads, dump, where=SLOW_WHERE):
         s.close()
 
 
-def run_frame(cmd, path, threads, presses=20):
-    """Right arrow on a wide screen: median seconds from the key until the screen changes."""
+def run_frame(cmd, path, threads, presses=20, quiet=0.03):
+    """Right arrow on a wide screen: median seconds from the key until the app has written
+    the frame. Timed on the raw pty bytes (no screen emulation in the loop): the frame
+    ends at the end of a synchronized update (CSI ? 2026 l) or, without one, at the last
+    byte before `quiet` s of silence (that silence is not counted)."""
+    import select as _select
     argv = [cmd, path] + (["--threads", str(threads)] if threads else [])
     s = Session(argv, W, H)
     times = []
@@ -189,15 +197,25 @@ def run_frame(cmd, path, threads, presses=20):
             return None
         s.settle(1.0, 30)
         for _ in range(presses):
-            before_text, before_styles = s.text(), s.styles()
+            s.drain(0.05)
             start = time.perf_counter()
             s.keys("right")
-            end = start + 5
-            while time.perf_counter() < end:
-                s.pump(0.002)
-                if s.text() != before_text or s.styles() != before_styles:
-                    times.append(time.perf_counter() - start)
+            last, buf = None, bytearray()
+            while True:
+                r, _, _ = _select.select([s.fd], [], [], quiet if last else 5.0)
+                if not r:
                     break
+                data = os.read(s.fd, 1 << 16)
+                if not data:
+                    break
+                last = time.perf_counter()
+                buf += data
+                if buf.endswith(b"\x1b[?2026l"):
+                    break
+            if last:
+                times.append(last - start)
+            s.raw += buf
+            s.stream.feed(s.filter.feed(bytes(buf)))
             s.settle(0.2, 5)
     finally:
         s.close()

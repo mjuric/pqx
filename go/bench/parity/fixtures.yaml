@@ -24,7 +24,8 @@ types:
     200 rows, one column per type (int8, uint32, uint64, float32, float64 with unit nJy,
     bool, string with Greek and CJK, binary, date, timestamp[us, UTC], duration[s],
     decimal(12,2), decimal256(50,0), list<int32>, struct, map, mjd [d], raDeg/decDeg [deg]).
-    Every 7th row from row 3 is null except id, wide, mjd, raDeg, decDeg. Row groups of 64.
+    longtext (a 96-character string). Every 7th row from row 3 is null except id, wide,
+    mjd, raDeg, decDeg, longtext. Row groups of 64.
 units:
   ready: "✓ 1,000 rows"
   facts: >
@@ -35,3 +36,7 @@ wide:
   facts: >
     3,000 rows x 60 columns: id, then c00..c58 floats (scale 10^(i%7-2)), rounded to 6
     decimals. Row groups of 1,000.
+notparquet:
+  ready: null
+  facts: >
+    A text file named .parquet, for the error message on opening it.

@@ -5,4 +5,6 @@ covers:
 fixture: types
 steps:
   - keys: "2"
+    wait: 'null %'
   - check: schema
+    expect: ['wide +dec', 'mp +map', 'ts +ts', 'dur ']

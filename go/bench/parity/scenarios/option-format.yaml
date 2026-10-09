@@ -6,5 +6,7 @@ fixture: demo
 args: ["--format", "ra=.2f", "--format", "mag=3", "--format", "diaSourceId=,d"]
 steps:
   - check: first
+    expect: ['f64·deg·\.2f', 'i64·,d', '170,000,000,000,000,000']
   - keys: end
   - check: end
+    expect: 'f32·mag·3|mag'

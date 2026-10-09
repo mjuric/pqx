@@ -6,13 +6,18 @@ covers:
 fixture: demo
 steps:
   - keys: pgdn down down right right right
+    wait_gone: 'row 0\b'
   - check: before
   - keys: g
-    wait: "(?i)go to row"
+    wait: 'Go to row'
   - check: goto
+    expect@120x40: '^ │   27 +17000000000000'   # the rows above the dialog are where they were
   - keys: esc
+    wait_gone: 'Go to row'
   - keys: F
-    wait: "(?i)format"
+    wait: 'Format of'
   - check: format
+    expect@120x40: '^ │   27 +17000000000000'
   - keys: esc
+    wait_gone: 'Format of'
   - check: after

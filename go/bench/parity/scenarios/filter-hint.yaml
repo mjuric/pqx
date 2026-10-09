@@ -6,5 +6,6 @@ covers:
 fixture: odd
 steps:
   - check: first
+    expect: "e\\.g\\. file_row_number > \\d+|e\\.g\\. .weird name."
   - keys: end
   - check: end

@@ -6,5 +6,7 @@ fixture: demo
 steps:
   - keys: f
   - check: raw
+    expect: '333\.1528812003216|333\.15288120032'
   - keys: f
   - check: smart
+    expect: '333\.152881 '

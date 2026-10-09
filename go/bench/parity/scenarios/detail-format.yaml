@@ -13,11 +13,12 @@ steps:
   - keys: "<"
     toast: "✓ ra:"
     check: fewer
+    expect: ['f64·deg·\.4f', 'ra +333\.1528812003216']   # the panel keeps full precision
   - keys: ">"
     toast: "✓ ra:"
     check: more
   - keys: F
-    wait: "Format of[\\s\\S]*enter apply"
+    wait: 'Format of[\s\S]*enter apply'
   - check: dialog
   - text: ".1f"
   - keys: enter

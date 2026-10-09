@@ -6,10 +6,14 @@ covers:
 fixture: demo
 steps:
   - keys: /
+    wait: 'enter apply'
   - text: "midp"
   - check: suggestion
+    expect: '› midpointMjdTai'
   - keys: right
   - check: accepted
   - text: " > 61000"
   - keys: enter
+    wait: '✓ 9,939 rows'
   - check: applied
+    expect: '› midpointMjdTai > 61000'

@@ -9,14 +9,19 @@ threads: 1
 quiet: 1.0
 steps:
   - keys: "4"
+    wait: '✓ Binned ra × dec'
   - keys: right
+    wait: 'mode xy ▾'
   - check: stepped-mode
-  - keys: tab
-  - keys: enter
-    wait: "type to filter"
+  - click: '(?<=x )ra ▾'
+    dx: 1
+    wait: 'type to filter'
   - check: dropdown
+    expect: ['diaSourceId', 'midpointMjdTai']
   - text: "mag"
   - check: narrowed
+    expect_not: 'midpointMjdTai'
   - keys: enter
-    wait: "Binned mag"
+    wait: 'Binned mag'
   - check: chosen
+    expect: 'x mag ▾'

@@ -8,29 +8,33 @@ fixture: demo
 steps:
   - keys: right right
   - keys: F
-    wait: "Format of[\\s\\S]*enter apply"
+    wait: 'Format of[\s\S]*enter apply'
   - check: dialog
   - text: ".3e"
   - keys: enter
     toast: "✓ ra: .3e"
     check: sci
+    expect: ['f64·deg·\.3e', '3\.332e\+02']
   - keys: right right right right right right right right right right
   - keys: F
-    wait: "Format of[\\s\\S]*enter apply"
+    wait: 'Format of[\s\S]*enter apply'
   - text: ".1%"
   - keys: enter
     toast: "✓ trailLength"
     check: percent
   - keys: F
-    wait: "Format of[\\s\\S]*enter apply"
+    wait: 'Format of[\s\S]*enter apply'
   - text: "zz"
   - keys: enter
   - check: bad-spec
+    expect: "✗ Unknown format code 'z'"
   - keys: esc
   - keys: left left left left left left left left left left
   - keys: F
-    wait: "Format of[\\s\\S]*enter apply"
+    wait: 'Format of[\s\S]*enter apply'
   - check: prefilled
+    expect: '│  \.3e '
   - keys: ctrl+u enter
     toast: "✓ ra"
     check: reset
+    expect: '333\.152881 '

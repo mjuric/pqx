@@ -1,0 +1,23 @@
+description: |
+  Esc with the detail panel open while only pqx's own count runs closes the panel; the
+  count carries on.
+covers:
+  - "native-port.md Esc: It cancels first only while user-started work runs. pqx's own row, column and count loading carries on."
+fixture: slow
+sizes: [[120, 40]]
+steps:
+  - keys: /
+    wait: 'enter apply'
+  - text: "levenshtein(repeat(band, 300), repeat(cast(detector as varchar), 200)) > 5"
+  - keys: enter
+    settle: false
+  - wait: '(?i)counting'
+    settle: false
+  - keys: d
+    settle: false
+    wait: 'file row'
+  - keys: esc
+    settle: false
+    wait_gone: 'file row'
+  - check: closed
+    expect: '(?i)counting'

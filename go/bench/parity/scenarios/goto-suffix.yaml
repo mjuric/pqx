@@ -7,10 +7,12 @@ fixture: slow
 sizes: [[120, 40]]
 steps:
   - keys: g
-    wait: "(?i)go to row"
+    wait: 'Go to row'
   - text: "1.5M"
   - keys: enter
-    wait: "1,?500,?000 "
+    wait: 'row 1,500,000\b'
   - check: row-1.5M
+    expect: '1,500,000 +170000000001500000'
   - keys: ctrl+home
+    wait: 'row 0\b'
   - check: first

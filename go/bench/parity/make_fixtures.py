@@ -81,6 +81,7 @@ def types(path):
         "mp": pa.array([[("k", i)] for i in range(n)], type=pa.map_(pa.string(), pa.int64()), mask=mask),
         "mjd": pa.array(60000.0 + np.arange(n) * 0.123456789),
         "raDeg": pa.array(rng.uniform(0, 360, n)),
+        "longtext": pa.array([f"row {i}: " + "the quick brown fox jumps over the lazy dog " * 2 for i in range(n)]),
         "decDeg": pa.array(rng.uniform(-90, 90, n)),
     }
     units = {"mjd": "[d] Time, MJD.", "raDeg": "[deg] Right ascension.", "decDeg": "[deg] Declination.",
@@ -131,7 +132,14 @@ def wide(path):
     pq.write_table(pa.table(data), path, row_group_size=1_000)
 
 
-FIXTURES = {"demo": demo, "slow": slow, "odd": odd, "types": types, "units": units, "wide": wide}
+def notparquet(path):
+    """A text file with a .parquet name, for the error on opening it."""
+    with open(path, "w") as fh:
+        fh.write("this is not a parquet file\n")
+
+
+FIXTURES = {"demo": demo, "slow": slow, "odd": odd, "types": types, "units": units, "wide": wide,
+            "notparquet": notparquet}
 
 
 def main(argv=None):

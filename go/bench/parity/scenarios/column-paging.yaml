@@ -8,9 +8,12 @@ fixture: wide
 steps:
   - keys: right right right right right right right right right right right right right right right right
   - check: scrolled
+    expect: ['‹ \d+  ·  columns \d+–\d+ of 60  ·  \d+ ›', '^ │ ‹ ']
   - keys: end
   - check: end
+    expect: ['c58', 'of 60 ─']
   - keys: left left left
   - check: back
   - keys: home
   - check: home
+    expect: 'columns 1–\d+ of 60  ·  \d+ ›'

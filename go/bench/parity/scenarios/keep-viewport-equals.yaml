@@ -8,11 +8,15 @@ covers:
 fixture: demo
 steps:
   - keys: pgdn pgdn down down down down down down down
+    wait_gone: 'row 0\b'
   - keys: right right right right right right right
   - check: before
+    expect@120x40: ['^ │   54 ', 'row 61\b']
   - keys: "="
-    wait: "% of 20k"
+    wait: "› band = 'g'"
   - check: after-equals
+    expect: '% of 20k'
   - keys: x
-    wait: "✓ 20,000 rows  ·  row"
+    wait: '✓ 20,000 rows  ·  row'
   - check: after-clear
+    expect@120x40: ['row 61\b', '^ │   54 ']   # the same record, and the same rows on the screen

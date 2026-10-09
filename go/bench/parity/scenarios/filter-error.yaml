@@ -6,11 +6,16 @@ covers:
 fixture: demo
 steps:
   - keys: pgdn down down
+    wait_gone: 'row 0\b'
   - keys: /
+    wait: 'enter apply'
   - text: "nosuchcolumn > 3"
   - keys: enter
-    toast: "Query failed"
+    toast: 'Query failed'
     toast_gone: false  # (it stays 8 s; the status line says the same)
     check: error
+    expect: '✗ Query failed   reason: unknown column "nosuchcolumn"'
+    expect@120x40: '^ │   27 +170000000000000027'   # the place is kept
   - keys: esc
+    wait: '/ filter'
   - check: back-in-grid

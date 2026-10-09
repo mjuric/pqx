@@ -10,8 +10,9 @@ quiet: 1.0
 steps:
   - keys: right right right right right right right right right right right
   - keys: i
-    wait: "Profiled"
+    wait: '✓ Profiled snr'
   # Python pqx sometimes draws the first histogram at a stale width (seen at 120x40);
   # toggling log counts twice redraws it at the panel's width
   - keys: l l
   - check: stats-snr
+    expect: ['rows +20,000', 'nulls +0', 'distinct', 'p50', 'median', 'mean', 'std']

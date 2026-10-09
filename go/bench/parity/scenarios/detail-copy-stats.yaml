@@ -9,14 +9,16 @@ threads: 1
 quiet: 1.0
 steps:
   - keys: d
-    wait: "file row"
-  - keys: tab down down
+    wait: 'file row'
+  - keys: tab
+    wait: '↑↓ column'
+  - keys: down down
   - keys: y
-    clipboard: "^333\\.15288120032"
-    toast: "Copied"
+    clipboard: '^333\.15288120032'
+    toast: 'Copied ra'
     check: copied
   - keys: i
-    wait: "Profiled"
+    wait: '✓ Profiled ra'
   # Python pqx sometimes draws the first histogram at a stale width (seen at 120x40);
   # toggling log counts twice redraws it at the panel's width
   - keys: l l

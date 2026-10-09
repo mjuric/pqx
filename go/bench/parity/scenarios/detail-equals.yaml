@@ -6,11 +6,17 @@ covers:
 fixture: demo
 steps:
   - keys: down down down
+    wait: 'row 3\b'
   - keys: d
-    wait: "file row"
-  - keys: tab down down down down down down down down down
+    wait: 'row 3 · file row 3'
+  - keys: tab
+    wait: '↑↓ column'
+  - keys: down down down down down down down
   - keys: "="
+    wait: '› band = '
   - check: first-equals
-  - keys: up up up up up up up up
+    expect: ['row \d+ · file row 3', '↑↓ column']   # same record, still in the panel
+  - keys: up up up up up up up
   - keys: "="
+    wait: '› band = \S+ and diaSourceId = 170000000000000003'
   - check: second-equals

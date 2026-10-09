@@ -7,8 +7,12 @@ covers:
 fixture: demo
 steps:
   - keys: /
+    wait: 'enter apply'
   - check: box-focused
   - text: "band = 'r' and mag < 21"
   - check: typed
+    expect: "› band = 'r' and mag < 21"
   - keys: enter
+    wait: '✓ 685 rows  ·  3\.42% of 20k'
   - check: applied
+    expect: "› band = 'r' and mag < 21"

@@ -1,0 +1,16 @@
+description: |
+  With columns pinned, moving the cursor left into a pinned column doesn't scroll the
+  grid back.
+covers:
+  - "native-port.md: A cursor in a pinned column doesn't scroll the grid left."
+fixture: wide
+steps:
+  - keys: right right
+  - keys: p
+    wait: '3 pinned'
+  - keys: right right right right right right right right right right right right right right right right right right right right
+  - check: scrolled
+  - keys: home
+  - check: home
+  - keys: right
+  - check: right-again

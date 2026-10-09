@@ -1,0 +1,19 @@
+description: |
+  In the detail panel, PgDn/PgUp and Home/End move the selected field.
+covers:
+  - "help: Tab or a click | into the detail panel: ↑/↓, PgUp/PgDn, Home/End or a click pick a column and the grid follows"
+fixture: wide
+steps:
+  - keys: d
+    wait: 'row 0 · file row 0'
+  - keys: tab
+    wait: '↑↓ column'
+  - keys: pgdn
+  - check: pgdn
+  - keys: end
+  - check: end
+    expect: 'columns \d+–60 of 60|c58'
+  - keys: pgup
+  - check: pgup
+  - keys: home
+  - check: home

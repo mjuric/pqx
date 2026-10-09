@@ -7,11 +7,15 @@ covers:
 fixture: demo
 steps:
   - keys: d
-    wait: "file row"
+    wait: 'row 0 · file row 0'
   - check: open
+    expect: ['· 22h12m36\.691s', '· 2025-05-05 00:10:02\.824', '· 96\.2 mas', 'AB mag']
   - keys: down down
+    wait: 'row 2 · file row 2'
   - check: row-2
   - keys: esc
+    wait_gone: 'file row'
   - check: closed
   - keys: enter
+    wait: 'file row'
   - check: enter-opens

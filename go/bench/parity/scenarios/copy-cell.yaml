@@ -9,6 +9,7 @@ steps:
     clipboard: "^322\\.99696"
     toast: "Copied"
     check: copied-ra
+    expect: '✓ Copied ra = 322\.99696'
   - keys: right right right right right
   - keys: y
     clipboard: "^r$"

@@ -5,6 +5,8 @@ covers:
 fixture: demo
 steps:
   - keys: "5"
+    wait: 'Footer read'
   - check: meta
+    expect: ['rows +20,000', 'row groups +8', 'pqx\.demo|DiaSource']
   - keys: pgdn
   - check: meta-pgdn

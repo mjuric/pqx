@@ -5,8 +5,9 @@ covers:
   - "pqx -h: -w WHERE, --where WHERE  initial filter"
 fixture: demo
 args: ["-w", "band = 'g'"]
-ready: "✓ [\\d,]+ rows"
+ready: '✓ 3,354 rows'
 steps:
   - check: first
+    expect: ["› band = 'g'", '✓ 3,354 rows  ·  16\.8% of 20k']
   - keys: pgdn
   - check: pgdn

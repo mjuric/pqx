@@ -6,14 +6,19 @@ covers:
 fixture: demo
 steps:
   - keys: "-"
+    toast: 'Hid diaSourceId'
   - keys: /
+    wait: 'enter apply'
   - text: "mag < 18"
   - keys: enter
+    wait: '✓ 11 rows'
   - keys: e
-    wait: "Export current view"
+    wait: 'Export current view'
+  - check: dialog
+    expect: '15 visible'
   - keys: ctrl+u
   - text: "view.parquet"
   - keys: enter
-    toast: "Wrote"
+    toast: 'Wrote 11 rows'
     check: done
   - file: "{out}/view.parquet"

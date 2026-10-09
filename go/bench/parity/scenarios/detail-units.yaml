@@ -7,7 +7,11 @@ covers:
 fixture: units
 steps:
   - keys: d
-    wait: "file row"
+    wait: 'row 0 · file row 0'
   - check: open
+    expect: ['RAJ2000 +46\.285272996911864  deg', '· 03h05m08\.466s', '· \+15°01′37\.04″',
+             'elon +132\.92804696173422', '· 132°55′40\.97″', '· 2023-02-25 16:27:46\.215',
+             '· 22\.116 AB mag', 'mas']
   - keys: down
+    wait: 'row 1 · file row 1'
   - check: row-1
