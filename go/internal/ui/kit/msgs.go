@@ -59,7 +59,7 @@ type NotifyMsg struct {
 	Severity Severity
 	Title    string
 	Text     string
-	Timeout  time.Duration // 0 for the default (3 s; 8 s for errors)
+	Timeout  time.Duration // 0 for the default, 5 s (Textual's, for every severity)
 }
 
 // Notify is a command yielding a NotifyMsg.

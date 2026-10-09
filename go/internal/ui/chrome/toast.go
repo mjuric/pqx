@@ -11,11 +11,9 @@ import (
 	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
 
-// Toast timeouts (Textual's notify: 3 s; pqx gives errors 8 s).
-const (
-	DefaultTimeout = 3 * time.Second
-	ErrorTimeout   = 8 * time.Second
-)
+// DefaultTimeout is how long a notice without a timeout of its own shows
+// (Textual's NOTIFICATION_TIMEOUT), whatever its severity.
+const DefaultTimeout = 5 * time.Second
 
 type toast struct {
 	id  int
@@ -34,11 +32,8 @@ func (c *Chrome) notify(m kit.NotifyMsg) tea.Cmd {
 
 // timeout is how long a notice shows.
 func timeout(m kit.NotifyMsg) time.Duration {
-	switch {
-	case m.Timeout > 0:
+	if m.Timeout > 0 {
 		return m.Timeout
-	case m.Severity == kit.Error:
-		return ErrorTimeout
 	}
 	return DefaultTimeout
 }
