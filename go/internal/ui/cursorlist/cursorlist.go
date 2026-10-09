@@ -5,6 +5,7 @@
 package cursorlist
 
 import (
+	"math"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -136,6 +137,9 @@ func (l *List) At(y int) int {
 }
 
 func (l *List) scrollTo(i int) {
+	if l.h == 0 {
+		return // not drawn yet: View scrolls it into view
+	}
 	h := l.page()
 	if i < l.top {
 		l.top = i
@@ -145,34 +149,82 @@ func (l *List) scrollTo(i int) {
 }
 
 // View draws the list in w × h cells with render turning styled text into
-// terminal output.
+// terminal output. When the items don't fit, the last column is Textual's
+// scrollbar (OptionList's scrollbar-size 1) in the border colour, and the
+// items are a cell narrower.
 func (l *List) View(w, h int, render func(styled.Text) string) string {
 	l.h = h
 	if l.hl >= 0 {
 		l.scrollTo(l.hl)
 	}
 	l.top = max(0, min(l.top, max(0, len(l.items)-h)))
+	var bar []styled.Text
+	iw := w
+	if len(l.items) > h && w > 1 && h > 0 {
+		bar = Scrollbar(h, len(l.items), h, l.top, "border")
+		iw = w - 1
+	}
 	pad := l.Width
-	if pad <= 0 {
-		pad = w
+	if pad <= 0 || pad > iw {
+		pad = iw
 	}
 	lines := make([]string, h)
 	for r := 0; r < h; r++ {
 		i := l.top + r
+		var s string
 		if i >= len(l.items) {
-			lines[r] = strings.Repeat(" ", w)
-			continue
+			s = strings.Repeat(" ", iw)
+		} else {
+			t := l.items[i].Text
+			if n := ansi.StringWidth(t.Plain); n < pad {
+				t.Append(strings.Repeat(" ", pad-n), styled.Style{})
+			}
+			if i == l.hl {
+				t.Spans = append(t.Spans, styled.Span{Start: 0, End: len([]rune(t.Plain)), Style: styled.Style{Reverse: true}})
+			}
+			s = Fit(render(t), iw)
 		}
-		t := l.items[i].Text
-		if n := ansi.StringWidth(t.Plain); n < pad {
-			t.Append(strings.Repeat(" ", pad-n), styled.Style{})
+		if bar != nil {
+			s += render(bar[r])
 		}
-		if i == l.hl {
-			t.Spans = append(t.Spans, styled.Span{Start: 0, End: len([]rune(t.Plain)), Style: styled.Style{Reverse: true}})
-		}
-		lines[r] = Fit(render(t), w)
+		lines[r] = s
 	}
 	return strings.Join(lines, "\n")
+}
+
+// Scrollbar is Textual's vertical ScrollBarRender.render_bar: size cells
+// for a window of window rows at position over virtual rows, the thumb in
+// colour bar (reverse video), its ends in eighths of a cell.
+func Scrollbar(size, virtual, window, position int, bar styled.Color) []styled.Text {
+	bars := []string{"▁", "▂", "▃", "▄", "▅", "▆", "▇", " "}
+	out := make([]styled.Text, size)
+	for i := range out {
+		out[i] = styled.New(" ", styled.Style{})
+	}
+	if window == 0 || size == 0 || virtual == 0 || size == virtual || window >= virtual {
+		return out
+	}
+	n := len(bars)
+	thumb := math.Max(1, float64(window)/(float64(virtual)/float64(size)))
+	pos := (float64(size) - thumb) * (float64(position) / float64(virtual-window))
+	start := int(pos * float64(n))
+	end := start + int(math.Ceil(thumb*float64(n)))
+	si, sb := max(0, start)/n, max(0, start)%n
+	ei, eb := max(0, end)/n, max(0, end)%n
+	for i := si; i < min(ei, size); i++ {
+		out[i] = styled.New(" ", styled.Style{Fg: bar, Reverse: true})
+	}
+	if si < size {
+		if c := bars[n-1-sb]; c != " " {
+			out[si] = styled.New(c, styled.Style{Fg: bar})
+		}
+	}
+	if ei < size {
+		if c := bars[n-1-eb]; c != " " {
+			out[ei] = styled.New(c, styled.Style{Fg: bar, Reverse: true})
+		}
+	}
+	return out
 }
 
 // Fit pads or cuts s (which may hold SGR sequences) to exactly w cells.
