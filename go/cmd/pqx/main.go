@@ -9,10 +9,12 @@ import (
 	"runtime/debug"
 	"strings"
 	"syscall"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
 
+	"github.com/mjuric/pqx/go/internal/config"
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/fmtx"
 	"github.com/mjuric/pqx/go/internal/opts"
@@ -99,9 +101,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if o.Sample != nil {
 		sampling = *o.Sample
 	}
+	saved, startup := savedFormats()
 	env := &kit.Env{
 		DS: ds,
 		Opts: kit.Options{
+			Formats:        saved,
 			Where:          o.Where,
 			Sampling:       sampling,
 			SessionFormats: o.Formats,
@@ -124,7 +128,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Stats:  stats.New(env),
 		Plot:   plot.New(env),
 	}
-	return runApp(app.New(env, parts), look, stderr)
+	var m tea.Model = app.New(env, parts)
+	if startup != nil {
+		m = withInit{m, startup}
+	}
+	return runApp(m, look, stderr)
 }
 
 // notParquet is PyArrow's error for a file that can't be Parquet (too
@@ -202,6 +210,30 @@ func runApp(m tea.Model, look *theme.Theme, stderr io.Writer) (code int) {
 	}
 	return 0
 }
+
+// savedFormats are the column formats saved in formats.yaml (--format
+// goes on top of them). A file that can't be read is ignored, with a
+// notice at startup (the command), as in Python pqx.
+func savedFormats() (map[string]fmtx.Override, tea.Cmd) {
+	saved, err := config.LoadFormats("")
+	if err == nil {
+		return saved, nil
+	}
+	return nil, kit.Send(kit.NotifyMsg{Severity: kit.Warning, Title: "! Config",
+		Text:    "Ignoring saved column formats: " + fmtx.Sanitize(err.Error(), false),
+		Timeout: 8 * time.Second})
+}
+
+// withInit is a model with a command run at startup as well.
+type withInit struct {
+	tea.Model
+	cmd tea.Cmd
+}
+
+func (w withInit) Init() tea.Cmd { return tea.Batch(w.Model.Init(), w.cmd) }
+
+// Update hands on to the model, which goes on alone.
+func (w withInit) Update(msg tea.Msg) (tea.Model, tea.Cmd) { return w.Model.Update(msg) }
 
 // newState is the UI's state at startup: the whole file, and the column
 // formats saved and given on the command line.
