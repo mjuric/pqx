@@ -1,0 +1,18 @@
+description: |
+  `/` and a WHERE expression, applied with Enter: the grid, the row count and the status
+  line change; the filter stays in the box.
+covers:
+  - "README Filter: Press / and type a WHERE expression"
+  - "help: a SQL **WHERE** expression"
+fixture: demo
+steps:
+  - keys: /
+    wait: 'enter apply'
+  - check: box-focused
+  - text: "band = 'r' and mag < 21"
+  - check: typed
+    expect: "› band = 'r' and mag < 21"
+  - keys: enter
+    wait: '✓ 685 rows  ·  3\.42% of 20k'
+  - check: applied
+    expect: "› band = 'r' and mag < 21"

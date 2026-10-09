@@ -1,0 +1,17 @@
+description: |
+  Completing a column name that needs quoting inserts it quoted.
+covers:
+  - "native-port.md Security: Completion inserts quoted names"
+fixture: odd
+steps:
+  - keys: /
+    wait: 'enter apply'
+  - text: "weir"
+  - check: suggestion
+  - keys: right
+  - text: " = 1"
+  - check: accepted
+    expect: '› "weird name" = 1'
+  - keys: enter
+    wait: '✓ \d[\d,]* rows  ·'
+  - check: applied

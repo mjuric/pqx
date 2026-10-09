@@ -1,0 +1,19 @@
+description: |
+  Column names complete as you type; → accepts the completion.
+covers:
+  - "README Filter: Column names complete as you type"
+  - "help: **→** accepts a column-name completion"
+fixture: demo
+steps:
+  - keys: /
+    wait: 'enter apply'
+  - text: "midp"
+  - check: suggestion
+    expect: '› midpointMjdTai'
+  - keys: right
+  - check: accepted
+  - text: " > 61000"
+  - keys: enter
+    wait: '✓ 9,939 rows'
+  - check: applied
+    expect: '› midpointMjdTai > 61000'

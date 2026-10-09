@@ -1,0 +1,24 @@
+description: |
+  1–5 switch tabs; Ctrl+← / Ctrl+→ go to the previous / next tab.
+covers:
+  - "README Keys: 1–5 | Data, Schema, Stats, Plot, Metadata"
+  - "README All keys: 1–5 · Ctrl+← Ctrl+→ | go to a tab · previous / next tab"
+fixture: demo
+steps:
+  - keys: "2"
+    wait: 'null %'
+  - check: schema
+  - keys: "5"
+    wait: 'Footer read'
+  - check: meta
+  - keys: "1"
+    wait: '/ filter'
+  - check: data
+  - keys: ctrl+right
+    wait: 'null %'
+  - check: next
+  - keys: ctrl+left
+    wait: '/ filter'
+  - keys: ctrl+left
+    wait: 'Footer read'
+  - check: wrap-prev

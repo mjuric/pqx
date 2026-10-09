@@ -1,0 +1,22 @@
+description: |
+  A filter with unbalanced parentheses (which would escape pqx's own parentheses) is
+  refused with an inline error.
+covers:
+  - "native-port.md Security: where_sql rejects unbalanced parentheses"
+fixture: demo
+steps:
+  - keys: /
+    wait: 'enter apply'
+  - text: "mag < 20) or (1=1"
+  - keys: enter
+    toast: 'unbalanced parentheses'
+    toast_gone: false
+    check: error
+    expect: '✗ Query failed   reason: unbalanced parentheses'
+  - keys: ctrl+u
+    wait: '› SQL WHERE'
+  - text: "1=1; select 42"
+  - keys: enter
+    toast: 'syntax error at or near ";"'
+    toast_gone: false
+    check: two-statements

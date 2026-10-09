@@ -1,0 +1,37 @@
+description: |
+  `c` opens the column picker; Tab into the list, space toggles,
+  Apply applies; typing narrows the list; Esc cancels.
+covers:
+  - "README Keys: c · - · p | choose columns · hide this column · pin columns"
+  - "help: **c** | choose visible columns"
+fixture: demo
+python_bug:
+  - checks: [applied, cancelled]
+    region: keybar
+    ref_shows: 'enter apply   esc back'   # Python shows the filter box's keys
+    correct: '^ / filter   x clear filter'   # what the key bar should show there
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
+steps:
+  - keys: c
+    wait: 'Visible columns[\s\S]*enter apply'
+  - check: dialog
+    expect: ['▐X▌ diaSourceId  i64', '▐X▌ ingestTime']
+  - keys: tab
+  - keys: space down space
+  - check: toggled
+  - keys: tab
+  - keys: enter
+    wait_gone: 'Visible columns'
+  - check: applied
+    expect@120x40: ['columns 1–\d+ of 14', '^ │ +ra ']
+    expect_not: 'diaSourceId'
+  - keys: c
+    wait: 'Visible columns[\s\S]*enter apply'
+  - text: "err"
+  - check: narrowed
+    expect: ['raErr', 'psfFluxErr']
+    expect_not: '▐.▌ band'
+  - keys: esc
+    wait_gone: 'Visible columns'
+  - check: cancelled
+    expect@120x40: 'columns 1–\d+ of 14'

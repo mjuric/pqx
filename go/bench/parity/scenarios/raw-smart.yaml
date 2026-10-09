@@ -1,0 +1,12 @@
+description: |
+  `f` toggles smart and raw number formatting.
+covers:
+  - "help: **f** | toggle smart / raw number formatting"
+fixture: demo
+steps:
+  - keys: f
+  - check: raw
+    expect: '333\.1528812003216|333\.15288120032'
+  - keys: f
+  - check: smart
+    expect: '333\.152881 '

@@ -1,0 +1,31 @@
+description: |
+  Keys pressed while `=` looks the record up are queued and applied after it: `=` then
+  ↓ at once in the detail panel ends on the next field of the same record.
+covers:
+  - "native-port.md: = keeps the cursor on the record, and keys pressed while it looks the record up are queued."
+fixture: slow
+sizes: [[120, 40]]
+steps:
+  - keys: pgdn pgdn down
+    wait: 'row 55\b'
+  - keys: d
+    wait: 'row 55 · file row 55'
+  - keys: tab
+    wait: '↑↓ column'
+  - keys: down down down down down down down
+  - keys: "= down"
+    gap: 0
+    wait: '› band = '
+    expect: ['row \d+ · file row 55', '↑↓ column']
+  # the ↓ sent during the lookup must have moved the panel's field from band to psfFlux:
+  # Tab back to the grid (on that column) and i shows its statistics
+  - keys: tab
+    wait: '/ filter'
+  - keys: i
+    wait: 'Profiled psfFlux'
+  # where the grid scrolls to after the queued keys varies in Python pqx; Data and Home
+  # make the checkpoint repeatable
+  - keys: "1"
+    wait: '/ filter'
+  - keys: home
+  - check: after
