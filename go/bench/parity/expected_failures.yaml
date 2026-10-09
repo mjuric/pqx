@@ -8,35 +8,37 @@ xfail:
     checks:
     - filtered
     - cleared
-    reason: diff in filtered, cleared
+    reason: 'filtered: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines); cleared: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+30 more lines)'
   clear-x@200x50:
     status: diff
     checks:
     - filtered
     - cleared
-    reason: diff in filtered, cleared
+    reason: 'filtered: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39 more lines); cleared: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+39 more lines)'
   cli-bad-theme@120x30:
     status: diff
     checks:
     - output
-    reason: diff in output
+    reason: 'output: line 0: python ''pqx: cannot open <FIX>/demo.parquet'' vs go ''usage: pqx [-h] [-w WHERE] [--accent {bl'' (+4 more lines)'
   cli-no-sample@120x40:
     status: style
     checks:
     - stats
-    reason: style in stats
+    reason: 'stats: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (83 cells in all)'
   cli-not-parquet@120x30:
     status: diff
     checks:
     - output
-    reason: diff in output
+    reason: 'output: line 1: python ''arquet: Parquet magic bytes not found in'' vs go ''arquet: <FIX>/notparquet.parquet: p'' (+1 more lines)'
   click-markers-tabs@120x40:
     status: diff
     checks:
     - paged
     - schema
     - data
-    reason: diff in paged, schema, data
+    reason: 'paged: line 7: python ''c09         c10          c11'' vs go ''c08        c09         c10'' (+30 more lines); schema: line 17: python ''▆ │'' vs go ''│'''
   column-paging@120x40:
     status: diff
     checks:
@@ -44,7 +46,8 @@ xfail:
     - end
     - back
     - home
-    reason: diff in scrolled, end, back, home
+    reason: 'scrolled: line 7: python ''‹             c07        c08        c09'' vs go ''‹           c07        c08        c09'' (+30 more lines); end: line 7: python ''c50        c51         c52'' vs
+      go ''c52            c53'' (+30 more lines)'
   column-paging@200x50:
     status: diff
     checks:
@@ -52,7 +55,8 @@ xfail:
     - end
     - back
     - home
-    reason: diff in scrolled, end, back, home
+    reason: 'scrolled: line 7: python ''│ ‹         c00        c01        c02'' vs go ''│ ‹           c01        c02         c03'' (+39 more lines); end: line 7: python ''│ ‹         c43        c44         c45''
+      vs go ''│ ‹               c47            c48'' (+39 more lines)'
   columns-picker@120x40:
     status: error
     checks:
@@ -61,7 +65,7 @@ xfail:
     - applied
     - narrowed
     - cancelled
-    reason: 'go: step 1 {"keys": "c", "wait": "Visible columns[\\s\\S]*enter apply"}: never matched ''Visible columns[\\s\\S]*enter apply'''
+    reason: 'go: step 1 {"keys": "c", "wait": "Visible columns[\\s\\S]*enter apply"}: never matched ''Visible columns[\\s\\S]*enter apply''; dialog: go never reached it; toggled: go never reached it'
   columns-picker@200x50:
     status: error
     checks:
@@ -70,33 +74,37 @@ xfail:
     - applied
     - narrowed
     - cancelled
-    reason: 'go: step 1 {"keys": "c", "wait": "Visible columns[\\s\\S]*enter apply"}: never matched ''Visible columns[\\s\\S]*enter apply'''
+    reason: 'go: step 1 {"keys": "c", "wait": "Visible columns[\\s\\S]*enter apply"}: never matched ''Visible columns[\\s\\S]*enter apply''; dialog: go never reached it; toggled: go never reached it'
   complete-quoted@120x40:
-    status: error
+    status: diff
     checks:
     - suggestion
     - accepted
     - applied
-    reason: 'go: step 6 {"check": "accepted", "expect": "› \"weird name\" = 1"}: missing ''› "weird name" = 1'''
+    reason: 'suggestion: line 7: python ''│        file_row_number  weird name'' vs go ''│       file_row_number  weird name'' (+29 more lines); accepted: line 7: python ''│        file_row_number  weird
+      name'' vs go ''│       file_row_number  weird name'' (+29 more lines)'
   complete-quoted@200x50:
-    status: error
+    status: diff
     checks:
     - suggestion
     - accepted
     - applied
-    reason: 'go: step 6 {"check": "accepted", "expect": "› \"weird name\" = 1"}: missing ''› "weird name" = 1'''
+    reason: 'suggestion: line 7: python ''│        file_row_number  weird name'' vs go ''│       file_row_number  weird name'' (+38 more lines); accepted: line 7: python ''│        file_row_number  weird
+      name'' vs go ''│       file_row_number  weird name'' (+38 more lines)'
   copy-cell@120x40:
     status: diff
     checks:
     - copied-ra
     - copied-band
-    reason: diff in copied-ra, copied-band
+    reason: 'copied-ra: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+32 more lines); copied-band: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+32 more lines)'
   copy-cell@200x50:
     status: diff
     checks:
     - copied-ra
     - copied-band
-    reason: diff in copied-ra, copied-band
+    reason: 'copied-ra: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+41 more lines); copied-band: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+41 more lines)'
   cursor-keys@120x40:
     status: diff
     checks:
@@ -107,7 +115,8 @@ xfail:
     - home
     - ctrl-end
     - ctrl-home
-    reason: diff in arrows, pgdn, pgup, end, home, ctrl-end, ctrl-home
+    reason: 'arrows: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines); pgdn: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30
+      more lines)'
   cursor-keys@200x50:
     status: diff
     checks:
@@ -118,31 +127,36 @@ xfail:
     - home
     - ctrl-end
     - ctrl-home
-    reason: diff in arrows, pgdn, pgup, end, home, ctrl-end, ctrl-home
+    reason: 'arrows: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39 more lines); pgdn: line 48: python ''└──────────────────────────────────────'' vs go ''└─ columns 1–15
+      of 16  ·  1 › ─────────'''
   detail-copy-stats@120x40:
     status: diff
     checks:
     - copied
     - stats
-    reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+    reason: 'copied: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+31 more lines); stats: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default
+      bold=False dim=True (90 cells in all)'
   detail-copy-stats@200x50:
     status: diff
     checks:
     - copied
     - stats
-    reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+    reason: 'copied: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+41 more lines); stats: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default
+      bold=False dim=True (89 cells in all)'
   detail-equals@120x40:
     status: error
     checks:
     - first-equals
     - second-equals
-    reason: 'go: step 2 {"keys": "d", "wait": "row 3 · file row 3"}: never matched ''row 3 · file row 3'''
+    reason: 'go: step 8 {"keys": "=", "wait": "› band = \\S+ and diaSourceId = 170000000000000003"}: never matched ''› band = \\S+ and diaSourceId = 170000000000000003''; first-equals: line 7: python ''│
+      ‹           raErr    decErr  midpointM'' vs go ''│ ‹         raErr    decErr  midpointMjd'' (+29 more lines); second-equals: go never reached it'
   detail-equals@200x50:
     status: error
     checks:
     - first-equals
     - second-equals
-    reason: 'go: step 2 {"keys": "d", "wait": "row 3 · file row 3"}: never matched ''row 3 · file row 3'''
+    reason: 'go: step 8 {"keys": "=", "wait": "› band = \\S+ and diaSourceId = 170000000000000003"}: never matched ''› band = \\S+ and diaSourceId = 170000000000000003''; first-equals: line 7: python ''diaSourceId  ssObjectId''
+      vs go ''diaSourceId  ssObjectId'' (+39 more lines); second-equals: go never reached it'
   detail-focus@120x40:
     status: diff
     checks:
@@ -152,7 +166,8 @@ xfail:
     - clicked-field
     - tab-back
     - esc-closes
-    reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+    reason: 'focused: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+29 more lines); field-8: line 7: python ''│ ‹       dec     raErr    decErr  midp'' vs go ''│ ‹        raErr    decErr  midpointMjd''
+      (+29 more lines)'
   detail-focus@200x50:
     status: diff
     checks:
@@ -162,7 +177,8 @@ xfail:
     - clicked-field
     - tab-back
     - esc-closes
-    reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+    reason: 'focused: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39 more lines); field-8: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+39 more lines)'
   detail-format@120x40:
     status: error
     checks:
@@ -170,7 +186,8 @@ xfail:
     - more
     - dialog
     - set
-    reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+    reason: 'go: step 6 {"keys": "F", "wait": "Format of[\\s\\S]*enter apply"}: never matched ''Format of[\\s\\S]*enter apply''; fewer: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+31 more lines); more: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+31 more lines)'
   detail-format@200x50:
     status: error
     checks:
@@ -178,7 +195,8 @@ xfail:
     - more
     - dialog
     - set
-    reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+    reason: 'go: step 6 {"keys": "F", "wait": "Format of[\\s\\S]*enter apply"}: never matched ''Format of[\\s\\S]*enter apply''; fewer: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+41 more lines); more: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+41 more lines)'
   detail-paging@120x40:
     status: diff
     checks:
@@ -186,7 +204,8 @@ xfail:
     - end
     - pgup
     - home
-    reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
+    reason: 'pgdn: line 7: python ''│ ‹        c26          c27        c28'' vs go ''│ ‹               c28            c29'' (+29 more lines); end: line 7: python ''│ ‹        c54          c55        c56''
+      vs go ''│ ‹               c56            c57'' (+29 more lines)'
   detail-paging@200x50:
     status: diff
     checks:
@@ -194,7 +213,8 @@ xfail:
     - end
     - pgup
     - home
-    reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
+    reason: 'pgdn: line 7: python ''c30         c31          c32'' vs go ''c31          c32          c33'' (+39 more lines); end: line 7: python ''│ ‹     47          c48        c49'' vs go ''│ ‹               c51            c52''
+      (+39 more lines)'
   detail-pane@120x40:
     status: diff
     checks:
@@ -202,7 +222,8 @@ xfail:
     - row-2
     - closed
     - enter-opens
-    reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
+    reason: 'open: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines); row-2: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30
+      more lines)'
   detail-pane@200x50:
     status: diff
     checks:
@@ -210,34 +231,37 @@ xfail:
     - row-2
     - closed
     - enter-opens
-    reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
+    reason: 'open: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39 more lines); row-2: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39
+      more lines)'
   detail-queued-keys@120x40:
-    status: error
+    status: diff
     checks:
     - after
-    reason: 'go: step 2 {"keys": "d", "wait": "row 55 · file row 55"}: never matched ''row 55 · file row 55'''
+    reason: 'after: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines)'
   detail-units@120x40:
     status: diff
     checks:
     - open
     - row-1
-    reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
+    reason: 'open: line 7: python ''│        objectId     RAJ2000     DEJ20'' vs go ''│       objectId     RAJ2000     DEJ200'' (+30 more lines); row-1: line 7: python ''│        objectId     RAJ2000     DEJ20''
+      vs go ''│       objectId     RAJ2000     DEJ200'' (+30 more lines)'
   detail-units@200x50:
     status: diff
     checks:
     - open
     - row-1
-    reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
+    reason: 'open: line 7: python ''│        objectId     RAJ2000     DEJ20'' vs go ''│       objectId     RAJ2000     DEJ200'' (+38 more lines); row-1: line 7: python ''│        objectId     RAJ2000     DEJ20''
+      vs go ''│       objectId     RAJ2000     DEJ200'' (+38 more lines)'
   detail-wrap@120x40:
     status: diff
     checks:
     - open
-    reason: 'go: step 1 {"keys": "d", "wait": "│ │ {5,}the lazy dog the quick"}: never matched ''│ │ {5,}the lazy dog the quick'''
+    reason: 'open: line 7: python ''│         id    i8         u32'' vs go ''│        id    i8         u32'' (+30 more lines)'
   detail-wrap@200x50:
     status: diff
     checks:
     - open
-    reason: 'go: step 1 {"keys": "d", "wait": "│ │ {5,}the lazy dog the quick"}: never matched ''│ │ {5,}the lazy dog the quick'''
+    reason: 'open: line 7: python ''│         id    i8         u32'' vs go ''│        id    i8         u32'' (+39 more lines)'
   dialog-no-shift@120x40:
     status: error
     checks:
@@ -245,7 +269,8 @@ xfail:
     - goto
     - format
     - after
-    reason: 'go: step 3 {"keys": "g", "wait": "Go to row[\\s\\S]*enter apply"}: never matched ''Go to row[\\s\\S]*enter apply'''
+    reason: 'go: step 3 {"keys": "g", "wait": "Go to row[\\s\\S]*enter apply"}: never matched ''Go to row[\\s\\S]*enter apply''; before: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+30 more lines); goto: go never reached it'
   dialog-no-shift@200x50:
     status: error
     checks:
@@ -253,51 +278,57 @@ xfail:
     - goto
     - format
     - after
-    reason: 'go: step 3 {"keys": "g", "wait": "Go to row[\\s\\S]*enter apply"}: never matched ''Go to row[\\s\\S]*enter apply'''
+    reason: 'go: step 3 {"keys": "g", "wait": "Go to row[\\s\\S]*enter apply"}: never matched ''Go to row[\\s\\S]*enter apply''; before: line 48: python ''└──────────────────────────────────────'' vs go
+      ''└─ columns 1–15 of 16  ·  1 › ─────────''; goto: go never reached it'
   digits@120x40:
     status: diff
     checks:
     - ra-fewer
     - mjd-more
     - mag-fewer
-    reason: diff in ra-fewer, mjd-more, mag-fewer
+    reason: 'ra-fewer: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+32 more lines); mjd-more: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+32 more lines)'
   digits@200x50:
     status: diff
     checks:
     - ra-fewer
     - mjd-more
     - mag-fewer
-    reason: diff in ra-fewer, mjd-more, mag-fewer
+    reason: 'ra-fewer: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+41 more lines); mjd-more: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+41 more lines)'
   equals-cell@120x40:
     status: error
     checks:
     - on-band
     - band-filter
     - second
-    reason: 'go: step 3 {"keys": "=", "wait": "› band = ''i''"}: never matched "› band = ''i''"'
+    reason: 'go: step 6 {"keys": "=", "wait": "› band = ''i'' and ssObjectId"}: never matched "› band = ''i'' and ssObjectId"; on-band: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+30 more lines); band-filter: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines)'
   equals-cell@200x50:
     status: error
     checks:
     - on-band
     - band-filter
     - second
-    reason: 'go: step 3 {"keys": "=", "wait": "› band = ''i''"}: never matched "› band = ''i''"'
+    reason: 'go: step 6 {"keys": "=", "wait": "› band = ''i'' and ssObjectId"}: never matched "› band = ''i'' and ssObjectId"; on-band: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+39 more lines); band-filter: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39 more lines)'
   esc-cancel-count@120x40:
     status: diff
     checks:
     - cancelled
-    reason: diff in cancelled
+    reason: 'cancelled: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+32 more lines)'
   esc-pane-own-count@120x40:
     status: diff
     checks:
     - closed
-    reason: 'go: step 5 {"keys": "d", "settle": false, "wait": "file row"}: never matched ''file row'''
+    reason: 'closed: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+31 more lines)'
   esc-pane-stats@120x40:
     status: diff
     checks:
     - cancelled
     - data
-    reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+    reason: 'cancelled: line 36: python ''┌──────────────────────────'' vs go ''┌───────────────────────────'' (+2 more lines); data: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+32 more lines)'
   export-csv@120x40:
     status: error
     checks:
@@ -305,7 +336,8 @@ xfail:
     - csv-chosen
     - done
     - file:{out}/view.csv
-    reason: 'go: step 6 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply'''
+    reason: 'go: step 6 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply''; dialog: go never reached it; csv-chosen: go never reached
+      it'
   export-csv@200x50:
     status: error
     checks:
@@ -313,7 +345,8 @@ xfail:
     - csv-chosen
     - done
     - file:{out}/view.csv
-    reason: 'go: step 6 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply'''
+    reason: 'go: step 6 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply''; dialog: go never reached it; csv-chosen: go never reached
+      it'
   export-json@120x40:
     status: error
     checks:
@@ -321,7 +354,7 @@ xfail:
     - done
     - file:{out}/bands.json
     - file:{out}/never.csv
-    reason: 'go: step 4 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply'''
+    reason: 'go: step 4 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply''; dialog: go never reached it; done: go never reached it'
   export-json@200x50:
     status: error
     checks:
@@ -329,47 +362,51 @@ xfail:
     - done
     - file:{out}/bands.json
     - file:{out}/never.csv
-    reason: 'go: step 4 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply'''
+    reason: 'go: step 4 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply''; dialog: go never reached it; done: go never reached it'
   export-parquet@120x40:
     status: error
     checks:
     - dialog
     - done
     - file:{out}/view.parquet
-    reason: 'go: step 5 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply'''
+    reason: 'go: step 5 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply''; dialog: go never reached it; done: go never reached it'
   export-parquet@200x50:
     status: error
     checks:
     - dialog
     - done
     - file:{out}/view.parquet
-    reason: 'go: step 5 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply'''
+    reason: 'go: step 5 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply''; dialog: go never reached it; done: go never reached it'
   filter-complete@120x40:
-    status: error
+    status: diff
     checks:
     - suggestion
     - accepted
     - applied
-    reason: 'go: step 3 {"check": "suggestion", "expect": "› midpointMjdTai"}: missing ''› midpointMjdTai'''
+    reason: 'suggestion: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+29 more lines); accepted: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+29 more lines)'
   filter-complete@200x50:
-    status: error
+    status: diff
     checks:
     - suggestion
     - accepted
     - applied
-    reason: 'go: step 3 {"check": "suggestion", "expect": "› midpointMjdTai"}: missing ''› midpointMjdTai'''
+    reason: 'suggestion: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39 more lines); accepted: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+39 more lines)'
   filter-error@120x40:
     status: diff
     checks:
     - error
     - back-in-grid
-    reason: diff in error, back-in-grid
+    reason: 'error: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+31 more lines); back-in-grid: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+32 more lines)'
   filter-error@200x50:
-    status: error
+    status: diff
     checks:
     - error
     - back-in-grid
-    reason: 'go: step 4 {"keys": "enter", "toast": "Query failed", "toast_gone": false, "check": "error": missing ''✗ Query failed   reason: unknown column "nosuchcolumn"'''
+    reason: 'error: line 43: python ''2200   21┌───────────────────────────'' vs go ''2200   21.┌──────────────────────────'' (+5 more lines); back-in-grid: line 43: python ''2200   21┌───────────────────────────''
+      vs go ''2200   21.┌──────────────────────────'' (+5 more lines)'
   filter-esc@120x40:
     status: diff
     checks:
@@ -377,7 +414,8 @@ xfail:
     - back-in-box
     - applied
     - ctrl-x
-    reason: diff in left-box, back-in-box, applied, ctrl-x
+    reason: 'left-box: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines); back-in-box: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+29 more lines)'
   filter-esc@200x50:
     status: diff
     checks:
@@ -385,31 +423,36 @@ xfail:
     - back-in-box
     - applied
     - ctrl-x
-    reason: diff in left-box, back-in-box, applied, ctrl-x
+    reason: 'left-box: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39 more lines); back-in-box: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+39 more lines)'
   filter-everywhere@120x40:
     status: style
     checks:
     - stats
     - plot
-    reason: style in stats, plot
+    reason: 'stats: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (83 cells in all); plot: style on row 0, 41 cells from column 16: fg=cyan bold=True
+      dim=False vs fg=default bold=False dim=True (41 cells in all)'
   filter-everywhere@200x50:
     status: style
     checks:
     - stats
     - plot
-    reason: style in stats, plot
+    reason: 'stats: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (83 cells in all); plot: style on row 0, 41 cells from column 16: fg=cyan bold=True
+      dim=False vs fg=default bold=False dim=True (41 cells in all)'
   filter-hint@120x40:
     status: diff
     checks:
     - first
     - end
-    reason: diff in first, end
+    reason: 'first: line 7: python ''│        file_row_number  weird name'' vs go ''│       file_row_number  weird name'' (+30 more lines); end: line 7: python ''│ ‹              pos'' vs go ''│ ‹     pos''
+      (+30 more lines)'
   filter-hint@200x50:
     status: diff
     checks:
     - first
     - end
-    reason: diff in first, end
+    reason: 'first: line 7: python ''│        file_row_number  weird name'' vs go ''│       file_row_number  weird name'' (+38 more lines); end: line 7: python ''│        file_row_number  weird name'' vs
+      go ''│       file_row_number  weird name'' (+38 more lines)'
   filter-history@120x40:
     status: diff
     checks:
@@ -417,7 +460,8 @@ xfail:
     - up-1
     - up-2
     - down-1
-    reason: diff in second, up-1, up-2, down-1
+    reason: 'second: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines); up-1: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+29
+      more lines)'
   filter-history@200x50:
     status: diff
     checks:
@@ -425,45 +469,51 @@ xfail:
     - up-1
     - up-2
     - down-1
-    reason: diff in second, up-1, up-2, down-1
+    reason: 'second: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39 more lines); up-1: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39
+      more lines)'
   filter-sql@120x40:
     status: diff
     checks:
     - result
     - moved
-    reason: diff in result, moved
+    reason: 'result: line 39: python ''g go to   e'' vs go ''g go to   e…''; moved: line 39: python ''g go to   e'' vs go ''g go to   e…'''
   filter-sql@200x50:
     status: style
     checks:
     - result
     - moved
-    reason: diff in result, moved
+    reason: 'result: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (96 cells in all); moved: style on row 0, 41 cells from column 16: fg=cyan bold=True
+      dim=False vs fg=default bold=False dim=True (96 cells in all)'
   filter-unbalanced@120x40:
     status: error
     checks:
     - error
     - two-statements
-    reason: 'go: step 3 {"keys": "enter", "toast": "unbalanced parentheses", "toast_gone": false, "check: missing ''✗ Query failed   reason: unbalanced parentheses'''
+    reason: 'go: step 6 {"keys": "enter", "toast": "syntax error at or near \";\"", "toast_gone": false,: notification ''syntax error at or near ";"'' never shown; error: line 7: python ''diaSourceId  ssObjectId''
+      vs go ''diaSourceId  ssObjectId'' (+31 more lines); two-statements: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+31 more lines)'
   filter-unbalanced@200x50:
     status: error
     checks:
     - error
     - two-statements
-    reason: 'go: step 3 {"keys": "enter", "toast": "unbalanced parentheses", "toast_gone": false, "check: missing ''✗ Query failed   reason: unbalanced parentheses'''
+    reason: 'go: step 6 {"keys": "enter", "toast": "syntax error at or near \";\"", "toast_gone": false,: notification ''syntax error at or near ";"'' never shown; error: line 7: python ''diaSourceId  ssObjectId''
+      vs go ''diaSourceId  ssObjectId'' (+41 more lines); two-statements: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+41 more lines)'
   filter-where@120x40:
     status: diff
     checks:
     - box-focused
     - typed
     - applied
-    reason: diff in box-focused, typed, applied
+    reason: 'box-focused: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+29 more lines); typed: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+29 more lines)'
   filter-where@200x50:
     status: diff
     checks:
     - box-focused
     - typed
     - applied
-    reason: diff in box-focused, typed, applied
+    reason: 'box-focused: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39 more lines); typed: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+39 more lines)'
   format-F@120x40:
     status: error
     checks:
@@ -473,7 +523,7 @@ xfail:
     - bad-spec
     - prefilled
     - reset
-    reason: 'go: step 2 {"keys": "F", "wait": "Format of[\\s\\S]*enter apply"}: never matched ''Format of[\\s\\S]*enter apply'''
+    reason: 'go: step 2 {"keys": "F", "wait": "Format of[\\s\\S]*enter apply"}: never matched ''Format of[\\s\\S]*enter apply''; dialog: go never reached it; sci: go never reached it'
   format-F@200x50:
     status: error
     checks:
@@ -483,23 +533,25 @@ xfail:
     - bad-spec
     - prefilled
     - reset
-    reason: 'go: step 2 {"keys": "F", "wait": "Format of[\\s\\S]*enter apply"}: never matched ''Format of[\\s\\S]*enter apply'''
+    reason: 'go: step 2 {"keys": "F", "wait": "Format of[\\s\\S]*enter apply"}: never matched ''Format of[\\s\\S]*enter apply''; dialog: go never reached it; sci: go never reached it'
   format-option-not-saved@120x40:
     status: diff
     checks:
     - first
-    reason: diff in first
+    reason: 'first: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines)'
   formats-readback@120x40:
     status: error
     checks:
     - first
-    reason: 'go: step 1 {"check": "first", "expect": ["f64·deg·\\.2f", "333\\.15 "]}: missing ''f64·deg·\\.2f'''
+    reason: 'go: step 1 {"check": "first", "expect": ["f64·deg·\\.2f", "333\\.15 "]}: missing ''f64·deg·\\.2f''; first: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30
+      more lines)'
   formats-saved@120x40:
     status: error
     checks:
     - set
     - file:{config}/pqx/formats.yaml
-    reason: 'go: step 4 {"keys": "F", "wait": "Format of[\\s\\S]*enter apply"}: never matched ''Format of[\\s\\S]*enter apply'''
+    reason: 'go: step 4 {"keys": "F", "wait": "Format of[\\s\\S]*enter apply"}: never matched ''Format of[\\s\\S]*enter apply''; set: go never reached it; file:{config}/pqx/formats.yaml: go never reached
+      it'
   goto-row@120x40:
     status: error
     checks:
@@ -507,7 +559,7 @@ xfail:
     - row-1234
     - half
     - last
-    reason: 'go: step 1 {"keys": "g", "wait": "Go to row[\\s\\S]*enter apply"}: never matched ''Go to row[\\s\\S]*enter apply'''
+    reason: 'go: step 1 {"keys": "g", "wait": "Go to row[\\s\\S]*enter apply"}: never matched ''Go to row[\\s\\S]*enter apply''; dialog: go never reached it; row-1234: go never reached it'
   goto-row@200x50:
     status: error
     checks:
@@ -515,13 +567,13 @@ xfail:
     - row-1234
     - half
     - last
-    reason: 'go: step 1 {"keys": "g", "wait": "Go to row[\\s\\S]*enter apply"}: never matched ''Go to row[\\s\\S]*enter apply'''
+    reason: 'go: step 1 {"keys": "g", "wait": "Go to row[\\s\\S]*enter apply"}: never matched ''Go to row[\\s\\S]*enter apply''; dialog: go never reached it; row-1234: go never reached it'
   goto-suffix@120x40:
     status: error
     checks:
     - row-1.5M
     - first
-    reason: 'go: step 1 {"keys": "g", "wait": "Go to row[\\s\\S]*enter apply"}: never matched ''Go to row[\\s\\S]*enter apply'''
+    reason: 'go: step 1 {"keys": "g", "wait": "Go to row[\\s\\S]*enter apply"}: never matched ''Go to row[\\s\\S]*enter apply''; row-1.5M: go never reached it; first: go never reached it'
   help@120x40:
     status: diff
     checks:
@@ -529,7 +581,8 @@ xfail:
     - help-pgdn
     - closed
     - q-closes
-    reason: diff in help, help-pgdn, closed, q-closes
+    reason: 'help: line 4: python ''ric/pqx                      │──────────'' vs go ''ric/pqx     │──────────┘'' (+32 more lines); help-pgdn: line 4: python ''ric/pqx                      │──────────''
+      vs go ''ric/pqx     │──────────┘'' (+32 more lines)'
   help@200x50:
     status: diff
     checks:
@@ -537,29 +590,32 @@ xfail:
     - help-pgdn
     - closed
     - q-closes
-    reason: diff in help, help-pgdn, closed, q-closes
+    reason: 'help: line 4: python ''ric/pqx                      │──────────'' vs go ''ric/pqx     │───────────────────────────'' (+42 more lines); help-pgdn: line 4: python ''ric/pqx                      │──────────''
+      vs go ''ric/pqx     │───────────────────────────'' (+42 more lines)'
   hidden-linked-column@120x40:
     status: diff
     checks:
     - data
-    reason: diff in data
+    reason: 'data: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+31 more lines)'
   hidden-linked-column@200x50:
     status: diff
     checks:
     - data
-    reason: diff in data
+    reason: 'data: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+40 more lines)'
   hide-keeps-viewport@120x40:
     status: diff
     checks:
     - before
     - hidden
-    reason: diff in before, hidden
+    reason: 'before: line 7: python ''‹             c07        c08        c09'' vs go ''‹           c07        c08        c09'' (+30 more lines); hidden: line 7: python ''‹            c07        c08        c09''
+      vs go ''‹           c07        c08        c09'' (+32 more lines)'
   hide-keeps-viewport@200x50:
     status: diff
     checks:
     - before
     - hidden
-    reason: diff in before, hidden
+    reason: 'before: line 7: python ''│ ‹         c00        c01        c02'' vs go ''│ ‹           c01        c02         c03'' (+39 more lines); hidden: line 7: python ''‹            c01        c02         c03''
+      vs go ''‹           c01        c02         c03'' (+41 more lines)'
   hide-pin@120x40:
     status: diff
     checks:
@@ -567,7 +623,8 @@ xfail:
     - pinned
     - end-with-pin
     - home
-    reason: diff in hidden, pinned, end-with-pin, home
+    reason: 'hidden: line 7: python ''│         id        c00        c02'' vs go ''│        id        c00        c02'' (+32 more lines); pinned: line 7: python ''│         id        c00        c02'' vs
+      go ''│        id        c00        c02'' (+30 more lines)'
   hide-pin@200x50:
     status: diff
     checks:
@@ -575,118 +632,133 @@ xfail:
     - pinned
     - end-with-pin
     - home
-    reason: diff in hidden, pinned, end-with-pin, home
+    reason: 'hidden: line 7: python ''│         id        c00        c02'' vs go ''│        id        c00        c02'' (+41 more lines); pinned: line 7: python ''│         id        c00        c02'' vs
+      go ''│        id        c00        c02'' (+39 more lines)'
   keep-viewport-equals@120x40:
-    status: error
+    status: diff
     checks:
     - before
     - after-equals
     - after-clear
-    reason: 'go: step 4 {"keys": "=", "wait": "› band = ''g''"}: never matched "› band = ''g''"'
+    reason: 'before: line 12: python ''1  │'' vs go ''│'' (+9 more lines); after-equals: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines)'
   keep-viewport-equals@200x50:
-    status: error
+    status: diff
     checks:
     - before
     - after-equals
     - after-clear
-    reason: 'go: step 4 {"keys": "=", "wait": "› band = ''g''"}: never matched "› band = ''g''"'
+    reason: 'before: line 48: python ''└──────────────────────────────────────'' vs go ''└─ columns 1–15 of 16  ·  1 › ─────────''; after-equals: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId''
+      (+39 more lines)'
   keep-viewport-filter@120x40:
     status: error
     checks:
     - before
     - filtered
-    reason: 'go: step 3 {"check": "before", "expect": ["‹ +c05", "row 30\\b"]}: missing ''‹ +c05'''
+    reason: 'go: step 3 {"check": "before", "expect": ["‹ +c05", "row 30\\b"]}: missing ''‹ +c05''; before: line 7: python ''‹           c05          c06        c07'' vs go ''‹             c06        c07        c08''
+      (+30 more lines); filtered: line 7: python ''c06        c07        c08'' vs go ''c07            c08'' (+30 more lines)'
   keep-viewport-filter@200x50:
     status: diff
     checks:
     - before
     - filtered
-    reason: diff in before, filtered
+    reason: 'before: line 7: python ''c14    › │'' vs go ''c14  c1› │'' (+39 more lines); filtered: line 7: python ''│            id        c00        c01'' vs go ''│ ‹                c02            c03''
+      (+39 more lines)'
   keep-viewport-sort@120x40:
     status: error
     checks:
     - before
     - sorted
     - sort-off
-    reason: 'go: step 3 {"check": "before", "expect": "‹ +c05"}: missing ''‹ +c05'''
+    reason: 'go: step 3 {"check": "before", "expect": "‹ +c05"}: missing ''‹ +c05''; before: line 7: python ''‹           c05          c06        c07'' vs go ''‹             c06        c07        c08''
+      (+30 more lines); sorted: line 7: python ''c06        c07        c08'' vs go ''c07            c08'' (+31 more lines)'
   keep-viewport-sort@200x50:
     status: diff
     checks:
     - before
     - sorted
     - sort-off
-    reason: diff in before, sorted, sort-off
+    reason: 'before: line 7: python ''c14    › │'' vs go ''c14  c1› │'' (+39 more lines); sorted: line 7: python ''│            id        c00        c01'' vs go ''│ ‹                  c02            c03''
+      (+40 more lines)'
   looks-env@120x40:
     status: diff
     checks:
     - first
-    reason: diff in first
+    reason: 'first: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines)'
   looks-options@120x40:
     status: diff
     checks:
     - first
     - detail
-    reason: 'go: step 2 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+    reason: 'first: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines); detail: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30
+      more lines)'
   metadata-tab@120x40:
     status: diff
     checks:
     - meta
     - meta-pgdn
-    reason: diff in meta, meta-pgdn
+    reason: 'meta: line 8: python ''ls/a4210df6-…  │ │  0          0  2,500'' vs go ''ls/a4210df6-c  │ │  0          0  2,500'' (+18 more lines); meta-pgdn: line 8: python ''ls/a4210df6-…  │ │  0          0  2,500''
+      vs go ''ls/a4210df6-c  │ │  0          0  2,500'' (+18 more lines)'
   metadata-tab@200x50:
     status: diff
     checks:
     - meta
     - meta-pgdn
-    reason: diff in meta, meta-pgdn
+    reason: 'meta: line 8: python ''scratchpad/w…  │ │  0          0  2,500'' vs go ''scratchpad/wp  │ │  0          0  2,500'' (+15 more lines); meta-pgdn: line 8: python ''scratchpad/w…  │ │  0          0  2,500''
+      vs go ''scratchpad/wp  │ │  0          0  2,500'' (+15 more lines)'
   option-format@120x40:
     status: diff
     checks:
     - first
     - end
-    reason: diff in first, end
+    reason: 'first: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines); end: line 7: python ''psfFlux  psfFluxErr          mag'' vs go ''psfFluxErr          mag        snr''
+      (+30 more lines)'
   option-format@200x50:
     status: diff
     checks:
     - first
     - end
-    reason: diff in first, end
+    reason: 'first: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39 more lines); end: line 7: python ''│ ‹     jectId           ra         dec'' vs go ''│ ‹              ra         dec     raE''
+      (+39 more lines)'
   option-w-sql@120x40:
     status: diff
     checks:
     - first
-    reason: diff in first
+    reason: 'first: line 39: python ''g go to   e'' vs go ''g go to   e…'''
   option-w-sql@200x50:
     status: style
     checks:
     - first
-    reason: diff in first
+    reason: 'first: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (95 cells in all)'
   option-w@120x40:
     status: diff
     checks:
     - first
     - pgdn
-    reason: diff in first, pgdn
+    reason: 'first: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines); pgdn: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30
+      more lines)'
   option-w@200x50:
     status: diff
     checks:
     - first
     - pgdn
-    reason: diff in first, pgdn
+    reason: 'first: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39 more lines); pgdn: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39
+      more lines)'
   pinned-cursor@120x40:
     status: diff
     checks:
     - scrolled
     - home
     - right-again
-    reason: diff in scrolled, home, right-again
+    reason: 'scrolled: line 7: python ''│ ‹       id        c00        c01    c'' vs go ''│ ‹      id        c00        c01'' (+30 more lines); home: line 7: python ''│ ‹       id        c00        c01    c''
+      vs go ''│ ‹      id        c00        c01'' (+30 more lines)'
   pinned-cursor@200x50:
     status: diff
     checks:
     - scrolled
     - home
     - right-again
-    reason: diff in scrolled, home, right-again
+    reason: 'scrolled: line 7: python ''│ ‹       id        c00        c01 08'' vs go ''│ ‹      id        c00        c01'' (+39 more lines); home: line 7: python ''│ ‹       id        c00        c01 08''
+      vs go ''│ ‹      id        c00        c01'' (+39 more lines)'
   plot-dropdown@120x40:
     status: style
     checks:
@@ -694,7 +766,8 @@ xfail:
     - dropdown
     - narrowed
     - chosen
-    reason: style in stepped-mode, dropdown, narrowed, chosen
+    reason: 'stepped-mode: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (41 cells in all); dropdown: style on row 0, 41 cells from column 16: fg=cyan
+      bold=True dim=False vs fg=default bold=False dim=True (41 cells in all)'
   plot-dropdown@200x50:
     status: style
     checks:
@@ -702,123 +775,137 @@ xfail:
     - dropdown
     - narrowed
     - chosen
-    reason: style in stepped-mode, dropdown, narrowed, chosen
+    reason: 'stepped-mode: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (41 cells in all); dropdown: style on row 0, 41 cells from column 16: fg=cyan
+      bold=True dim=False vs fg=default bold=False dim=True (41 cells in all)'
   plot-sky@120x40:
     status: style
     checks:
     - sky
     - rotated
-    reason: style in sky, rotated
+    reason: 'sky: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (41 cells in all); rotated: style on row 0, 41 cells from column 16: fg=cyan bold=True
+      dim=False vs fg=default bold=False dim=True (41 cells in all)'
   plot-sky@200x50:
     status: style
     checks:
     - sky
     - rotated
-    reason: style in sky, rotated
+    reason: 'sky: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (41 cells in all); rotated: style on row 0, 41 cells from column 16: fg=cyan bold=True
+      dim=False vs fg=default bold=False dim=True (41 cells in all)'
   raw-smart@120x40:
     status: diff
     checks:
     - raw
     - smart
-    reason: diff in raw, smart
+    reason: 'raw: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines); smart: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30
+      more lines)'
   raw-smart@200x50:
     status: diff
     checks:
     - raw
     - smart
-    reason: diff in raw, smart
+    reason: 'raw: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39 more lines); smart: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39
+      more lines)'
   resize@120x40:
     status: diff
     checks:
     - smaller
     - larger
-    reason: diff in smaller, larger
+    reason: 'smaller: line 0: python ''│   28   170000000000000028           ∅'' vs go ''pqx <VER>  ·  demo.parquet  ·  20,000'' (+29 more lines); larger: line 0: python ''│   28   170000000000000028           ∅''
+      vs go ''pqx <VER>  ·  demo.parquet  ·  20,000'' (+44 more lines)'
   sampling-m@120x40:
     status: diff
     checks:
     - sampling-on
     - sampling-off
-    reason: diff in sampling-on, sampling-off
+    reason: 'sampling-on: line 36: python ''┌──────────────────────────'' vs go ''┌───────────────────────────'' (+2 more lines); sampling-off: line 36: python ''┌──────────────────────────'' vs go ''┌───────────────────────────''
+      (+2 more lines)'
   sampling-m@200x50:
     status: diff
     checks:
     - sampling-on
     - sampling-off
-    reason: diff in sampling-on, sampling-off
+    reason: 'sampling-on: line 46: python ''┌───────────────────────────'' vs go ''┌──────────────────────────'' (+2 more lines); sampling-off: line 46: python ''┌───────────────────────────'' vs go ''┌──────────────────────────''
+      (+2 more lines)'
   schema-tab@120x40:
     status: diff
     checks:
     - schema
     - data-follows
-    reason: diff in schema, data-follows
+    reason: 'schema: line 31: python ''▌                │'' vs go ''│''; data-follows: line 7: python ''│ ‹        decErr  midpointMjdTai  band'' vs go ''│              diaSourceId  ssObjectId'' (+30 more
+      lines)'
   schema-tab@200x50:
     status: diff
     checks:
     - schema
     - data-follows
-    reason: diff in schema, data-follows
+    reason: 'schema: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (466 cells in all); data-follows: line 7: python ''│ ‹      ssObjectId          ra''
+      vs go ''│              diaSourceId  ssObjectId'' (+39 more lines)'
   schema-types@120x40:
     status: diff
     checks:
     - schema
-    reason: diff in schema
+    reason: 'schema: line 24: python "tring, int64 (''mp'')>    –         –" vs go ''tring, int64>           –         –'' (+1 more lines)'
   schema-types@200x50:
     status: diff
     checks:
     - schema
-    reason: diff in schema
+    reason: 'schema: line 24: python "tring, int64 (''mp'')>    –         –" vs go ''tring, int64>           –         –'''
   sort-click@120x40:
     status: diff
     checks:
     - click-1
     - click-2
-    reason: diff in click-1, click-2
+    reason: 'click-1: line 7: python ''ectId       ra ↑         dec     raErr'' vs go ''ectId        ra ↑         dec     raErr'' (+31 more lines); click-2: line 38: python ''└──────────────────────────────────────''
+      vs go ''└─ columns 1–8 of 16  ·  8 › ──────────'' (+1 more lines)'
   sort-cycle@120x40:
     status: diff
     checks:
     - asc
     - desc
     - sort-off
-    reason: diff in asc, desc, sort-off
+    reason: 'asc: line 37: python ''d dec ↑  ·  row 0'' vs go ''d dec ↑  ·  <T>  ·  row 0'' (+2 more lines); desc: line 7: python ''ra      dec ↓     raErr    decErr  m'' vs go ''ra       dec ↓     raErr    decErr''
+      (+30 more lines)'
   sort-cycle@200x50:
     status: diff
     checks:
     - asc
     - desc
     - sort-off
-    reason: diff in asc, desc, sort-off
+    reason: 'asc: line 47: python ''d dec ↑  ·  row 0'' vs go ''d dec ↑  ·  <T>  ·  row 0'' (+1 more lines); desc: line 7: python ''ra      dec ↓     raErr    decErr  m'' vs go ''ra       dec ↓     raErr    decErr''
+      (+39 more lines)'
   startup@120x40:
     status: diff
     checks:
     - first
-    reason: diff in first
+    reason: 'first: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines)'
   startup@200x50:
     status: diff
     checks:
     - first
-    reason: diff in first
+    reason: 'first: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+39 more lines)'
   stats-data-link@120x40:
     status: diff
     checks:
     - data
     - schema
-    reason: diff in data, schema
+    reason: 'data: line 7: python ''│ ‹             dec     raErr    decErr'' vs go ''│              diaSourceId  ssObjectId'' (+30 more lines); schema: line 31: python ''▌                │'' vs go ''│'''
   stats-data-link@200x50:
     status: diff
     checks:
     - data
     - schema
-    reason: diff in data, schema
+    reason: 'data: line 7: python ''│ ‹      ssObjectId          ra'' vs go ''│              diaSourceId  ssObjectId'' (+39 more lines); schema: style on row 0, 41 cells from column 16: fg=cyan bold=True
+      dim=False vs fg=default bold=False dim=True (466 cells in all)'
   stats-i@120x40:
     status: style
     checks:
     - stats-snr
-    reason: style in stats-snr
+    reason: 'stats-snr: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (89 cells in all)'
   stats-i@200x50:
     status: style
     checks:
     - stats-snr
-    reason: style in stats-snr
+    reason: 'stats-snr: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (89 cells in all)'
   stats-keys@120x40:
     status: style
     checks:
@@ -827,7 +914,8 @@ xfail:
     - log-values
     - fewer-bins
     - more-bins
-    reason: style in psfFlux, log-counts, log-values, fewer-bins, more-bins
+    reason: 'psfFlux: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (89 cells in all); log-counts: style on row 0, 41 cells from column 16: fg=cyan
+      bold=True dim=False vs fg=default bold=False dim=True (89 cells in all)'
   stats-keys@200x50:
     status: style
     checks:
@@ -836,17 +924,18 @@ xfail:
     - log-values
     - fewer-bins
     - more-bins
-    reason: style in psfFlux, log-counts, log-values, fewer-bins, more-bins
+    reason: 'psfFlux: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (89 cells in all); log-counts: style on row 0, 41 cells from column 16: fg=cyan
+      bold=True dim=False vs fg=default bold=False dim=True (89 cells in all)'
   stats-topvalues@120x40:
     status: style
     checks:
     - band
-    reason: style in band
+    reason: 'band: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (76 cells in all)'
   stats-topvalues@200x50:
     status: style
     checks:
     - band
-    reason: style in band
+    reason: 'band: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (76 cells in all)'
   tabs@120x40:
     status: diff
     checks:
@@ -855,7 +944,7 @@ xfail:
     - data
     - next
     - wrap-prev
-    reason: diff in schema, meta, data, next, wrap-prev
+    reason: 'schema: line 31: python ''▌                │'' vs go ''│''; meta: line 8: python ''ls/a4210df6-…  │ │  0          0  2,500'' vs go ''ls/a4210df6-c  │ │  0          0  2,500'' (+18 more lines)'
   tabs@200x50:
     status: diff
     checks:
@@ -864,13 +953,14 @@ xfail:
     - data
     - next
     - wrap-prev
-    reason: diff in schema, meta, data, next, wrap-prev
+    reason: 'schema: style on row 0, 41 cells from column 16: fg=cyan bold=True dim=False vs fg=default bold=False dim=True (444 cells in all); meta: line 8: python ''scratchpad/w…  │ │  0          0  2,500''
+      vs go ''scratchpad/wp  │ │  0          0  2,500'' (+15 more lines)'
   theme@120x40:
     status: diff
     checks:
     - first
     - schema
-    reason: diff in first, schema
+    reason: 'first: line 7: python ''diaSourceId  ssObjectId'' vs go ''diaSourceId  ssObjectId'' (+30 more lines); schema: line 31: python ''▌                │'' vs go ''│'''
   types-grid@120x40:
     status: diff
     checks:
@@ -878,7 +968,8 @@ xfail:
     - middle
     - end
     - detail-null-row
-    reason: 'go: step 7 {"keys": "d", "wait": "row 3 · file row 3"}: never matched ''row 3 · file row 3'''
+    reason: 'first: line 7: python ''│         id    i8         u32'' vs go ''│        id    i8         u32'' (+30 more lines); middle: line 7: python ''│ ‹     2        f64  flag  name'' vs go ''│ ‹         f64  flag  name         bin''
+      (+30 more lines)'
   types-grid@200x50:
     status: diff
     checks:
@@ -886,4 +977,5 @@ xfail:
     - middle
     - end
     - detail-null-row
-    reason: 'go: step 7 {"keys": "d", "wait": "row 3 · file row 3"}: never matched ''row 3 · file row 3'''
+    reason: 'first: line 7: python ''│         id    i8         u32'' vs go ''│        id    i8         u32'' (+39 more lines); middle: line 7: python ''│         id    i8         u32'' vs go ''│        id    i8         u32''
+      (+39 more lines)'
