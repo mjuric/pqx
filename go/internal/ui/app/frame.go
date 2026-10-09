@@ -107,7 +107,7 @@ func borderLine(look kit.Look, l, r string, w int, t styled.Text, bs styled.Styl
 	}
 	tt := t
 	if room := w - 6; lipgloss.Width(t.Plain) > room {
-		tt = styled.Text{Plain: ansi.Truncate(t.Plain, room, "…")}
+		tt = truncateStyled(t, room)
 	}
 	// the spaces around the title are the title's (Textual's border titles),
 	// not the border's colour
@@ -179,3 +179,32 @@ func (c *basicChrome) KeyBar(w int, hints []kit.KeyHint) string {
 }
 
 func (c *basicChrome) Toasts(w, h int) []kit.Overlay { return nil }
+
+// truncateStyled cuts t to w cells, ending in "…" in the style of the cut
+// character, keeping the styles of what stays (Rich's ellipsis overflow).
+func truncateStyled(t styled.Text, w int) styled.Text {
+	r := []rune(t.Plain)
+	n, cut := 0, len(r)
+	for i, c := range r {
+		cw := ansi.StringWidth(string(c))
+		if n+cw > w-1 {
+			cut = i
+			break
+		}
+		n += cw
+	}
+	if cut >= len(r) {
+		return t
+	}
+	out := styled.Text{Plain: string(r[:cut]) + "…", Style: t.Style, Justify: t.Justify}
+	for _, sp := range t.Spans {
+		a, b := sp.Start, min(sp.End, cut)
+		if sp.Start <= cut && cut < sp.End {
+			b = cut + 1 // the ellipsis takes the cut character's style
+		}
+		if a < b {
+			out.Spans = append(out.Spans, styled.Span{Start: a, End: b, Style: sp.Style})
+		}
+	}
+	return out
+}
