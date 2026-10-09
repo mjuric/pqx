@@ -166,7 +166,7 @@ func TestScrollbar(t *testing.T) {
 		{10, 30, 10, 5, false, ".▋r###....."},
 		{116, 135, 116, 0, false, strings.Repeat("#", 99) + "▊" + strings.Repeat(".", 16)},
 	} {
-		got := render(scrollbar(c.size, c.virtual, c.window, c.pos, c.vertical, "k"))
+		got := render(scrollbar(c.size, c.virtual, c.window, c.pos, c.vertical, styled.Style{Fg: "k"}))
 		if got != c.want {
 			t.Errorf("%+v: got %q", c, got)
 		}
