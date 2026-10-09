@@ -104,12 +104,18 @@ func grid(cols []column, rows [][]cell) []styled.Text {
 			widths[i] = max(widths[i], w)
 		}
 	}
+	// Rich gives an empty last column one cell
+	if n := len(widths); n > 0 && widths[n-1] == 0 {
+		widths[n-1] = 1
+	}
 	out := make([]styled.Text, 0, len(rows))
 	for _, r := range rows {
 		var line styled.Text
 		for i, c := range r {
 			if i > 0 {
-				line.Append("  ", styled.Style{})
+				// Rich pads a cell with its column's style: the gap takes
+				// the style of the column to its left
+				line.Append("  ", cols[i-1].style)
 			}
 			t := c.t
 			if n := ansi.StringWidth(t.Plain); n > widths[i] {

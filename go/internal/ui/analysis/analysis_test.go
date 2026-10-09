@@ -48,6 +48,8 @@ func TestFmtFloat(t *testing.T) {
 	}
 }
 
+// Wrap breaks lines as Rich does (checked with Text.wrap), keeping the
+// spaces after the last word.
 func TestWrap(t *testing.T) {
 	var tx styled.Text
 	tx.Append("name", styled.Style{Bold: true})
@@ -60,7 +62,7 @@ func TestWrap(t *testing.T) {
 			t.Errorf("line too long: %q", l.Plain)
 		}
 	}
-	if strings.Join(got, "|") != "name   a long|description of the|column" {
+	if strings.Join(got, "|") != "name   a long |description of the |column" {
 		t.Fatalf("wrapped %q", got)
 	}
 	if lines[0].Spans[0] != (styled.Span{Start: 0, End: 4, Style: styled.Style{Bold: true}}) {
