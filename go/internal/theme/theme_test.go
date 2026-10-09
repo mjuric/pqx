@@ -85,7 +85,7 @@ func TestAccentDimBorder(t *testing.T) {
 	// matters for names, an alpha is blended over black
 	for border, want := range map[string]string{
 		"red ": "#800000", "ansi_red  ": "#800000", "#FF000080": "#800000", "#ff000080": "#800000",
-		"#f008": "#880000", "#123 ": "#112233", "#ABCDEF": "#abcdef",
+		"#f008": "#880000", "#123 ": "#112233", "red\t": "", "white\n": "", "#123\t": "#112233", "#ABCDEF": "#abcdef",
 	} {
 		c, err := ParseBorder(border)
 		if err != nil {
@@ -96,7 +96,7 @@ func TestAccentDimBorder(t *testing.T) {
 			t.Errorf("%q: %s, want %s", border, hexOf(c), want)
 		}
 	}
-	for _, bad := range []string{"orange", "bogus", "ansi_orange", "#12", "#ggg", " red", "RED", "ansi_RED", "Red", "white\t", "#12345678zz", "#1234567g"} {
+	for _, bad := range []string{"orange", "bogus", "ansi_orange", "#12", "#ggg", " red", "RED", "ansi_RED", "Red", " ", "\tred", "#12345678zz", "#1234567g"} {
 		if _, err := New("", "", bad, ""); err == nil {
 			t.Errorf("border %q accepted", bad)
 		}

@@ -14,8 +14,6 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/apache/arrow-go/v18/parquet/pqarrow"
-
-	"github.com/mjuric/pqx/go/internal/fmtx"
 )
 
 // TestMain lets the pty tests run this test binary as pqx: with
@@ -54,12 +52,7 @@ func TestCommandLinesMatchPython(t *testing.T) {
 	t.Setenv("COLUMNS", "80")
 	defer func(v string) { version = v }(version)
 	version = "{VERSION}"
-	stubbed := fmtx.OverrideError(fmtx.ParseOverride("99"), "", nil) == ""
 	for _, c := range g.Cases {
-		if stubbed && strings.Contains(c.Stderr, "pqx: error: --format a=") {
-			t.Logf("skipped until fmtx.OverrideError is implemented: %q", c.Args)
-			continue
-		}
 		var out, errb bytes.Buffer
 		code := run(c.Args, &out, &errb)
 		if code != c.Code || out.String() != c.Stdout || errb.String() != c.Stderr {

@@ -239,9 +239,9 @@ func (t *Theme) BorderColor() color.Color { return t.border }
 // border variable: an ANSI name in lower case with or without the "ansi_"
 // prefix (bright_black, ansi_white, default), or #rgb, #rgba, #rrggbb or
 // #rrggbbaa in either case (an alpha is blended over black, as Textual draws
-// it). Trailing spaces are ignored; anything else is an error.
+// it). Trailing whitespace is ignored; anything else is an error.
 func ParseBorder(s string) (color.Color, error) {
-	s = strings.TrimRight(s, " ")
+	s = strings.TrimRight(s, " \t\n\r\f")
 	if strings.HasPrefix(s, "#") {
 		if c, ok := parseHexAlpha(s); ok {
 			return c.color(), nil

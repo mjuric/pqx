@@ -205,6 +205,11 @@ func TestOptions(t *testing.T) {
 	if o.Accent != "magenta" || o.Dim != "bright-black" || o.Border != "#123456" {
 		t.Errorf("from the environment: %+v", o)
 	}
+	for _, b := range []string{"red\t", "red\n", "red ", "#123\t"} { // trailing whitespace, as Textual
+		if _, err := Parse([]string{"f", "--border", b}, env(nil)); err != nil {
+			t.Errorf("--border %q: %v", b, err)
+		}
+	}
 	o, _ = Parse([]string{"f", "--accent", "cyan", "--dim", "faint", "--border", "red"}, e)
 	if o.Accent != "cyan" || o.Dim != "faint" || o.Border != "ansi_red" {
 		t.Errorf("options win over the environment: %+v", o)
@@ -225,7 +230,10 @@ func TestOptions(t *testing.T) {
 			"argument --theme: invalid choice: 'monokai' (choose from tokyo-night, dracula, catppuccin-mocha, nord, gruvbox)"},
 		{[]string{"f", "--border", "orange"}, nil, "argument --border: unknown colour"},
 		{[]string{"f"}, map[string]string{"PQX_BORDER": "bogus"}, "PQX_BORDER: unknown colour"},
-		{[]string{"f", "--border", "\x1b[31m"}, nil, `argument --border: unknown colour "ansi_\x1b[31m"`},
+		{[]string{"f", "--border", "\x1b[31m"}, nil, `argument --border: unknown colour '\x1b[31m'`},
+		{[]string{"f", "--border", " "}, nil, `argument --border: unknown colour ' '`},
+		{[]string{"f", "--border", "RED"}, nil, `argument --border: unknown colour 'RED'`},
+		{[]string{"f"}, map[string]string{"PQX_BORDER": "x\t"}, `PQX_BORDER: unknown colour 'x\t'`},
 		{[]string{"\x1b]0;T\x07", "--bogus\x1b"}, nil, "unrecognized arguments: --bogus␛"},
 	} {
 		_, err := Parse(c.args, env(c.env))

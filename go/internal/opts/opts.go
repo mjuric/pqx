@@ -434,11 +434,12 @@ func Parse(args []string, getenv func(string) string) (*Options, error) {
 		o.Border = "ansi_" + o.Border
 	}
 	if _, err := theme.ParseBorder(o.Border); err != nil {
-		what := "argument --border"
+		what, given := "argument --border", border
 		if border == "" {
-			what = "PQX_BORDER"
+			what, given = "PQX_BORDER", getenv("PQX_BORDER")
 		}
-		return nil, usageErr("%s: %v", what, err)
+		return nil, usageErr("%s: unknown colour %s (use an ANSI name such as bright_black or white, or #rrggbb)",
+			what, pyRepr(given))
 	}
 	if o.Theme != "" && !contains(theme.Names, o.Theme) {
 		return nil, usageErr("argument --theme: invalid choice: %s (choose from %s)",
