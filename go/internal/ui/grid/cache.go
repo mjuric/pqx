@@ -49,6 +49,7 @@ type viewData struct {
 
 func (g *Grid) newViewData(v data.View) *viewData {
 	g.gen++
+	g.st.Loaded = 0 // nothing read of the new view yet
 	d := &viewData{
 		gen: g.gen, view: v, ids: g.hasRowIDs(v), total: -1, upper: -1,
 		fileRow:    map[int64]int64{},
@@ -600,6 +601,9 @@ func (g *Grid) failedNotice(failed map[string]error) tea.Cmd {
 // means the view ends there.
 func (g *Grid) store(start int64, n int, w data.Window) {
 	d := g.v
+	if sameView(d.view, g.st.View) {
+		g.st.Loaded = int64(w.Len)
+	}
 	if w.Len < n && d.total < 0 {
 		end := start + int64(w.Len)
 		if d.upper < 0 || end < d.upper {

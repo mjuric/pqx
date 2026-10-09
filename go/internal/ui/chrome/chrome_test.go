@@ -39,7 +39,7 @@ func (c *clock) now() time.Time { return c.t }
 
 func setup(ds fakeDS) (*Chrome, *kit.Env, *clock) {
 	env := &kit.Env{DS: ds, Look: app.BasicLook{}, Opts: kit.Options{Version: "0.1.0"},
-		State: &kit.State{Total: ds.rows, Hidden: map[string]bool{}}, Tasks: kit.NewTasks()}
+		State: &kit.State{Total: ds.rows, Loaded: min(ds.rows, 1000), Hidden: map[string]bool{}}, Tasks: kit.NewTasks()}
 	c := New(env)
 	clk := &clock{time.Now()} // (tasks start by the real clock)
 	c.now = clk.now
@@ -244,7 +244,8 @@ func TestStatusBusyAndSpinner(t *testing.T) {
 	if cmd == nil || !c.Ticking() {
 		t.Fatal("no tick while busy")
 	}
-	if got := plain(c.StatusLine(100)); got != "⠋ Profiling ␛ra" {
+	// counting: the rows the grid has read (Python's "first N shown")
+	if got := plain(c.StatusLine(100)); got != "⠋ Profiling ␛ra   first 1,000 shown" {
 		t.Fatalf("%q", got)
 	}
 	if c.Update(kit.CursorMsg{}) != nil {
@@ -414,6 +415,16 @@ func TestToastWrap(t *testing.T) {
 	got := wrap("✓ Wrote 23 rows\n→ /a/very/long/path/name.csv\n    ^", 12)
 	want := []string{"✓ Wrote 23", "rows", "→", "/a/very/long", "/path/name.c", "sv", "    ^"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("%q", got)
+	}
+}
+
+// Before the grid has read any rows of a view, the status line shows no
+// row (Python checks grid.row_count).
+func TestStatusNoRowBeforeTheFirstRead(t *testing.T) {
+	c, env, _ := setup(demo())
+	env.State.Loaded = 0
+	if got := plain(c.StatusLine(150)); got != "✓ 20,000 rows" {
 		t.Fatalf("%q", got)
 	}
 }

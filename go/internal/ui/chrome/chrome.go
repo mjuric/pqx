@@ -202,8 +202,12 @@ func (c *Chrome) statusText() styled.Text {
 		}
 		t.Append(fmtx.Sanitize(" "+label, false), styled.Style{}) // (labels can name columns)
 		var extra []string
-		if tot > 0 {
-			extra = append(extra, Commas(tot)+" rows")
+		if st.Loaded > 0 { // Python: first N shown while counting, else N rows
+			if tot < 0 {
+				extra = append(extra, "first "+Commas(st.Loaded)+" shown")
+			} else {
+				extra = append(extra, Commas(tot)+" rows")
+			}
 		}
 		if el := c.now().Sub(task.Started); el >= time.Second {
 			s := int(el.Seconds())
@@ -248,13 +252,13 @@ func (c *Chrome) statusText() styled.Text {
 	if st.Raw {
 		bits = append(bits, "raw values")
 	}
-	if tot != 0 { // (rows shown, the count known or not: Python's grid.row_count)
+	if st.Loaded > 0 { // rows shown (Python's grid.row_count)
 		bits = append(bits, "row "+Commas(st.Row))
 	}
 	if len(bits) > 0 {
 		t.Append(sep+strings.Join(bits, sep), d)
 	}
-	if c.hidden != "" && tot != 0 {
+	if c.hidden != "" && st.Loaded > 0 {
 		t.Append("   !", look.Style("warning"))
 		t.Append(" "+fmtx.Sanitize(c.hidden, false)+" is hidden", styled.Style{Bold: true})
 		t.Append(" · c to show", d)
