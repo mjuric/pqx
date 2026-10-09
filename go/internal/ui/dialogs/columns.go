@@ -42,12 +42,7 @@ func newColumns(env *kit.Env, cols []data.Column, hidden map[string]bool, curren
 			d.chosen[c.Name] = true
 		}
 	}
-	d.refilter()
-	for i, j := range d.shown {
-		if cols[j].Name == current {
-			d.cur = i
-		}
-	}
+	d.refilter() // (the list starts at its top, as Python's does, not on current)
 	d.flt.focus()
 	return d
 }
@@ -56,7 +51,13 @@ func (d *columnsDialog) Size(w, h int) (int, int) {
 	return min(dialogW, w*95/100), max(12, h*80/100) // #picker-box: 80% high
 }
 
-func (d *columnsDialog) Keys() []kit.KeyHint { return nil }
+// Keys: the filter's keys (Python shows them for any focused Input).
+func (d *columnsDialog) Keys() []kit.KeyHint {
+	if d.focus == focusFilter {
+		return inputKeys
+	}
+	return nil
+}
 
 func (d *columnsDialog) refilter() {
 	f := strings.ToLower(d.flt.Value())
@@ -81,9 +82,8 @@ func (d *columnsDialog) setFocus(f int) {
 func (d *columnsDialog) View(w, h int) string {
 	look := d.env.Look
 	iw := innerW(w)
-	head := styled.New("Visible columns", styled.Style{Bold: true})
-	head.Append("  space toggles · Ctrl+A all · Ctrl+N none", look.Style("dim"))
-	content := []string{look.Render(head)}
+	content := []string{line(look, "Visible columns", styled.Style{Bold: true},
+		"  ", styled.Style{}, "space toggles · Ctrl+A all · Ctrl+N none", look.Style("dim"))}
 	content = append(content, d.flt.lines(look, iw)...)
 	content = append(content, "") // the list's margin
 	// the list fills what the header, filter, margins and buttons leave
@@ -105,14 +105,10 @@ func (d *columnsDialog) View(w, h int) string {
 		c := d.cols[d.shown[k]]
 		label := fmtx.Sanitize(c.Name, false)
 		typ := fmtx.Sanitize(fmtx.ShortType(c.Arrow), false)
-		var line string
-		if k == d.cur && d.focus == focusList { // the highlighted entry, reversed
-			line = toggle(look, "X", "", d.chosen[c.Name], false)
-			line += look.Render(styled.New(fit(label+"  "+typ, max(0, iw-4)), look.Style("cursor")))
-		} else {
-			line = toggle(look, "X", label, d.chosen[c.Name], false) + text(look, "  "+typ, look.Style("dim"))
-		}
-		content = append(content, line)
+		// (the highlighted entry doesn't show with the ANSI theme, in Python
+		// either)
+		content = append(content, selection(look, d.chosen[c.Name])+line(look, " "+label, styled.Style{},
+			"  ", styled.Style{}, typ, look.Style("dim")))
 	}
 	content = append(content, "", "") // the list's margin, the buttons' margin
 	row, spans := buttonsRow(look, iw, []string{"Apply", "Cancel"}, 0, d.focus-focusApply)

@@ -52,7 +52,9 @@ func (c *Chrome) Toasts(w, h int) []kit.Overlay {
 	if len(c.toasts) == 0 || w < 12 || h < 4 {
 		return nil
 	}
-	tw := min(60, w/2)
+	// Textual's ToastRack: the screen less its side padding and a scroll
+	// bar's gutter; toasts 60 wide, at most half of that, right-aligned in it
+	tw := min(60, (w-4)/2)
 	var out []kit.Overlay
 	end := h - 1 // the first row below the newest toast: the key bar's
 	for i := len(c.toasts) - 1; i >= 0; i-- {
@@ -61,7 +63,7 @@ func (c *Chrome) Toasts(w, h int) []kit.Overlay {
 		if top < 0 {
 			break
 		}
-		out = append(out, kit.Overlay{X: max(0, w-2-tw), Y: top, Content: box})
+		out = append(out, kit.Overlay{X: max(0, w-3-tw), Y: top, Content: box})
 		end = top - 1 // a blank row between toasts
 	}
 	// drawn oldest first, so a newer one would win where they meet
