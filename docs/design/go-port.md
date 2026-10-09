@@ -285,6 +285,7 @@ Intended differences from Python pqx, each listed in its PR:
 - **Sorting a file with its own `file_row_number` column** breaks ties on up to 64 columns, so paging is consistent (Python repeats or skips rows: issue #51).
 - **Export** writes a temporary file of its own and renames it over the target, keeping the umask; it refuses read-only and directory targets (Python's export can truncate the file being explored: issue #44).
 - **Grid.** A column cut off at the right edge is cropped as Python's DataTable crops it, numbers too (parity decision 1; the blank cells tried first were reverted in `a83191c`); a failed column is reported once per view; the cache holds 4,000 rows per view.
+- **Column types in a sorted view.** A dictionary column's header type stays `dict<str>` (the file's type) in every view; Python shows `str` once the view is sorted (DuckDB's result type) and `dict<str>` otherwise. Integrator decision 2026-10-09, pending the owner's confirmation (real-data run, finding 7).
 - **Suspend** stops only pqx; SIGHUP and SIGQUIT restore the terminal; SIGINT quits quietly. Known limitation, as in Python: a wrapper that doesn't exec pqx, with SIGTSTP sent to pqx alone, leaves pqx stopped until SIGCONT (Ctrl+Z stops the whole job and works).
 - **formats.yaml** is read as PyYAML's `safe_load` reads it, and Go refuses (never rewrites) the few odd files it can't read the same way; stale temporary files are cleaned up.
 - **Limits** where Python would allocate without bound: 16M cells for histograms and 2-D bins; strftime output capped as Python's buffer is; YAML nesting and merge expansion bounded.
@@ -488,7 +489,7 @@ Go 5.33, Python 5.07). The differences found are in the findings.
      about 100 ms later than the prototype's. rg2000 is 361 ms median, with
      one run of 8 at 402 ms, just over 0.4 s. Not waiting for the bind before
      the first frame (DuckDB's types are needed for formatting, so this is a
-     design choice) would give that margin back.
+     design choice) would give that margin back. Issue #93.
 2. **`g` to the middle of mpc_orbits is at the 150 ms limit** (prototype 130 ms
    in the same harness). The read is 754 rows × 7 columns, 95–105 ms: the
    row window is Python's (`pageRows`, `internal/ui/grid/layout.go:226`,
@@ -497,7 +498,7 @@ Go 5.33, Python 5.07). The differences found are in the findings.
    most of the time is arrow-go decompressing the pages before the row in the
    large `mpc_orb_jsonb` string chunk (`readDirect`,
    `internal/data/plain.go:78`). Fitting widths over the 754 rows
-   (`onPage`) adds 7–10 ms.
+   (`onPage`) adds 7–10 ms. Issue #94.
 3. **rg2000 `g` and Ctrl+End** are flagged against the prototype's table
    (56 and 52 ms against 41), but the prototype rerun in the same harness is
    bimodal (25 or 61 ms) and both are far under the 150 ms target: not a
@@ -518,8 +519,8 @@ Go 5.33, Python 5.07). The differences found are in the findings.
 7. **Types in a sorted view**: dictionary columns' header type is
    `dict<str>` in Go in every view; Python shows `str` once the view is
    sorted (DuckDB's result type) and `dict<str>` otherwise. Go takes the
-   file's type (`internal/ui/grid/layout.go:130`). Arguably Go's is the
-   better behaviour; to list as intended or match.
+   file's type (`internal/ui/grid/layout.go:130`). Listed as intended
+   above (integrator decision, pending the owner's confirmation).
 8. **Cropped numbers**: the partly visible last column shows the first
    characters of each number (1,197.9 shows as `11`), as Python does; this
    doc's decisions list still said such cells were blank, which was reverted
