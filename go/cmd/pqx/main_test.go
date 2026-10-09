@@ -7,7 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
+
+	"github.com/mjuric/pqx/go/internal/data"
+	"github.com/mjuric/pqx/go/internal/fmtx"
+	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
 
 // TestMain lets the pty tests run this test binary as pqx: with
@@ -132,3 +137,42 @@ func TestNotParquet(t *testing.T) {
 		}
 	}
 }
+
+// formats.yaml is read at startup; one that can't be read is ignored with
+// Python's notice.
+func TestSavedFormats(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if f, cmd := savedFormats(); len(f) != 0 || cmd != nil {
+		t.Errorf("no file: %v %v", f, cmd)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "pqx"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "pqx", "formats.yaml")
+	if err := os.WriteFile(path, []byte("columns:\n  ra: .2f\n  dec: 3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, cmd := savedFormats()
+	if cmd != nil || f["ra"] != fmtx.ParseOverride(".2f") || f["dec"] != fmtx.ParseOverride("3") {
+		t.Errorf("formats: %v %v", f, cmd)
+	}
+	st := newState(fakeDS{}, kit.Options{Formats: f, SessionFormats: map[string]fmtx.Override{"ra": fmtx.ParseOverride("1")}})
+	if st.Formats["ra"] != fmtx.ParseOverride("1") || st.Formats["dec"] != fmtx.ParseOverride("3") {
+		t.Errorf("state: --format must win over saved ones: %v", st.Formats)
+	}
+	if err := os.WriteFile(path, []byte("columns:\n  ra: [unclosed\n\x1b]0;T\x07"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, cmd = savedFormats()
+	if f != nil || cmd == nil {
+		t.Fatalf("corrupt file: %v %v", f, cmd)
+	}
+	n, ok := cmd().(kit.NotifyMsg)
+	if !ok || n.Severity != kit.Warning || n.Title != "! Config" || n.Timeout != 8*time.Second ||
+		!strings.HasPrefix(n.Text, "Ignoring saved column formats: ") || len(controls(n.Text)) > 0 {
+		t.Errorf("notice: %+v", n)
+	}
+}
+
+type fakeDS struct{ data.Unimplemented }

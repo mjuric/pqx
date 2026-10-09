@@ -694,3 +694,36 @@ func writeParquet(t testing.TB, path string, ncols, nrows int) {
 		t.Fatal(err)
 	}
 }
+
+// Column formats saved in formats.yaml apply from the first screen; a
+// file that can't be read is ignored with a notice, and pqx starts.
+func TestPtySavedFormats(t *testing.T) {
+	fixture, err := filepath.Abs("../../testdata/fixtures/demo.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ yaml, want string }{
+		{"columns:\n  ra: .2f\n", "333.15 "},
+		{"columns:\n  ra: [unclosed\n", "Ignoring saved column formats"},
+	} {
+		cfg := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(cfg, "pqx"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(cfg, "pqx", "formats.yaml"), []byte(c.yaml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(os.Args[0], fixture)
+		a := startPtyCmd(t, cmd, "PQX_TEST_MAIN=1", "XDG_CONFIG_HOME="+cfg)
+		if !a.waitFor(c.want, 20*time.Second) {
+			t.Errorf("%q: no %q on the screen: %q", c.yaml, c.want, a.output())
+		}
+		if !a.waitFor("diaSourceId", 10*time.Second) {
+			t.Errorf("%q: pqx didn't start", c.yaml)
+		}
+		a.write("q")
+		if ok, err := a.exited(5 * time.Second); !ok || err != nil {
+			t.Errorf("q didn't quit: %v %v", ok, err)
+		}
+	}
+}
