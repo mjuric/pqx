@@ -334,8 +334,14 @@ func TestOtherValues(t *testing.T) {
 	eq(t, "neg interval", fv(data.Interval{Nanos: -1000}, KindStr), "-1 day, 23:59:59.999999")
 	eq(t, "ns ts", fv(data.Timestamp{T: time.Date(2020, 9, 13, 12, 26, 40, 123456789, time.UTC)}, KindTime), "2020-09-13 12:26:40.123456789")
 	eq(t, "ns time", fv(data.TimeOfDay(5*3600e9+7), KindTime), "05:00:00.000000007")
-	eq(t, "wide decimal", fv(data.Decimal{Unscaled: new(big.Int).Exp(big.NewInt(10), big.NewInt(60), nil), Scale: 10, Precision: 76}, KindFloat),
-		"10000000000000000000000000000000000000000000000000.0000000000"[:39]+"…")
+	// wider than 38 digits: a float in the grid, as Python pqx has it; exact raw
+	wide := data.Decimal{Unscaled: new(big.Int).Exp(big.NewInt(10), big.NewInt(60), nil), Scale: 10, Precision: 76}
+	eq(t, "wide decimal", fv(wide, KindFloat), "1e+50")
+	eq(t, "wide decimal angle", fv(wide, KindAngle), "100000000000000007629769841091887003294964970946560.000000")
+	eq(t, "wide decimal spec", fo(wide, KindFloat, specOv(".3e")), "1.000e+50")
+	eq(t, "wide decimal raw", Format(wide, KindFloat, Opts{Raw: true}), "1"+strings.Repeat("0", 50)+".0000000000")
+	at38 := data.Decimal{Unscaled: big.NewInt(-30), Scale: 2, Precision: 38}
+	eq(t, "38 digits", fv(at38, KindFloat), "-0.30")
 	eq(t, "decimal sci", fv(data.Decimal{Unscaled: big.NewInt(1), Scale: 7}, KindFloat), "1E-7")
 	eq(t, "map", fv(data.Map{{Key: "a", Value: int64(1)}}, KindNested), "[[a, 1]]")
 }
