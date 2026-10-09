@@ -110,6 +110,9 @@ type fetchReq struct {
 	start int64
 	n     int
 	cols  []string
+	// around: the rows around a kept record, read by its file row
+	// (FetchAround: the window may start later than asked)
+	around bool
 }
 
 func (r fetchReq) end() int64 { return r.start + int64(r.n) }
@@ -184,6 +187,9 @@ func (g *Grid) rowRange(a, b int64) (int64, int64) {
 // them isn't read, a screen each side, for the columns on screen. A read already running that covers
 // them is left alone; otherwise it is replaced.
 func (g *Grid) ensureRows() tea.Cmd {
+	if g.kept != nil && g.kept.phase == "seeking" && g.page != nil && g.env.Tasks.Running("page") {
+		return nil // the rows around the record come first
+	}
 	n := int64(g.bodyH())
 	d := g.v
 	ca, cb := g.rowRange(g.top-n/2, g.top+n+n/2)
@@ -363,6 +369,8 @@ func (g *Grid) onDone(m kit.DoneMsg) tea.Cmd {
 		return g.onCols(r)
 	case footerResult:
 		g.onFooter(r)
+	case located:
+		return g.onLocated(r)
 	}
 	return nil
 }
@@ -370,12 +378,16 @@ func (g *Grid) onDone(m kit.DoneMsg) tea.Cmd {
 // onCancelled: Esc stopped reads; what they were reading stays a
 // placeholder and the next move reads it again. Actions waiting for a
 // column are dropped.
-func (g *Grid) onCancelled(tags []string) {
+func (g *Grid) onCancelled(tags []string) tea.Cmd {
+	var cmds []tea.Cmd
 	for _, t := range tags {
 		switch {
+		case t == "locate":
+			cmds = append(cmds, g.dropKeep("finding the record was cancelled", false))
 		case t == "page":
 			g.page = nil
 			g.dropUnloadedWaiters()
+			cmds = append(cmds, g.dropKeep("its page didn't load", false))
 		case t == "cols":
 			g.cols1 = nil
 		case t == "widths":
@@ -385,6 +397,7 @@ func (g *Grid) onCancelled(tags []string) {
 			g.dropWaiters(t[5:])
 		}
 	}
+	return tea.Batch(cmds...)
 }
 
 func (g *Grid) onPage(r pageResult) tea.Cmd {
@@ -396,28 +409,35 @@ func (g *Grid) onPage(r pageResult) tea.Cmd {
 		if errors.Is(r.err, context.Canceled) {
 			return nil
 		}
+		drop := g.dropKeep("its page didn't load", false)
 		if !g.v.confirmed && g.prev != nil {
-			return g.revert(r.err)
+			return tea.Batch(drop, g.revert(r.err))
 		}
 		req := r.req
 		g.failed = &req
 		g.dropUnloadedWaiters()
 		msg := fmtx.Sanitize(truncRunes(firstLine(r.err), 160), false)
-		return tea.Batch(
+		return tea.Batch(drop,
 			kit.Send(kit.NotifyMsg{Severity: kit.Error, Title: "✗ Query failed", Text: fmtx.Sanitize(truncRunes(r.err.Error(), 600), true)}),
 			kit.Send(kit.StatusMsg{Severity: kit.Error, Text: "read failed: " + msg}))
 	}
+	start, n := r.req.start, r.req.n
+	if r.req.around && r.win.Start > start && r.win.Start < start+int64(n) {
+		// fewer rows precede the record than asked for: the window starts later
+		n -= int(r.win.Start - start)
+		start = r.win.Start
+	}
 	g.keepCursorInView(func() {
-		g.store(r.req.start, r.req.n, r.win)
+		g.store(start, n, r.win)
 		g.reserve(nil)
 	})
-	if r.win.Len < r.req.n {
+	if r.win.Len < n {
 		req := r.req
 		g.failed = &req // a short read: reading it again tells nothing new
 	}
 	g.v.confirmed = true
 	g.prev = nil
-	cmds := []tea.Cmd{g.failedNotice(r.win.Failed), g.runWaiters(), g.refreshed(), g.startFooter()}
+	cmds := []tea.Cmd{g.failedNotice(r.win.Failed), g.runWaiters(), g.keepOnPage(r.req, start, r.win), g.refreshed(), g.startFooter()}
 	if g.foundEnd {
 		g.foundEnd = false
 		cmds = append(cmds, kit.Send(kit.TotalMsg{}))
