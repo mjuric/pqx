@@ -82,6 +82,9 @@ func (g *Grid) cellText(i int, r int64) (*cellTx, bool) {
 func (g *Grid) grow(name string, w int) bool {
 	if w > g.colWidth(name) {
 		g.v.colW[name] = w
+		if g.drawing {
+			g.lateGrowth++ // a cell drawn wider than its column: fitVisible missed it
+		}
 		return true
 	}
 	return false
@@ -372,6 +375,18 @@ func (g *Grid) scrollToColumn() {
 		}
 	}
 	g.left = max(p, min(g.left, max(p, len(g.cols)-1)))
+	g.fillRight()
+}
+
+// fillRight scrolls back left while the columns from the leftmost to the
+// last still fit, so a wider grid (a larger terminal, the details pane
+// closed) shows no empty space at the right (DataTable clamps its scroll
+// offset the same way).
+func (g *Grid) fillRight() {
+	p, n := g.pinned(), len(g.cols)
+	for g.left > p && g.fits(g.left-1, n-1) {
+		g.left--
+	}
 }
 
 // fitVisible formats the cells about to be drawn and widens any column

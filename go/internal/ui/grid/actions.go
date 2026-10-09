@@ -154,6 +154,7 @@ func (g *Grid) pageColumns(dir int) tea.Cmd {
 	} else {
 		return nil
 	}
+	g.fillRight()
 	return g.ensure()
 }
 

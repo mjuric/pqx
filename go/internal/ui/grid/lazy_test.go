@@ -115,12 +115,13 @@ func TestLoadsOnlyTheColumnsNearTheView(t *testing.T) {
 }
 
 func TestScrollingRightFetchesAndShowsColumns(t *testing.T) {
-	ds := newFake(lazyRows, lazyCols)
+	const wide = 300 // (cells are narrow: 120 columns are two reads)
+	ds := newFake(lazyRows, wide)
 	h := newHarness(t, ds, 150, 42)
 	g := h.g
 	ds.clearLog()
 	h.press("end")
-	if g.curCol != lazyCols-1 {
+	if g.curCol != wide-1 {
 		t.Fatalf("End: column %d", g.curCol)
 	}
 	calls := ds.log()
@@ -139,12 +140,15 @@ func TestScrollingRightFetchesAndShowsColumns(t *testing.T) {
 
 	// stepping back left a column at a time reads about once a screen
 	ds.clearLog()
-	for i := 0; i < 60; i++ {
+	for i := 0; i < 100; i++ {
 		h.send(kp("left"))
 		h.settle()
 	}
-	if n := len(ds.log()); n < 1 || n > 4 {
-		t.Errorf("60 steps left read %d times", n)
+	if n := len(ds.log()); n < 1 || n > 6 {
+		t.Errorf("100 steps left read %d times", n)
+	}
+	if m := visibleMissing(g); len(m) > 0 {
+		t.Errorf("missing: %v", m)
 	}
 	checkCache(t, h)
 
@@ -153,7 +157,7 @@ func TestScrollingRightFetchesAndShowsColumns(t *testing.T) {
 	h.send(kit.GotoMsg{Row: 2500})
 	h.settle()
 	calls = ds.log()
-	if calls[0].kind != "fetch" || len(calls[0].cols) >= lazyCols || !slices.Contains(calls[0].cols, g.curName()) {
+	if calls[0].kind != "fetch" || len(calls[0].cols) >= wide || !slices.Contains(calls[0].cols, g.curName()) {
 		t.Errorf("read after g: %s of %v", calls[0].kind, calls[0].cols)
 	}
 	checkCache(t, h)

@@ -32,7 +32,7 @@ func TestFirstScreen(t *testing.T) {
 		t.Errorf("columns fetched = %v", c.cols)
 	}
 	s := h.screen()
-	for _, want := range []string{"id", "name", "int64", "utf8", "r0", "3003", "›"} {
+	for _, want := range []string{"id", "name", "i64", "str", "r0", "3003"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("screen lacks %q:\n%s", want, s)
 		}
@@ -450,13 +450,13 @@ func TestViewSmallGrid(t *testing.T) {
 	ds := newFake(5, 3)
 	h := newHarness(t, ds, 62, 18)
 	want := []string{
-		"        id  name   c002                                 ",
-		"     int64  utf8  int64                                 ",
-		"  0      0  r0        2                                 ",
-		"  1      1  r1     1002                                 ",
-		"  2      2  r2     2002                                 ",
-		"  3      3  r3     3002                                 ",
-		"  4      4  r4     4002                                 ",
+		"      id  name  c002",
+		"     i64  str    i64",
+		"  0    0  r0       2",
+		"  1    1  r1    1002",
+		"  2    2  r2    2002",
+		"  3    3  r3    3002",
+		"  4    4  r4    4002",
 		"                                                        ",
 	}
 	gl := h.grid()

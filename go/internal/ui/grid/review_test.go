@@ -7,7 +7,9 @@ package grid
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
+	"math/rand/v2"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -179,35 +181,35 @@ func heap() uint64 {
 // The cache stays bounded whatever the jumps; eviction rebuilds the maps.
 func TestEvictionKeepsMemoryBounded(t *testing.T) {
 	ds := newFake(10_000_000, 79)
-	h := newHarness(t, ds, 400, 60)
+	h := newHarness(t, ds, 300, 60)
 	g := h.g
 	before := heap()
 	peak := before
-	for i := 0; i < 400; i++ {
+	jumps := 2 * cacheLimit / (3 * g.bodyH()) // twice the rows the cache keeps
+	for i := 0; i < jumps; i++ {
 		h.send(kit.GotoMsg{Row: int64(i) * 20_011})
 		h.settle()
-		h.press("end", "home")
-		if i%40 == 39 {
+		if i%10 == 9 {
 			peak = max(peak, heap())
 		}
 	}
+	bound := 5_000 // rows; the old limit (50,000) kept them all
 	n := len(g.v.fileRow)
-	if n > cacheLimit+3*g.bodyH() {
-		t.Errorf("%d rows cached, limit %d", n, cacheLimit)
+	if n > bound {
+		t.Errorf("%d rows cached after %d jumps", n, jumps)
 	}
 	for name, col := range g.v.vals {
-		if len(col) > cacheLimit+3*g.bodyH() {
+		if len(col) > bound {
 			t.Errorf("%s holds %d values", name, len(col))
 		}
 	}
 	for name, col := range g.v.text {
-		if len(col) > cacheLimit+3*g.bodyH() {
+		if len(col) > bound {
 			t.Errorf("%s holds %d formatted cells", name, len(col))
 		}
 	}
-	after := heap()
-	t.Logf("heap %d MB before, %d MB at the peak, %d MB after, %d rows cached", before>>20, peak>>20, after>>20, n)
-	if peak > before+100<<20 {
+	t.Logf("heap %d MB before, %d MB at the peak, %d rows cached after %d jumps", before>>20, peak>>20, n, jumps)
+	if peak > before+50<<20 {
 		t.Errorf("heap grew by %d MB", (peak-before)>>20)
 	}
 }
@@ -256,10 +258,13 @@ func TestViewportKeptAcrossViews(t *testing.T) {
 	ds := newFake(10_000, 60)
 	h := newHarness(t, ds, 150, 42)
 	g := h.g
-	h.press("end")
-	for i := 0; i < 10; i++ {
-		h.press("left")
+	for i := 0; i < 30; i++ {
+		h.send(kp("right"))
 	}
+	for i := 0; i < 6; i++ { // (off the right edge: wider rows don't push it off)
+		h.send(kp("left"))
+	}
+	h.settle()
 	left := g.cols[g.left].Name
 	if g.left == 0 {
 		t.Fatal("not scrolled")
@@ -368,9 +373,9 @@ func TestClippedColumn(t *testing.T) {
 	}
 	c := g.cols[last.col]
 	tx, _ := g.cellText(last.col, g.top)
-	full := strings.Repeat(" ", pad+g.colWidth(c.Name)-tx.w) + tx.plain + " "
-	if !c.right {
-		full = " " + tx.plain + strings.Repeat(" ", g.colWidth(c.Name)-tx.w+pad)
+	full := " " + tx.plain + strings.Repeat(" ", g.colWidth(c.Name)-tx.w+pad)
+	if c.right { // a cut number is left blank
+		full = strings.Repeat(" ", last.sw)
 	}
 	line := h.grid()[headerRows]
 	got := ansi.Cut(line, last.x, last.x+last.sw)
@@ -497,5 +502,187 @@ func TestPageLeftAndClickBelowTheRows(t *testing.T) {
 	h.settle()
 	if g.curRow != row || g.curCol != col || h.env.State.DetailOpen {
 		t.Errorf("a click below the rows moved the cursor to (%d,%d)", g.curRow, g.curCol)
+	}
+}
+
+// Whatever the widths, cursor and scrolling, View fits every cell it draws
+// before drawing (fitVisible, including its second round after scrolling
+// the cursor back): nothing widens while the frame is drawn.
+func TestNothingWidensWhileDrawing(t *testing.T) {
+	rng := rand.New(rand.NewPCG(7, 7))
+	for trial := 0; trial < 25; trial++ {
+		ds := newFake(500, 2)
+		ncols := 10 + rng.IntN(30)
+		long := map[string]int{}
+		for j := 0; j < ncols; j++ {
+			name := fmt.Sprintf("b%02d", j)
+			ds.cols = append(ds.cols, data.Column{Name: name, Arrow: arrow.BinaryTypes.Binary})
+			long[name] = rng.IntN(18)
+		}
+		row := int64(1 + rng.IntN(15))
+		ds.special = func(name string, fr int64) (data.Value, bool) {
+			n, ok := long[name]
+			if !ok {
+				return nil, false
+			}
+			if fr == row { // (rows read are sampled every few: this one may not be)
+				return make([]byte, n), true
+			}
+			return []byte{}, true
+		}
+		h := newHarness(t, ds, 60+rng.IntN(100), 30)
+		g := h.g
+		for k := 0; k < 6; k++ {
+			switch rng.IntN(4) {
+			case 0:
+				h.press("end")
+			case 1:
+				h.press("home")
+			default:
+				for i := rng.IntN(12); i > 0; i-- {
+					h.send(kp([]string{"left", "right"}[rng.IntN(2)]))
+				}
+				h.settle()
+			}
+			if g.lateGrowth != 0 {
+				t.Fatalf("trial %d: %d columns widened while drawing", trial, g.lateGrowth)
+			}
+		}
+	}
+}
+
+// fitVisible's second round: widening the cursor's neighbours pushes it off
+// screen; scrolling it back drops a wide column on the left, which brings
+// columns right of the cursor into view that were never drawn with the
+// widening row. They must be fitted before the frame is drawn.
+func TestFitVisibleSecondRound(t *testing.T) {
+	scrolled := 0
+	for _, width := range []int{100, 110, 120, 130, 140} {
+		for size := 1; size <= 6; size++ {
+			if secondRound(t, width, size) {
+				scrolled++
+			}
+		}
+	}
+	if scrolled == 0 {
+		t.Error("no case scrolled the cursor back")
+	}
+}
+
+func secondRound(t *testing.T, width, size int) bool {
+	t.Helper()
+	ds := newFake(500, 1) // id, name
+	ds.cols = append(ds.cols, data.Column{Name: "wide", Arrow: arrow.BinaryTypes.String})
+	for j := 0; j < 30; j++ {
+		ds.cols = append(ds.cols, data.Column{Name: fmt.Sprintf("b%02d", j), Arrow: arrow.BinaryTypes.Binary})
+	}
+	h0 := newHarness(t, newFake(10, 2), width, 30)
+	n := int64(h0.g.bodyH())
+	row := n + 1 // below the first screen, not among the rows sampled for widths
+	for row%max(1, 2*n/widthSampleRows) == 0 || row%max(1, 3*n/widthSampleRows) == 0 {
+		row++
+	}
+	ds.special = func(name string, fr int64) (data.Value, bool) {
+		switch {
+		case name == "wide":
+			return strings.Repeat("w", 36), true
+		case name[0] == 'b' && fr == row:
+			return make([]byte, size), true
+		case name[0] == 'b':
+			return []byte{}, true
+		}
+		return nil, false
+	}
+	h := newHarness(t, ds, width, 30)
+	g := h.g
+	h.grid()
+	_, last, _, _ := g.colWindow()
+	h.env.State.Current = g.cols[last].Name
+	h.send(kit.ColumnChangedMsg{From: "schema"})
+	h.settle()
+	before := g.lateGrowth
+	h.send(kp("pgdown"))
+	h.settle()
+	if g.lateGrowth != before {
+		t.Errorf("width %d, %d bytes: %d columns widened while drawing", width, size, g.lateGrowth-before)
+	}
+	if !g.cursorInView() {
+		t.Errorf("width %d, %d bytes: cursor off screen", width, size)
+	}
+	return g.left > 0
+}
+
+// A grid that gets wider scrolls back left so no space is left empty at the
+// right (demo 120x30: d, 30 x right, d).
+func TestWiderGridFillsTheSpace(t *testing.T) {
+	ds := openFixture(t, "demo")
+	h := newHarness(t, ds, 120, 30)
+	g := h.g
+	h.press("d")
+	for i := 0; i < 30; i++ {
+		h.send(kp("right"))
+	}
+	h.settle()
+	h.press("d")
+	h.grid()
+	n := len(g.cols)
+	if g.left > g.pinned() && g.fits(g.left-1, n-1) {
+		t.Errorf("left %d leaves room: columns %d to %d would fit", g.left, g.left-1, n-1)
+	}
+	if !g.cursorInView() {
+		t.Error("cursor off screen")
+	}
+	// a larger terminal likewise
+	h.send(tea.WindowSizeMsg{Width: 80, Height: 30})
+	h.press("end")
+	h.send(tea.WindowSizeMsg{Width: 200, Height: 30})
+	h.settle()
+	h.grid()
+	if g.left > g.pinned() && g.fits(g.left-1, n-1) {
+		t.Errorf("after growing the terminal: left %d leaves room", g.left)
+	}
+}
+
+// A number cut by the right edge isn't drawn (it would read as another
+// number); its header still names the column.
+func TestClippedNumbersAreBlank(t *testing.T) {
+	ds := openFixture(t, "demo")
+	for w := 60; w < 160; w++ {
+		h := newHarness(t, ds, w, 20)
+		g := h.g
+		h.grid()
+		slots := g.layout()
+		last := slots[len(slots)-1]
+		if !last.clipped || !g.cols[last.col].right || last.sw < 3 {
+			continue
+		}
+		gl := h.grid()
+		for i, l := range gl[headerRows:] {
+			if cut := ansi.Cut(l, last.x, last.x+last.sw); strings.TrimSpace(cut) != "" {
+				t.Errorf("width %d, row %d: clipped number drawn as %q", w, i, cut)
+			}
+		}
+		name := ansi.Cut(gl[0], last.x, last.x+last.sw)
+		if strings.TrimSpace(name) == "" {
+			t.Errorf("width %d: the clipped column's header is blank", w)
+		}
+		return
+	}
+	t.Skip("no width clips a numeric column")
+}
+
+// The by-position fallback of readColumns refuses rows that moved.
+func TestReadColumnsByPositionChecksTheRows(t *testing.T) {
+	ds := newFake(1000, 4)
+	ds.noColumnsAPI = true
+	v := data.View{Where: "id % 2 = 0"}
+	ok := colsReq{rows: []int64{0, 1, 2}, fileRows: []int64{0, 2, 4}, cols: []string{"c002"}}
+	w, err := readColumns(t.Context(), ds, v, ok)
+	if err != nil || w.Cols["c002"][2] != truth("c002", 4) {
+		t.Fatalf("by position: %v %+v", err, w.Cols)
+	}
+	moved := colsReq{rows: []int64{0, 1, 2}, fileRows: []int64{0, 3, 4}, cols: []string{"c002"}}
+	if _, err := readColumns(t.Context(), ds, v, moved); err == nil {
+		t.Error("rows that moved were read by position")
 	}
 }

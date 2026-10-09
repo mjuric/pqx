@@ -112,6 +112,10 @@ type Grid struct {
 
 	sgr     map[styled.Style]sgrPair // see render.go
 	formats int                      // values formatted (for tests)
+	// drawing is set while View draws; lateGrowth counts columns that
+	// widened then (none should: fitVisible fits first; for tests)
+	drawing    bool
+	lateGrowth int
 }
 
 // saved is a view and the cursor on it, kept so a view that fails on its

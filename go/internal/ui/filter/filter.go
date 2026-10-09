@@ -142,6 +142,11 @@ func (f *Filter) Cursor() *tea.Cursor {
 		return nil
 	}
 	c.Position.X += ansi.StringWidth(f.prompt())
+	if v := f.in.Value(); fmtx.HasControls(v, false) {
+		// the box shows the text sanitized (View): measure what it shows
+		r := []rune(v)
+		c.Position.X = ansi.StringWidth(f.prompt()) + ansi.StringWidth(fmtx.Sanitize(string(r[:min(f.in.Position(), len(r))]), false))
+	}
 	c.Color = nil
 	return c
 }

@@ -395,9 +395,10 @@ func TestLinkedColumns(t *testing.T) {
 	}
 	// i: Stats on the column
 	h.press("i")
-	if st.Current != "mag" {
-		t.Errorf("i: current %q", st.Current)
+	if st.Current != "mag" || st.Tab != kit.TabStats {
+		t.Errorf("i: current %q, tab %v", st.Current, st.Tab)
 	}
+	h.press("1")
 	// views keep the current column; a SQL result without it leaves it
 	h.filterWith("mag > 18")
 	if g.curName() != "mag" || st.Current != "mag" {

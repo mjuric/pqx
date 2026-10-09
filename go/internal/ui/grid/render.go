@@ -59,6 +59,8 @@ func (g *Grid) View(w, h int) string {
 		return ""
 	}
 	g.fitVisible()
+	g.drawing = true
+	defer func() { g.drawing = false }()
 	var b strings.Builder
 	b.Grow(w * h * 3)
 	if len(g.cols) == 0 || !g.sized() {
@@ -98,6 +100,9 @@ func (g *Grid) View(w, h int) string {
 			}
 			tw := cells.Width(text)
 			jt := just(c)
+			if s.clipped && c.right {
+				jt = styled.Left // its cells are blank: the name must show
+			}
 			g.writeSlot(&b, s, g.styledText(text, st), tw, jt, styled.Style{})
 			x += s.sw
 		}
@@ -135,6 +140,13 @@ func (g *Grid) View(w, h int) string {
 		b.WriteString(spaces(pad))
 		x := lab.x + lab.sw
 		for _, s := range slots {
+			if s.clipped && g.cols[s.col].right {
+				// a number cut by the edge would read as another number:
+				// left blank (its header shows which column it is)
+				b.WriteString(spaces(s.sw))
+				x += s.sw
+				continue
+			}
 			t, ok := g.cellText(s.col, r)
 			if !ok {
 				ph := g.placeholder(g.cols[s.col])

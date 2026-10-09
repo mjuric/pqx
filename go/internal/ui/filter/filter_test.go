@@ -313,3 +313,15 @@ func TestControlsInTheBoxAreShownAsSymbols(t *testing.T) {
 		t.Errorf("the box holds controls: %q", v)
 	}
 }
+
+func TestCursorInTheSanitizedBox(t *testing.T) {
+	r := newRig(t, "")
+	r.send(kit.SetViewMsg{View: data.View{Where: "s = '\x1b\x1b\x1b'"}, KeepFileRow: -1})
+	r.run(r.f.Focus()) // the cursor at the end
+	c := r.f.Cursor()
+	shown := r.f.View(80, 1)
+	end := len([]rune(strings.TrimRight(shown, " ")))
+	if c == nil || c.Position.X != end {
+		t.Errorf("cursor at %+v, the text shown ends at %d: %q", c, end, shown)
+	}
+}
