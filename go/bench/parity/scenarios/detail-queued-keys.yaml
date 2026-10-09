@@ -16,5 +16,10 @@ steps:
   - keys: "= down"
     gap: 0
     wait: '› band = '
-  - check: after
     expect: ['row \d+ · file row 55', '↑↓ column']
+  # where the grid scrolls to after the queued keys varies in Python pqx; Tab back to
+  # the grid and Home make the checkpoint repeatable
+  - keys: tab
+    wait: '/ filter'
+  - keys: home
+  - check: after

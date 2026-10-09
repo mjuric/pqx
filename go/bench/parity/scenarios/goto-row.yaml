@@ -6,7 +6,7 @@ covers:
 fixture: demo
 steps:
   - keys: g
-    wait: 'Go to row'
+    wait: 'Go to row[\s\S]*enter apply'   # the key bar can follow late
   - check: dialog
     expect: 'of 20,000'
   - text: "1234"

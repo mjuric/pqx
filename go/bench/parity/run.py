@@ -135,8 +135,12 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
     subs = {"fixtures": fixtures, "out": out_dir, "fixture": os.path.join(fixtures, f"{sc['fixture']}.parquet"),
             "config": os.path.join(work, "config")}
 
-    def fill(s):
-        return s.format(**subs) if isinstance(s, str) else s
+    def fill(s):  # {fixture}, {fixtures}, {out}, {config}; other braces (regexes) stay
+        if not isinstance(s, str):
+            return s
+        for k, v in subs.items():
+            s = s.replace("{" + k + "}", v)
+        return s
 
     subs_norm = [(out_dir, "<OUT>"), (subs["config"], "<CONFIG>"), (fixtures, "<FIX>"),
                  (f"/{slot}/{sc['name']}", f"/_/{sc['name']}")]

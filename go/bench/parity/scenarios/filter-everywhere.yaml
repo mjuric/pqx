@@ -10,6 +10,8 @@ quiet: 1.0
 steps:
   - keys: "3"
     wait: '✓ Profiled diaSourceId'
+  # Python pqx sometimes draws the first histogram at a stale width; l l redraws it
+  - keys: l l
   - check: stats
     expect: 'rows +3,354'
   - keys: "4"

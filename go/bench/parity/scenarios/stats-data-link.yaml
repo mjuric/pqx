@@ -12,6 +12,10 @@ steps:
     wait: '✓ Profiled decErr|✓ Profiled dec\b'
   - keys: "1"
     wait: '/ filter'
+  # Python pqx doesn't always redraw the column readout after a tab switch; a cursor
+  # move there and back does
+  - keys: right
+  - keys: left
   - check: data
   - keys: "2"
     wait: 'null %'
