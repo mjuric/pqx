@@ -7,7 +7,7 @@ fixture: slow
 sizes: [[120, 40]]
 steps:
   - keys: g
-    wait: 'Go to row'
+    wait: 'Go to row[\s\S]*enter apply'
   - text: "1.5M"
   - keys: enter
     wait: 'row 1,500,000\b'

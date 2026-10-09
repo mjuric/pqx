@@ -14,7 +14,7 @@ steps:
   - keys: s
     wait: 'sorted mag ↑'
   - keys: e
-    wait: 'Export current view'
+    wait: 'Export current view[\s\S]*enter apply'
   - check: dialog
     expect: "where detector = 7 and band = 'r' · sorted by mag · 23 rows · 16 visible"
   - keys: ctrl+u

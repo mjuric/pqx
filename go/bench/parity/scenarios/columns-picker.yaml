@@ -7,7 +7,7 @@ covers:
 fixture: demo
 steps:
   - keys: c
-    wait: 'Visible columns'
+    wait: 'Visible columns[\s\S]*enter apply'
   - check: dialog
     expect: ['▐X▌ diaSourceId  i64', '▐X▌ ingestTime']
   - keys: tab
@@ -20,7 +20,7 @@ steps:
     expect@120x40: ['columns 1–\d+ of 14', '^ │ +ra ']
     expect_not: 'diaSourceId'
   - keys: c
-    wait: 'Visible columns'
+    wait: 'Visible columns[\s\S]*enter apply'
   - text: "err"
   - check: narrowed
     expect: ['raErr', 'psfFluxErr']

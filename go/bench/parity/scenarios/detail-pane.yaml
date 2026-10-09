@@ -15,6 +15,10 @@ steps:
   - check: row-2
   - keys: esc
     wait_gone: 'file row'
+  # Python pqx doesn't always redraw the column readout when the grid widens; a cursor
+  # move there and back does
+  - keys: right
+  - keys: left
   - check: closed
   - keys: enter
     wait: 'file row'

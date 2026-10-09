@@ -19,5 +19,9 @@ steps:
   - keys: esc
     settle: false
     wait_gone: 'file row'
+  - keys: right   # (redraws the column readout; see detail-pane)
+    settle: false
+  - keys: left
+    settle: false
   - check: closed
     expect: '(?i)counting'

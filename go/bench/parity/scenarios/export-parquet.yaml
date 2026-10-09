@@ -13,7 +13,7 @@ steps:
   - keys: enter
     wait: '✓ 11 rows'
   - keys: e
-    wait: 'Export current view'
+    wait: 'Export current view[\s\S]*enter apply'
   - check: dialog
     expect: '15 visible'
   - keys: ctrl+u

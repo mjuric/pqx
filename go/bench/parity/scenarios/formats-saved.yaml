@@ -11,7 +11,7 @@ steps:
     toast: '✓ ra: \.5f'
   - keys: right right right right right right right right right right
   - keys: F
-    wait: 'Format of'
+    wait: 'Format of[\s\S]*enter apply'
   - keys: ctrl+u
   - text: "3"
   - keys: enter

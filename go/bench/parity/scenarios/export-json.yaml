@@ -11,7 +11,7 @@ steps:
   - keys: enter
     wait: '✓ 6 rows'
   - keys: e
-    wait: 'Export current view'
+    wait: 'Export current view[\s\S]*enter apply'
   - check: dialog
   - keys: ctrl+u
   - text: "bands.json"
@@ -20,7 +20,7 @@ steps:
     check: done
   - file: "{out}/bands.json"
   - keys: e
-    wait: 'Export current view'
+    wait: 'Export current view[\s\S]*enter apply'
   - keys: ctrl+u
   - text: "never.csv"
   - keys: esc
