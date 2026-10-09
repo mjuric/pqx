@@ -120,13 +120,13 @@ xfail:
     - ctrl-home
     reason: diff in arrows, pgdn, pgup, end, home, ctrl-end, ctrl-home
   detail-copy-stats@120x40:
-    status: error
+    status: diff
     checks:
     - copied
     - stats
     reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
   detail-copy-stats@200x50:
-    status: error
+    status: diff
     checks:
     - copied
     - stats
@@ -144,7 +144,7 @@ xfail:
     - second-equals
     reason: 'go: step 2 {"keys": "d", "wait": "row 3 · file row 3"}: never matched ''row 3 · file row 3'''
   detail-focus@120x40:
-    status: error
+    status: diff
     checks:
     - focused
     - field-8
@@ -154,7 +154,7 @@ xfail:
     - esc-closes
     reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
   detail-focus@200x50:
-    status: error
+    status: diff
     checks:
     - focused
     - field-8
@@ -180,7 +180,7 @@ xfail:
     - set
     reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
   detail-paging@120x40:
-    status: error
+    status: diff
     checks:
     - pgdn
     - end
@@ -188,7 +188,7 @@ xfail:
     - home
     reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
   detail-paging@200x50:
-    status: error
+    status: diff
     checks:
     - pgdn
     - end
@@ -196,7 +196,7 @@ xfail:
     - home
     reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
   detail-pane@120x40:
-    status: error
+    status: diff
     checks:
     - open
     - row-2
@@ -204,7 +204,7 @@ xfail:
     - enter-opens
     reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
   detail-pane@200x50:
-    status: error
+    status: diff
     checks:
     - open
     - row-2
@@ -217,24 +217,24 @@ xfail:
     - after
     reason: 'go: step 2 {"keys": "d", "wait": "row 55 · file row 55"}: never matched ''row 55 · file row 55'''
   detail-units@120x40:
-    status: error
+    status: diff
     checks:
     - open
     - row-1
     reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
   detail-units@200x50:
-    status: error
+    status: diff
     checks:
     - open
     - row-1
     reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
   detail-wrap@120x40:
-    status: error
+    status: diff
     checks:
     - open
     reason: 'go: step 1 {"keys": "d", "wait": "│ │ {5,}the lazy dog the quick"}: never matched ''│ │ {5,}the lazy dog the quick'''
   detail-wrap@200x50:
-    status: error
+    status: diff
     checks:
     - open
     reason: 'go: step 1 {"keys": "d", "wait": "│ │ {5,}the lazy dog the quick"}: never matched ''│ │ {5,}the lazy dog the quick'''
@@ -288,12 +288,12 @@ xfail:
     - cancelled
     reason: diff in cancelled
   esc-pane-own-count@120x40:
-    status: error
+    status: diff
     checks:
     - closed
     reason: 'go: step 5 {"keys": "d", "settle": false, "wait": "file row"}: never matched ''file row'''
   esc-pane-stats@120x40:
-    status: error
+    status: diff
     checks:
     - cancelled
     - data
@@ -433,7 +433,7 @@ xfail:
     - moved
     reason: diff in result, moved
   filter-sql@200x50:
-    status: diff
+    status: style
     checks:
     - result
     - moved
@@ -622,7 +622,7 @@ xfail:
     - first
     reason: diff in first
   looks-options@120x40:
-    status: error
+    status: diff
     checks:
     - first
     - detail
@@ -657,7 +657,7 @@ xfail:
     - first
     reason: diff in first
   option-w-sql@200x50:
-    status: diff
+    status: style
     checks:
     - first
     reason: diff in first
@@ -872,7 +872,7 @@ xfail:
     - schema
     reason: diff in first, schema
   types-grid@120x40:
-    status: error
+    status: diff
     checks:
     - first
     - middle
@@ -880,7 +880,7 @@ xfail:
     - detail-null-row
     reason: 'go: step 7 {"keys": "d", "wait": "row 3 · file row 3"}: never matched ''row 3 · file row 3'''
   types-grid@200x50:
-    status: error
+    status: diff
     checks:
     - first
     - middle
