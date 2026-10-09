@@ -11,7 +11,7 @@ steps:
     toast: "Query failed"
     toast_gone: false
     check: error
-  - keys: ctrl+x
+  - keys: ctrl+u
   - text: "1=1; select 42"
   - keys: enter
     toast: "Query failed"

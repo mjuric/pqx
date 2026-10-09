@@ -5,20 +5,20 @@ covers:
 fixture: demo
 steps:
   - keys: /
-    wait: "enter apply"
+    sleep: 0.5
   - text: "band = 'g'"
   - keys: enter
     wait: "x clear filter"
   - keys: /
-    wait: "enter apply"
-  - keys: ctrl+x
+    sleep: 0.5
+  - keys: ctrl+u
   - text: "band = 'g' and mag < 20"
   - keys: enter
     wait: "x clear filter"
   - check: second
   - keys: /
-    wait: "enter apply"
-  - keys: ctrl+x
+    sleep: 0.5
+  - keys: ctrl+u
   - keys: up
   - check: up-1
   - keys: up

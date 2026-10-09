@@ -9,9 +9,11 @@ steps:
   - keys: c
     wait: "Visible columns"
   - check: dialog
-  - keys: tab space down space
+  - keys: tab
+  - keys: space down space
   - check: toggled
-  - keys: tab enter
+  - keys: tab
+  - keys: enter
   - check: applied
   - keys: c
     wait: "Visible columns"
