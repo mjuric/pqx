@@ -63,6 +63,10 @@ def evil_values(pwn: str) -> list[str]:
         C1_CSI + "31mC1" + "\x9d0;C1-TITLE\x07",
         "tab\there\nnew line",
         BIDI,
+        ESC + "[6nDSR-VAL",                       # a cursor-position query (the reply is typed in)
+        ESC + "P+q50574e" + ESC + "\\DCS-VAL",     # a capability query from the file
+        ESC + "[?1049lALTSCREEN-VAL",             # leave the alternate screen
+        ESC + "[3JSCROLLBACK-VAL",                # erase the scrollback
     ]
 
 
@@ -174,8 +178,13 @@ B64 = re.compile(rb"[A-Za-z0-9+/=]*")
 #: parser would accept its shape
 NEEDLES = [x.encode() for x in (
     OSC_TITLE, OSC52, OSC8, ESC + "[2J" + ESC + "[31mRED", ESC + "[5m", ESC + "[31mRED",
-    C1_CSI + "31mC1", "\x9d0;C1-TITLE\x07", ESC + "]0;JSONTITLE", ESC + "]2;FNAME-TITLE\x07", "\u202e")] + [
+    C1_CSI + "31mC1", "\x9d0;C1-TITLE\x07", ESC + "]0;JSONTITLE", ESC + "]2;FNAME-TITLE\x07", "\u202e",
+    ESC + "[6nDSR-VAL", ESC + "P+q50574e", ESC + "[?1049lALTSCREEN-VAL", ESC + "[3JSCROLLBACK-VAL")] + [
     b"\x9b31mRAW-C1", b"\xff\xfe", ESC.encode() + b"]52;c;" + base64.b64encode(b"echo PWNED\n")]
+#: the file's name, and the titles an app may set for it: "pqx", or "pqx " and the name
+#: with its controls drawn as pqx draws them (␛, ␇, and \x9b as text)
+FILE_NAME = "evil" + ESC + "]2;FNAME-TITLE\x07" + C1_CSI + ".parquet"
+APP_TITLES = {b"pqx", ("pqx " + FILE_NAME.replace(ESC, "␛").replace("\x07", "␇").replace(C1_CSI, "\\x9b")).encode()}
 #: what the file's OSC 52 and title would put on the clipboard or in a title, decoded
 INJECTED_TEXT = ["echo PWNED\n", ESC, "\x07", "\x9b", "\x9d"]
 
@@ -222,8 +231,8 @@ def check_bytes(b: bytes, pwns=()) -> list[str]:
             body = m.group(1)
             code, _, payload = body.partition(b";")
             if code in (b"0", b"1", b"2"):
-                # the app's own title: "pqx", or "pqx " and the file's name (drawn sanitized)
-                if not (payload == b"pqx" or payload.startswith(b"pqx evil")) or re.search(
+                # the app's own title, exactly: "pqx", or "pqx " and the file's name, sanitized
+                if payload not in APP_TITLES or re.search(
                         rb"[\x00-\x1f\x7f]|\xc2[\x80-\x9f]", payload):
                     fail("a window title that isn't the app's own", i)
             elif code == b"52":
@@ -291,7 +300,7 @@ def check_bytes(b: bytes, pwns=()) -> list[str]:
 def selftest() -> int:
     """The checks against streams with one fault each (and a clean one)."""
     ok = (b"\x1b[?1049h\x1b[1;1H\x1b[1;2;38;5;12mpqx \xe2\x90\x9b]0;x\x1b[0m\r\n\x1b]52;c;"
-          + base64.b64encode("✓ fine".encode()) + b"\x07\x1b]0;pqx evil.parquet\x07\x1b]22;default\x1b\\"
+          + base64.b64encode("✓ fine".encode()) + b"\x07\x1b]0;" + sorted(APP_TITLES)[-1] + b"\x07\x1b]22;default\x1b\\"
           + b"\x1bP+q544e\x1b\\\x1b[>1u\x1b[?2026$p\x1b7\x1b8\x1b(B")
     cases = {
         "clean": (ok, False),
@@ -315,6 +324,11 @@ def selftest() -> int:
         "ESC c (reset)": (ok + b"\x1bc", True),
         "ESC ( 0 (line drawing)": (ok + b"\x1b(0", True),
         "a title from the file starting pqx": (ok + b"\x1b]0;pqx pwned\x07", True),
+        "a title starting with the file's name": (ok + b"\x1b]0;pqx evil-and-more\x07", True),
+        "the file's ESC[6n": (ok + b"\x1b[6nDSR-VAL", True),
+        "the file's DCS +q": (ok + b"\x1bP+q50574e\x1b\\", True),
+        "the file's ESC[?1049l": (ok + b"\x1b[?1049lALTSCREEN-VAL", True),
+        "the file's ESC[3J": (ok + b"\x1b[3JSCROLLBACK-VAL", True),
         "OSC 52 of a newline payload": (ok + b"\x1b]52;c;" + base64.b64encode(b"x\nrm -rf\n") + b"\x07", False),
     }
     bad = 0
@@ -328,7 +342,7 @@ def selftest() -> int:
 def run_app(app: str, cmd: str, size, keep: bool) -> tuple[list[str], str]:
     d = tempfile.mkdtemp(prefix=f"pqx-sec-{app}-", dir=os.environ.get("PQX_PARITY_SCRATCH"))
     try:
-        path, pwns = make_evil(d, "evil" + ESC + "]2;FNAME-TITLE\x07" + C1_CSI + ".parquet")
+        path, pwns = make_evil(d, FILE_NAME)
         env = dict(os.environ, XDG_CONFIG_HOME=os.path.join(d, "config"))
         s = Session([cmd, path], size[0], size[1], env=env, cwd=d)
         fails = []
@@ -337,8 +351,9 @@ def run_app(app: str, cmd: str, size, keep: bool) -> tuple[list[str], str]:
                 return ["the app drew nothing"], d
             s.settle(0.8, 20)
             for keys, marker, what, *opt in SCRIPT:
-                if "fresh" in opt:
-                    s.wait_gone(marker, MARKER_WAIT)
+                if "fresh" in opt and not s.wait_gone(marker, MARKER_WAIT):
+                    fails.append(f"an earlier notice matching {marker!r} never went away: {what} not checked")
+                    continue
                 if keys.startswith("text:"):
                     s.type(keys[5:])
                 else:

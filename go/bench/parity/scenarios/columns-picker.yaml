@@ -8,6 +8,8 @@ fixture: demo
 python_bug:
   - checks: [applied, cancelled]
     region: keybar
+    ref_shows: 'enter apply   esc back'   # Python shows the filter box's keys
+    correct: '^ / filter   x clear filter'   # what the key bar should show there
     note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
 steps:
   - keys: c

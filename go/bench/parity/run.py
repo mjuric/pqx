@@ -328,6 +328,17 @@ def python_bug_for(sc, name, size):
     return None
 
 
+def python_bug_applies(pb, ref, other):
+    """`pb` if the reference shows the bug in its region at this checkpoint (its last line
+    matches `ref_shows`) and the other app shows what is right there (`correct`); else
+    None, and the checkpoint is compared in full."""
+    if not pb or pb.get("region") != "keybar" or not ref.get("lines") or not other.get("lines"):
+        return None
+    if re.search(pb["ref_shows"], ref["lines"][-1]) and re.search(pb["correct"], other["lines"][-1]):
+        return pb
+    return None
+
+
 def mask_region(c, region):
     """A capture with a screen region blanked out: `keybar` is the last line."""
     if region != "keybar":
@@ -370,13 +381,24 @@ def selftest():
         ("letter fg counts", [x], [d0], [("red", "default", False, False)], 1, 0),
     ]
     bad = 0
-    a_, b_ = cap([x, x], [d0, d0]), cap([x, x], [d0, d0])
-    a_["lines"], b_["lines"] = ["grid", "enter apply"], ["grid", "/ filter"]
-    a_["styles"], b_["styles"] = a_["styles"] * 2, b_["styles"] * 2
-    masked = compare_check(mask_region(a_, "keybar"), mask_region(b_, "keybar"))
-    ok = not masked["text"] and compare_check(a_, b_)["text"]
-    print(f"{'ok  ' if ok else 'FAIL'} python_bug keybar: the last line is left out, only there")
-    bad += not ok
+    pb = {"checks": ["c"], "region": "keybar", "ref_shows": "enter apply", "correct": "^ / filter"}
+
+    def pair(ref_bar, other_bar):
+        a_, b_ = cap([x, x], [d0, d0]), cap([x, x], [d0, d0])
+        a_["lines"], b_["lines"] = ["grid", ref_bar], ["grid", other_bar]
+        a_["styles"], b_["styles"] = a_["styles"] * 2, b_["styles"] * 2
+        return a_, b_
+
+    for name, ref_bar, other_bar, want_masked in [
+            ("bug shown, other app right: left out", " enter apply   esc back", " / filter   x clear", True),
+            ("bug shown, other app wrong: compared", " enter apply   esc back", " BOGUS KEYBAR", False),
+            ("bug not shown: compared", " / filter   x clear", " BOGUS KEYBAR", False)]:
+        a_, b_ = pair(ref_bar, other_bar)
+        got = python_bug_applies(pb, a_, b_)
+        d = compare_check(*(mask_region(c, "keybar") for c in (a_, b_))) if got else compare_check(a_, b_)
+        ok = bool(got) == want_masked and bool(d["text"]) != want_masked
+        print(f"{'ok  ' if ok else 'FAIL'} python_bug keybar, {name}")
+        bad += not ok
     for name, chars, sa, sb, want_c, want_s in cases:
         d = compare_check(cap(chars, sa), cap(chars, sb))
         ok = (d["colour"], d["style"]) == (want_c, want_s)
@@ -639,8 +661,8 @@ def report(scen, results, labels, out, xfail, a, versions, elapsed):
                     failing.append(name)
                     what[name] = f"{lb} never reached it"
                     continue
-                pyb = python_bug_for(sc, name, size)
-                if pyb:  # a known Python pqx bug in this region: compare without it, but say so
+                pyb = python_bug_applies(python_bug_for(sc, name, size), ca[name], cb[name])
+                if pyb:  # the known Python bug shows, and the other app is right there: leave it out
                     full = compare_check(ca[name], cb[name])
                     d = compare_check(*(mask_region(c, pyb["region"]) for c in (ca[name], cb[name])))
                     if full["text"] or full["style"] or full["colour"]:

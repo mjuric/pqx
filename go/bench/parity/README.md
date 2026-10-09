@@ -259,7 +259,7 @@ been drawn.
 
 ```sh
 python security.py --app both      # or --app go; --keep keeps the raw output
-python security.py --selftest      # the byte checks against made-up streams, one fault each
+python security.py --selftest      # the byte checks against made-up streams, one fault each (27)
 ```
 
 The checks were also run against a wrapper that injects each fault into Python pqx's
@@ -297,13 +297,18 @@ correct Go screen isn't reported as a difference:
 python_bug:
   - checks: [row-1234, half, last]   # these checkpoints
     region: keybar                   # the last screen line
+    ref_shows: 'enter apply   esc back'      # the bug, as the reference shows it
+    correct: '^ / filter   x clear filter'   # what the compared app must show there
     sizes: [[120, 40]]               # optional: only at these sizes
     note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
 ```
 
-The region is left out of the text, style and colour comparison at those checkpoints.
-A scenario that passes only because of that is reported as PYBUG (not a failure), with
-the note; everything else on those screens is still compared.
+The region is left out of the text, style and colour comparison at a listed checkpoint
+only when the reference really shows the bug there (its key bar matches `ref_shows`)
+and the compared app shows what is right (its key bar matches `correct`); otherwise the
+checkpoint is compared in full, so a wrong key bar in the compared app is a DIFF. A
+scenario that passes only because of the left-out region is reported as PYBUG (not a
+failure), with the note; everything else on those screens is still compared.
 
 | scenario | checkpoints | bug |
 |---|---|---|
