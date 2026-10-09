@@ -25,6 +25,25 @@ type dbError struct {
 func (e *dbError) Error() string { return e.msg }
 func (e *dbError) Unwrap() error { return e.err }
 
+// FullError is DuckDB's whole message for err (with its candidates and the
+// "LINE 1: …" pointer lines, unsanitized), where err.Error() is the short
+// form for the status line; other errors' own text. Python pqx shows the
+// whole message in its error toast. A Binder error's has no pointer lines,
+// as Python's relation API (which checks its filters) gives it.
+func FullError(err error) string {
+	var de *dbError
+	if errors.As(err, &de) && de.err != nil {
+		msg := strings.TrimSpace(de.err.Error())
+		if strings.HasPrefix(msg, "Binder Error:") {
+			if i := strings.Index(msg, "\n\nLINE "); i >= 0 {
+				msg = msg[:i]
+			}
+		}
+		return msg
+	}
+	return strings.TrimSpace(err.Error())
+}
+
 // duckError shortens a DuckDB error to its first part (DuckDB adds the query
 // text, which is pqx's, not the user's), puts it on one line and sanitizes it
 // (it can quote names and values from the file).

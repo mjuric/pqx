@@ -43,6 +43,8 @@ type Filter struct {
 
 	in      textinput.Model
 	focused bool
+	sel     bool   // all the text is selected (on focus, Textual's select_on_focus)
+	keepSel bool   // the next Focus doesn't select (the box gets focus back after a failure)
 	err     string // why the last view failed, while the text is unchanged (red border)
 
 	sugg  string    // the completion offered for the text (Python's Suggester)
@@ -119,16 +121,22 @@ func (f *Filter) Place(_, y int) { f.y = y }
 // Pos is the row the bar was drawn on last.
 func (f *Filter) Pos() int { return f.y }
 
-// Focus implements kit.Focusable.
+// Focus implements kit.Focusable. The text is selected, as Textual's
+// Input does on focus (typing replaces it), unless the box gets focus back
+// after its filter failed (it never left it in Python).
 func (f *Filter) Focus() tea.Cmd {
 	f.focused = true
 	f.in.CursorEnd()
+	f.sel = f.in.Value() != "" && !f.keepSel
+	f.keepSel = false
+	f.sugg = "" // (Textual drops the suggestion on focus)
 	return f.in.Focus()
 }
 
 // Blur implements kit.Focusable.
 func (f *Filter) Blur() {
 	f.focused = false
+	f.sel = false
 	f.in.Blur()
 }
 
@@ -179,20 +187,26 @@ func (f *Filter) View(w, h int) string {
 		f.in.SetWidth(avail)
 	}
 	v := f.in.Value()
-	line := look.Render(styled.New(p, look.Style("accent")))
+	// the mode label in the accent colour, then a plain space (Python's
+	// #filter-mode with margin-right 1)
+	line := look.Render(styled.New(strings.TrimSuffix(p, " "), look.Style("accent"))) + " "
 	switch {
 	case fmtx.HasControls(v, false):
 		// text set by another part (a value of the file, quoted) can hold
 		// control characters: shown as symbols, never as they are
 		line += ansi.Truncate(fmtx.Sanitize(v, false), avail, "…")
+	case v == "":
+		// the hint, faint whatever --dim says (Textual's placeholder style),
+		// the rest of the line plain
+		line += look.Render(styled.New(ansi.Truncate(f.hint, max(0, w-ansi.StringWidth(p)), "…"), styled.Style{Dim: true}))
+	case f.sel && f.focused && ansi.StringWidth(v) < f.w:
+		line += look.Render(styled.New(v, look.Style("selection")))
 	case f.showSuggestion():
 		// (the text fits: a suggestion is only shown then)
 		rest := string([]rune(f.sugg)[len([]rune(v)):])
 		line += v + look.Render(styled.New(ansi.Truncate(fmtx.Sanitize(rest, false), max(0, avail-ansi.StringWidth(v)), ""), look.Style("dim")))
-	case f.focused || v != "":
-		line += f.in.View()
 	default:
-		line += look.Render(styled.New(ansi.Truncate(f.hint, max(0, w-ansi.StringWidth(p)), "…"), look.Style("dim")))
+		line += f.in.View()
 	}
 	line = fit(line, w)
 	if h <= 1 {
@@ -354,6 +368,29 @@ func (f *Filter) viewFor(text string) data.View {
 }
 
 func (f *Filter) edit(msg tea.Msg) tea.Cmd {
+	if f.sel {
+		// the text is selected: typing or pasting replaces it, deleting
+		// deletes it, moving ends the selection (Textual's Input)
+		f.sel = false
+		switch m := msg.(type) {
+		case tea.PasteMsg:
+			f.setText("")
+		case tea.KeyPressMsg:
+			switch m.String() {
+			case "backspace", "delete", "ctrl+h", "ctrl+d", "ctrl+u", "ctrl+k", "ctrl+w", "alt+backspace", "alt+d", "alt+delete", "ctrl+backspace", "ctrl+delete":
+				f.setText("")
+				return nil
+			case "left", "home":
+				f.in.CursorStart()
+				return nil
+			case "right", "end":
+				return nil // (the cursor is at the end)
+			}
+			if m.Text != "" && m.Mod&(tea.ModCtrl|tea.ModAlt) == 0 {
+				f.setText("")
+			}
+		}
+	}
 	before := f.in.Value()
 	var cmd tea.Cmd
 	f.in, cmd = f.in.Update(msg)
@@ -366,6 +403,7 @@ func (f *Filter) edit(msg tea.Msg) tea.Cmd {
 func (f *Filter) onKey(k tea.KeyPressMsg) tea.Cmd {
 	switch k.String() {
 	case "enter":
+		f.sel = false
 		text := strings.TrimSpace(f.in.Value())
 		f.addHistory(text)
 		f.typed = true
@@ -373,12 +411,14 @@ func (f *Filter) onKey(k tea.KeyPressMsg) tea.Cmd {
 		// checked are commands, not text (it comes back if it fails)
 		return tea.Sequence(kit.Send(kit.FocusMsg{Pane: f.body()}), f.send(f.viewFor(text), -1))
 	case "ctrl+x":
+		f.sel = false
 		if f.in.Value() != "" && f.st.View.Plain() {
 			f.setText("") // only typed, never applied: just empty the box
 			return nil
 		}
 		return f.ClearFilter()
 	case "up", "down":
+		f.sel = false
 		if len(f.history) == 0 {
 			return nil
 		}
@@ -478,7 +518,7 @@ func (f *Filter) onValidated(r validated) tea.Cmd {
 	}
 	st := f.st
 	v := r.req.View
-	wasSQL := st.View.IsSQL()
+	wasSQL, old := st.View.IsSQL(), st.View
 	f.env.Tasks.Cancel("count") // the old view's: stale (a failure would land on the new one)
 	st.View = v
 	if v.IsSQL() || wasSQL || len(st.Columns) != len(r.cols) {
@@ -488,8 +528,15 @@ func (f *Filter) onValidated(r validated) tea.Cmd {
 		st.Columns = r.cols
 	}
 	cmds := []tea.Cmd{kit.Send(kit.ViewChangedMsg{})}
+	sortOnly := !v.IsSQL() && !wasSQL && strings.TrimSpace(v.Where) == strings.TrimSpace(old.Where) && st.Total >= 0
 	if v.Plain() {
 		st.Total = f.env.DS.NumRows()
+	} else if sortOnly {
+		// only the sort changed: the count stands (Python's _sort_by keeps
+		// its total; a filter's count time is still shown)
+		if strings.TrimSpace(v.Where) != "" {
+			cmds = append(cmds, kit.Send(kit.TotalMsg{}))
+		}
 	} else if n, ok := f.counts[countKey(v)]; ok {
 		st.Total = n
 		cmds = append(cmds, kit.Send(kit.TotalMsg{}))
@@ -506,14 +553,10 @@ func (f *Filter) onValidated(r validated) tea.Cmd {
 // (Python's _show_error with mark_input). A typed filter gets the box
 // back to edit it.
 func (f *Filter) fail(err error, typed bool) tea.Cmd {
-	// the data layer puts DuckDB's message on one line: its candidates go
-	// back on a line of their own, after the reason (Python's first line)
-	if msg := err.Error(); !strings.Contains(msg, "\n") && strings.Contains(msg, " Candidate bindings: ") {
-		err = errors.New(strings.Replace(msg, " Candidate bindings: ", "\nCandidate bindings: ", 1))
-	}
-	f.err, _ = describe(err)
+	f.err, _ = describe(errors.New(data.FullError(err)))
 	cmds := []tea.Cmd{chrome.QueryError(err)}
 	if typed {
+		f.keepSel = true // (Python's box never lost focus: nothing is selected)
 		cmds = append(cmds, kit.Send(kit.FocusMsg{Pane: Part}))
 	}
 	return tea.Batch(cmds...)

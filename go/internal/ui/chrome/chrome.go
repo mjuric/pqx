@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/fmtx"
 	"github.com/mjuric/pqx/go/internal/styled"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
@@ -406,7 +407,7 @@ func SetupReason(err error) string {
 // Text is the reason and, after a newline, the hint: 'did you mean "x"?'
 // or none for "edit with /") and a toast with the whole message.
 func QueryError(err error) tea.Cmd {
-	raw := strings.TrimSpace(err.Error())
+	raw := data.FullError(err) // (DuckDB's whole message, as Python shows it)
 	msg := fmtx.Sanitize(raw, true)
 	first, _, _ := strings.Cut(raw, "\n")
 	first = fmtx.Sanitize(first, false)
