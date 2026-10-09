@@ -354,8 +354,8 @@ func TestHistogram(t *testing.T) {
 			}
 		}
 		for i, e := range h.Edges {
-			if e != lo+float64(i)*w {
-				t.Errorf("%s: edge %d = %v, want %v", name, i, e, lo+float64(i)*w)
+			if want := lo + float64(float64(i)*w); e != want { // (unfused, as Python)
+				t.Errorf("%s: edge %d = %v, want %v", name, i, e, want)
 			}
 		}
 		for i := range want {

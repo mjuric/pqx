@@ -9,10 +9,13 @@ import (
 	"math"
 	"math/big"
 	"os"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/mjuric/pqx/go/internal/golden"
 )
 
@@ -314,7 +317,10 @@ func TestGoldenHistogramsAndBins(t *testing.T) {
 				for _, e := range h.Edges {
 					edges = append(edges, pyRepr(e))
 				}
-				if fmt.Sprint(edges) != fmt.Sprint(out.Edges) || fmt.Sprint(h.Counts) != fmt.Sprint(out.Counts) {
+				if fmt.Sprint(edges) == fmt.Sprint(out.Edges) && fmt.Sprint(h.Counts) == fmt.Sprint(out.Counts) {
+					continue
+				}
+				if exactPlatform || !closeHistogram(t, ds, gv.view(), r.String(t, "column"), o, h, out.Edges, out.Counts) {
 					t.Errorf("%s: %v %v\ngolden %v %v", r.ID(), edges, h.Counts, out.Edges, out.Counts)
 				}
 			}
@@ -466,4 +472,45 @@ func TestGoldenFooter(t *testing.T) {
 			}
 		})
 	}
+}
+
+// exactPlatform is where the golden files were made: there, histograms
+// must match them exactly. Elsewhere DuckDB's math library (log10, epoch
+// arithmetic) can put a value on the other side of a bin edge.
+var exactPlatform = runtime.GOOS == "linux" && runtime.GOARCH == "amd64"
+
+// closeHistogram reports whether h differs from the golden edges and counts
+// only as another platform's math can make it: edges within 4 ULPs, and
+// counts moved by no more values than lie within 1e-9 (relative) of an edge.
+func closeHistogram(t *testing.T, ds *dataset, v View, col string, o HistOptions, h Histogram, gEdges []string, gCounts []int64) bool {
+	t.Helper()
+	if len(h.Edges) != len(gEdges) || len(h.Counts) != len(gCounts) {
+		return false
+	}
+	var conds []string
+	for i, e := range h.Edges {
+		g, err := strconv.ParseFloat(gEdges[i], 64)
+		if err != nil || math.Abs(e-g) > 4*math.Abs(math.Nextafter(g, math.Inf(1))-g) {
+			return false
+		}
+		conds = append(conds, fmt.Sprintf("abs(v - %s) <= 1e-9 * greatest(1, abs(%s))", pyRepr(e), pyRepr(e)))
+	}
+	var moved int64
+	for i, c := range h.Counts {
+		moved += max(c-gCounts[i], gCounts[i]-c)
+	}
+	rel, err := ds.histRel(v, col, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var near int64
+	err = ds.query(bg, "SELECT count(*) FROM "+rel+" AND ("+strings.Join(conds, " OR ")+")", func(rec arrow.RecordBatch) error {
+		near, _ = int64At(rec.Column(0), 0)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("counts differ by %d with %d values next to an edge", moved, near)
+	return moved <= 2*near
 }

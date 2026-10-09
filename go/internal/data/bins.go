@@ -68,22 +68,10 @@ func (d *dataset) Histogram(ctx context.Context, v View, col string, o HistOptio
 	if bins > MaxCells {
 		return Histogram{}, fmt.Errorf("%d bins are too many (at most %d)", bins, MaxCells)
 	}
-	q, err := d.colRef(v, col)
+	rel, err := d.histRel(v, col, o)
 	if err != nil {
 		return Histogram{}, err
 	}
-	vexpr := "CAST(" + q + " AS DOUBLE)"
-	if o.Temporal {
-		vexpr = "CAST(epoch(" + q + ") AS DOUBLE)"
-	}
-	if o.Log {
-		vexpr = "log10(CASE WHEN " + q + " > 0 THEN CAST(" + q + " AS DOUBLE) END)"
-	}
-	base, err := d.relationSQL(v, []string{col}, o.Sample)
-	if err != nil {
-		return Histogram{}, err
-	}
-	rel := "(SELECT " + vexpr + " AS v FROM (\n" + base + "\n)) WHERE v IS NOT NULL AND isfinite(v)"
 	var lo, hi float64
 	var haveLo, haveHi bool
 	if o.Lo != nil {
@@ -121,8 +109,19 @@ func (d *dataset) Histogram(ctx context.Context, v View, col string, o HistOptio
 		return Histogram{}, err
 	}
 	counts := make([]int64, bins)
-	sql := fmt.Sprintf("SELECT least(greatest(%s, 0), %d)::INT AS b, count(*) FROM %s AND v >= %s AND v <= %s GROUP BY b",
-		bn.sql("v"), bins-1, rel, pyRepr(lo), pyRepr(hi))
+	// Limits taken from the values filter nothing: pqx filters on them
+	// anyway, but where DuckDB's math (log10 on macOS) gives a value a
+	// different last digit in this query than in the min/max one, that
+	// would lose the maximum.
+	var limits string
+	if o.Lo != nil {
+		limits += " AND v >= " + pyRepr(lo)
+	}
+	if o.Hi != nil {
+		limits += " AND v <= " + pyRepr(hi)
+	}
+	sql := fmt.Sprintf("SELECT least(greatest(%s, 0), %d)::INT AS b, count(*) FROM %s%s GROUP BY b",
+		bn.sql("v"), bins-1, rel, limits)
 	err = d.query(ctx, sql, func(rec arrow.RecordBatch) error {
 		for i := range int(rec.NumRows()) {
 			b, ok1 := int64At(rec.Column(0), i)
@@ -141,6 +140,28 @@ func (d *dataset) Histogram(ctx context.Context, v View, col string, o HistOptio
 		edges[i] = bn.edge(i)
 	}
 	return Histogram{Edges: edges, Counts: counts}, nil
+}
+
+// histRel is the relation of a histogram's values v of column col of view
+// v: finite, as doubles (epoch seconds if Temporal, log10 of the positive
+// values if Log).
+func (d *dataset) histRel(v View, col string, o HistOptions) (string, error) {
+	q, err := d.colRef(v, col)
+	if err != nil {
+		return "", err
+	}
+	vexpr := "CAST(" + q + " AS DOUBLE)"
+	if o.Temporal {
+		vexpr = "CAST(epoch(" + q + ") AS DOUBLE)"
+	}
+	if o.Log {
+		vexpr = "log10(CASE WHEN " + q + " > 0 THEN CAST(" + q + " AS DOUBLE) END)"
+	}
+	base, err := d.relationSQL(v, []string{col}, o.Sample)
+	if err != nil {
+		return "", err
+	}
+	return "(SELECT " + vexpr + " AS v FROM (\n" + base + "\n)) WHERE v IS NOT NULL AND isfinite(v)", nil
 }
 
 // SkyCounts bins (lon, lat) in degrees on a resDeg equirectangular grid
@@ -356,11 +377,13 @@ func (b binning) sql(v string) string {
 }
 
 // edge is the lower edge of bin i (the upper edge of the last for i = n).
+// The conversions keep the compiler from fusing the multiply and add (it
+// does on arm64), so the edges are Python's to the bit on every platform.
 func (b binning) edge(i int) float64 {
 	if b.half {
-		return (b.lo*0.5 + float64(i)*b.w) * 2
+		return (b.lo*0.5 + float64(float64(i)*b.w)) * 2
 	}
-	return b.lo + float64(i)*b.w
+	return b.lo + float64(float64(i)*b.w)
 }
 
 func newGrid(rows, cols int) [][]int64 {
