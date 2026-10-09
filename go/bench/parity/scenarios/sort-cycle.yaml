@@ -15,5 +15,5 @@ steps:
   - check: desc
   - keys: s
     wait_gone: 'sorted dec'
-  - check: off
+  - check: sort-off
     expect_not: '[↑↓]'

@@ -244,7 +244,7 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
                 if not s.settle(float(q), 15 * T, norm=norm):
                     res["errors"].append(f"{where}: screen never settled")
             if "check" in st:
-                capture(st["check"])
+                capture(str(st["check"]))
             # expectations are checked on the checkpoint's own screen when the step took
             # one (a notification may be gone by now), else on the screen as it is
             seen = "\n".join(res["checks"][-1]["lines"]) if "check" in st else norm(s.text())
@@ -635,7 +635,7 @@ def write_xfail(path, summary, old):
         if not why:  # the first error past startup says most
             mine = [e for e in s["errors"] if e.startswith(summary["b"] + ":")]
             errs = [e for e in mine if ": startup:" not in e] or mine
-            why = errs[0][:160] if errs else f"{s['raw_status']} in {', '.join(s['failing'])}"
+            why = errs[0][:160] if errs else f"{s['raw_status']} in {', '.join(map(str, s['failing']))}"
         entries[key] = {"status": s["raw_status"], "checks": s["failing"], "reason": why}
     with open(path, "w") as fh:
         fh.write("# Known gaps of Go pqx against Python pqx, per scenario and size: the status, the\n"

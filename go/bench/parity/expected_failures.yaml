@@ -1,60 +1,889 @@
-# Known gaps of Go pqx against Python pqx, by scenario (optionally NAME@WxH).
-# The runner reports these as XFAIL, and as XPASS once they pass: then remove them.
+# Known gaps of Go pqx against Python pqx, per scenario and size: the status, the
+# checkpoints that fail, and why. A run fails on anything not listed here: a new
+# failing checkpoint, a changed status, or a listed entry that now passes (XPASS).
 # Regenerate with `run.py --write-xfail`; reasons already here are kept.
 xfail:
-  clear-x: 'go: startup: never matched ''✓ 20,000 rows'''
-  column-paging: 'go: startup: never matched ''✓ 3,000 rows'''
-  columns-picker: 'go: step 1 {"keys": "c", "wait": "Visible columns"}: never matched ''Visible columns'''
-  copy-cell: 'go: step 2 {"keys": "y", "clipboard": "^322\\.99696", "toast": "Copied", "check": "copied-r: notification ''Copied'' never shown'
-  cursor-keys: 'go: startup: never matched ''✓ 20,000 rows'''
-  detail-copy-stats: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
-  detail-equals: 'go: step 2 {"keys": "d", "wait": "file row"}: never matched ''file row'''
-  detail-focus: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
-  detail-format: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
-  detail-pane: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
-  detail-units: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
-  dialog-no-shift: 'go: step 6 {"keys": "F", "wait": "(?i)format"}: never matched ''(?i)format'''
-  digits: 'go: step 2 {"keys": "<", "toast": "✓ ra:"}: notification ''✓ ra:'' never shown'
-  equals-cell: 'go: startup: never matched ''✓ 20,000 rows'''
-  esc-cancel-count: 'go: step 4 {"wait": "(?i)counting", "settle": false}: never matched ''(?i)counting'''
-  export-csv: 'go: step 6 {"keys": "e", "wait": "Export current view"}: never matched ''Export current view'''
-  export-json: 'go: step 4 {"keys": "e", "wait": "Export current view"}: never matched ''Export current view'''
-  export-parquet: 'go: step 5 {"keys": "e", "wait": "Export current view"}: never matched ''Export current view'''
-  filter-complete: 'go: startup: never matched ''✓ 20,000 rows'''
-  filter-error: 'go: step 4 {"keys": "enter", "toast": "Query failed", "toast_gone": false, "check": "error": notification ''Query failed'' never shown'
-  filter-esc: 'go: step 3 {"keys": "esc", "wait": "/ filter"}: never matched ''/ filter'''
-  filter-hint: 'go: startup: never matched ''✓ 1,000 rows'''
-  filter-history: 'go: step 3 {"keys": "enter", "wait": "x clear filter"}: never matched ''x clear filter'''
-  filter-sql: 'go: startup: never matched ''✓ 20,000 rows'''
-  filter-unbalanced: 'go: step 3 {"keys": "enter", "toast": "Query failed", "toast_gone": false, "check": "error": notification ''Query failed'' never shown'
-  filter-where: 'go: startup: never matched ''✓ 20,000 rows'''
-  format-F: 'go: step 2 {"keys": "F", "wait": "Format of[\\s\\S]*enter apply"}: never matched ''Format of[\\s\\S]*enter apply'''
-  goto-row: 'go: step 4 {"keys": "enter", "wait": "1,?234 "}: never matched ''1,?234 '''
-  goto-suffix: 'go: startup: never matched ''✓ 2,000,000 rows'''
-  help: 'go: step 1 {"keys": "?", "wait": "Parquet explorer"}: never matched ''Parquet explorer'''
-  hide-pin: 'go: step 2 {"keys": "-", "toast": "Hid c01", "check": "hidden"}: notification ''Hid c01'' never shown'
-  keep-viewport-equals: 'go: step 4 {"keys": "=", "wait": "% of 20k"}: never matched ''% of 20k'''
-  keep-viewport-sort: 'go: step 4 {"keys": "s", "wait": "sorted c13 ↑"}: never matched ''sorted c13 ↑'''
-  looks-env: 'go: startup: never matched ''✓ 20,000 rows'''
-  looks-options: 'go: step 2 {"keys": "d", "wait": "file row"}: never matched ''file row'''
-  metadata-tab: 'go: startup: never matched ''✓ 20,000 rows'''
-  narrow-title: 'go: startup: never matched ''✓ 20,000 rows'''
-  option-format: 'go: startup: never matched ''✓ 20,000 rows'''
-  option-w: 'go: startup: never matched ''✓ [\\d,]+ rows'''
-  option-w-sql: 'go: startup: never matched ''✓ [\\d,]+ rows'''
-  plot-dropdown: 'go: startup: never matched ''✓ 20,000 rows'''
-  plot-sky: 'go: startup: never matched ''✓ 20,000 rows'''
-  quit: 'go: startup: never matched ''✓ 20,000 rows'''
-  raw-smart: 'go: startup: never matched ''✓ 20,000 rows'''
-  sampling-m: 'go: startup: never matched ''✓ 20,000 rows'''
-  schema-tab: 'go: startup: never matched ''✓ 20,000 rows'''
-  schema-types: 'go: startup: never matched ''✓ 200 rows'''
-  sort-click: 'go: startup: never matched ''✓ 20,000 rows'''
-  sort-cycle: 'go: startup: never matched ''✓ 20,000 rows'''
-  startup: 'go: startup: never matched ''✓ 20,000 rows'''
-  stats-i: 'go: step 2 {"keys": "i", "wait": "Profiled"}: never matched ''Profiled'''
-  stats-keys: 'go: startup: never matched ''✓ 20,000 rows'''
-  stats-topvalues: 'go: step 2 {"keys": "i", "wait": "Profiled"}: never matched ''Profiled'''
-  tabs: 'go: startup: never matched ''✓ 20,000 rows'''
-  theme: 'go: startup: never matched ''✓ 20,000 rows'''
-  types-grid: 'go: step 6 {"keys": "down down down d", "wait": "file row"}: never matched ''file row'''
+  clear-x@120x40:
+    status: diff
+    checks:
+    - filtered
+    - cleared
+    reason: diff in filtered, cleared
+  clear-x@200x50:
+    status: diff
+    checks:
+    - filtered
+    - cleared
+    reason: diff in filtered, cleared
+  cli-bad-theme@120x30:
+    status: diff
+    checks:
+    - output
+    reason: diff in output
+  cli-no-sample@120x40:
+    status: style
+    checks:
+    - stats
+    reason: style in stats
+  cli-not-parquet@120x30:
+    status: diff
+    checks:
+    - output
+    reason: diff in output
+  click-markers-tabs@120x40:
+    status: diff
+    checks:
+    - paged
+    - schema
+    - data
+    reason: diff in paged, schema, data
+  column-paging@120x40:
+    status: diff
+    checks:
+    - scrolled
+    - end
+    - back
+    - home
+    reason: diff in scrolled, end, back, home
+  column-paging@200x50:
+    status: diff
+    checks:
+    - scrolled
+    - end
+    - back
+    - home
+    reason: diff in scrolled, end, back, home
+  columns-picker@120x40:
+    status: error
+    checks:
+    - dialog
+    - toggled
+    - applied
+    - narrowed
+    - cancelled
+    reason: 'go: step 1 {"keys": "c", "wait": "Visible columns[\\s\\S]*enter apply"}: never matched ''Visible columns[\\s\\S]*enter apply'''
+  columns-picker@200x50:
+    status: error
+    checks:
+    - dialog
+    - toggled
+    - applied
+    - narrowed
+    - cancelled
+    reason: 'go: step 1 {"keys": "c", "wait": "Visible columns[\\s\\S]*enter apply"}: never matched ''Visible columns[\\s\\S]*enter apply'''
+  complete-quoted@120x40:
+    status: error
+    checks:
+    - suggestion
+    - accepted
+    - applied
+    reason: 'go: step 6 {"check": "accepted", "expect": "› \"weird name\" = 1"}: missing ''› "weird name" = 1'''
+  complete-quoted@200x50:
+    status: error
+    checks:
+    - suggestion
+    - accepted
+    - applied
+    reason: 'go: step 6 {"check": "accepted", "expect": "› \"weird name\" = 1"}: missing ''› "weird name" = 1'''
+  copy-cell@120x40:
+    status: diff
+    checks:
+    - copied-ra
+    - copied-band
+    reason: diff in copied-ra, copied-band
+  copy-cell@200x50:
+    status: diff
+    checks:
+    - copied-ra
+    - copied-band
+    reason: diff in copied-ra, copied-band
+  cursor-keys@120x40:
+    status: diff
+    checks:
+    - arrows
+    - pgdn
+    - pgup
+    - end
+    - home
+    - ctrl-end
+    - ctrl-home
+    reason: diff in arrows, pgdn, pgup, end, home, ctrl-end, ctrl-home
+  cursor-keys@200x50:
+    status: diff
+    checks:
+    - arrows
+    - pgdn
+    - pgup
+    - end
+    - home
+    - ctrl-end
+    - ctrl-home
+    reason: diff in arrows, pgdn, pgup, end, home, ctrl-end, ctrl-home
+  detail-copy-stats@120x40:
+    status: error
+    checks:
+    - copied
+    - stats
+    reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+  detail-copy-stats@200x50:
+    status: error
+    checks:
+    - copied
+    - stats
+    reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+  detail-equals@120x40:
+    status: error
+    checks:
+    - first-equals
+    - second-equals
+    reason: 'go: step 2 {"keys": "d", "wait": "row 3 · file row 3"}: never matched ''row 3 · file row 3'''
+  detail-equals@200x50:
+    status: error
+    checks:
+    - first-equals
+    - second-equals
+    reason: 'go: step 2 {"keys": "d", "wait": "row 3 · file row 3"}: never matched ''row 3 · file row 3'''
+  detail-focus@120x40:
+    status: error
+    checks:
+    - focused
+    - field-8
+    - back-to-grid
+    - clicked-field
+    - tab-back
+    - esc-closes
+    reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+  detail-focus@200x50:
+    status: error
+    checks:
+    - focused
+    - field-8
+    - back-to-grid
+    - clicked-field
+    - tab-back
+    - esc-closes
+    reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+  detail-format@120x40:
+    status: error
+    checks:
+    - fewer
+    - more
+    - dialog
+    - set
+    reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+  detail-format@200x50:
+    status: error
+    checks:
+    - fewer
+    - more
+    - dialog
+    - set
+    reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+  detail-paging@120x40:
+    status: error
+    checks:
+    - pgdn
+    - end
+    - pgup
+    - home
+    reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
+  detail-paging@200x50:
+    status: error
+    checks:
+    - pgdn
+    - end
+    - pgup
+    - home
+    reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
+  detail-pane@120x40:
+    status: error
+    checks:
+    - open
+    - row-2
+    - closed
+    - enter-opens
+    reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
+  detail-pane@200x50:
+    status: error
+    checks:
+    - open
+    - row-2
+    - closed
+    - enter-opens
+    reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
+  detail-queued-keys@120x40:
+    status: error
+    checks:
+    - after
+    reason: 'go: step 2 {"keys": "d", "wait": "row 55 · file row 55"}: never matched ''row 55 · file row 55'''
+  detail-units@120x40:
+    status: error
+    checks:
+    - open
+    - row-1
+    reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
+  detail-units@200x50:
+    status: error
+    checks:
+    - open
+    - row-1
+    reason: 'go: step 1 {"keys": "d", "wait": "row 0 · file row 0"}: never matched ''row 0 · file row 0'''
+  detail-wrap@120x40:
+    status: error
+    checks:
+    - open
+    reason: 'go: step 1 {"keys": "d", "wait": "│ │ {5,}the lazy dog the quick"}: never matched ''│ │ {5,}the lazy dog the quick'''
+  detail-wrap@200x50:
+    status: error
+    checks:
+    - open
+    reason: 'go: step 1 {"keys": "d", "wait": "│ │ {5,}the lazy dog the quick"}: never matched ''│ │ {5,}the lazy dog the quick'''
+  dialog-no-shift@120x40:
+    status: error
+    checks:
+    - before
+    - goto
+    - format
+    - after
+    reason: 'go: step 3 {"keys": "g", "wait": "Go to row[\\s\\S]*enter apply"}: never matched ''Go to row[\\s\\S]*enter apply'''
+  dialog-no-shift@200x50:
+    status: error
+    checks:
+    - before
+    - goto
+    - format
+    - after
+    reason: 'go: step 3 {"keys": "g", "wait": "Go to row[\\s\\S]*enter apply"}: never matched ''Go to row[\\s\\S]*enter apply'''
+  digits@120x40:
+    status: diff
+    checks:
+    - ra-fewer
+    - mjd-more
+    - mag-fewer
+    reason: diff in ra-fewer, mjd-more, mag-fewer
+  digits@200x50:
+    status: diff
+    checks:
+    - ra-fewer
+    - mjd-more
+    - mag-fewer
+    reason: diff in ra-fewer, mjd-more, mag-fewer
+  equals-cell@120x40:
+    status: error
+    checks:
+    - on-band
+    - band-filter
+    - second
+    reason: 'go: step 3 {"keys": "=", "wait": "› band = ''i''"}: never matched "› band = ''i''"'
+  equals-cell@200x50:
+    status: error
+    checks:
+    - on-band
+    - band-filter
+    - second
+    reason: 'go: step 3 {"keys": "=", "wait": "› band = ''i''"}: never matched "› band = ''i''"'
+  esc-cancel-count@120x40:
+    status: diff
+    checks:
+    - cancelled
+    reason: diff in cancelled
+  esc-pane-own-count@120x40:
+    status: error
+    checks:
+    - closed
+    reason: 'go: step 5 {"keys": "d", "settle": false, "wait": "file row"}: never matched ''file row'''
+  esc-pane-stats@120x40:
+    status: error
+    checks:
+    - cancelled
+    - data
+    reason: 'go: step 1 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+  export-csv@120x40:
+    status: error
+    checks:
+    - dialog
+    - csv-chosen
+    - done
+    - file:{out}/view.csv
+    reason: 'go: step 6 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply'''
+  export-csv@200x50:
+    status: error
+    checks:
+    - dialog
+    - csv-chosen
+    - done
+    - file:{out}/view.csv
+    reason: 'go: step 6 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply'''
+  export-json@120x40:
+    status: error
+    checks:
+    - dialog
+    - done
+    - file:{out}/bands.json
+    - file:{out}/never.csv
+    reason: 'go: step 4 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply'''
+  export-json@200x50:
+    status: error
+    checks:
+    - dialog
+    - done
+    - file:{out}/bands.json
+    - file:{out}/never.csv
+    reason: 'go: step 4 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply'''
+  export-parquet@120x40:
+    status: error
+    checks:
+    - dialog
+    - done
+    - file:{out}/view.parquet
+    reason: 'go: step 5 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply'''
+  export-parquet@200x50:
+    status: error
+    checks:
+    - dialog
+    - done
+    - file:{out}/view.parquet
+    reason: 'go: step 5 {"keys": "e", "wait": "Export current view[\\s\\S]*enter apply"}: never matched ''Export current view[\\s\\S]*enter apply'''
+  filter-complete@120x40:
+    status: error
+    checks:
+    - suggestion
+    - accepted
+    - applied
+    reason: 'go: step 3 {"check": "suggestion", "expect": "› midpointMjdTai"}: missing ''› midpointMjdTai'''
+  filter-complete@200x50:
+    status: error
+    checks:
+    - suggestion
+    - accepted
+    - applied
+    reason: 'go: step 3 {"check": "suggestion", "expect": "› midpointMjdTai"}: missing ''› midpointMjdTai'''
+  filter-error@120x40:
+    status: diff
+    checks:
+    - error
+    - back-in-grid
+    reason: diff in error, back-in-grid
+  filter-error@200x50:
+    status: error
+    checks:
+    - error
+    - back-in-grid
+    reason: 'go: step 4 {"keys": "enter", "toast": "Query failed", "toast_gone": false, "check": "error": missing ''✗ Query failed   reason: unknown column "nosuchcolumn"'''
+  filter-esc@120x40:
+    status: diff
+    checks:
+    - left-box
+    - back-in-box
+    - applied
+    - ctrl-x
+    reason: diff in left-box, back-in-box, applied, ctrl-x
+  filter-esc@200x50:
+    status: diff
+    checks:
+    - left-box
+    - back-in-box
+    - applied
+    - ctrl-x
+    reason: diff in left-box, back-in-box, applied, ctrl-x
+  filter-everywhere@120x40:
+    status: style
+    checks:
+    - stats
+    - plot
+    reason: style in stats, plot
+  filter-everywhere@200x50:
+    status: style
+    checks:
+    - stats
+    - plot
+    reason: style in stats, plot
+  filter-hint@120x40:
+    status: diff
+    checks:
+    - first
+    - end
+    reason: diff in first, end
+  filter-hint@200x50:
+    status: diff
+    checks:
+    - first
+    - end
+    reason: diff in first, end
+  filter-history@120x40:
+    status: diff
+    checks:
+    - second
+    - up-1
+    - up-2
+    - down-1
+    reason: diff in second, up-1, up-2, down-1
+  filter-history@200x50:
+    status: diff
+    checks:
+    - second
+    - up-1
+    - up-2
+    - down-1
+    reason: diff in second, up-1, up-2, down-1
+  filter-sql@120x40:
+    status: diff
+    checks:
+    - result
+    - moved
+    reason: diff in result, moved
+  filter-sql@200x50:
+    status: diff
+    checks:
+    - result
+    - moved
+    reason: diff in result, moved
+  filter-unbalanced@120x40:
+    status: error
+    checks:
+    - error
+    - two-statements
+    reason: 'go: step 3 {"keys": "enter", "toast": "unbalanced parentheses", "toast_gone": false, "check: missing ''✗ Query failed   reason: unbalanced parentheses'''
+  filter-unbalanced@200x50:
+    status: error
+    checks:
+    - error
+    - two-statements
+    reason: 'go: step 3 {"keys": "enter", "toast": "unbalanced parentheses", "toast_gone": false, "check: missing ''✗ Query failed   reason: unbalanced parentheses'''
+  filter-where@120x40:
+    status: diff
+    checks:
+    - box-focused
+    - typed
+    - applied
+    reason: diff in box-focused, typed, applied
+  filter-where@200x50:
+    status: diff
+    checks:
+    - box-focused
+    - typed
+    - applied
+    reason: diff in box-focused, typed, applied
+  format-F@120x40:
+    status: error
+    checks:
+    - dialog
+    - sci
+    - percent
+    - bad-spec
+    - prefilled
+    - reset
+    reason: 'go: step 2 {"keys": "F", "wait": "Format of[\\s\\S]*enter apply"}: never matched ''Format of[\\s\\S]*enter apply'''
+  format-F@200x50:
+    status: error
+    checks:
+    - dialog
+    - sci
+    - percent
+    - bad-spec
+    - prefilled
+    - reset
+    reason: 'go: step 2 {"keys": "F", "wait": "Format of[\\s\\S]*enter apply"}: never matched ''Format of[\\s\\S]*enter apply'''
+  format-option-not-saved@120x40:
+    status: diff
+    checks:
+    - first
+    reason: diff in first
+  formats-readback@120x40:
+    status: error
+    checks:
+    - first
+    reason: 'go: step 1 {"check": "first", "expect": ["f64·deg·\\.2f", "333\\.15 "]}: missing ''f64·deg·\\.2f'''
+  formats-saved@120x40:
+    status: error
+    checks:
+    - set
+    - file:{config}/pqx/formats.yaml
+    reason: 'go: step 4 {"keys": "F", "wait": "Format of[\\s\\S]*enter apply"}: never matched ''Format of[\\s\\S]*enter apply'''
+  goto-row@120x40:
+    status: error
+    checks:
+    - dialog
+    - row-1234
+    - half
+    - last
+    reason: 'go: step 1 {"keys": "g", "wait": "Go to row[\\s\\S]*enter apply"}: never matched ''Go to row[\\s\\S]*enter apply'''
+  goto-row@200x50:
+    status: error
+    checks:
+    - dialog
+    - row-1234
+    - half
+    - last
+    reason: 'go: step 1 {"keys": "g", "wait": "Go to row[\\s\\S]*enter apply"}: never matched ''Go to row[\\s\\S]*enter apply'''
+  goto-suffix@120x40:
+    status: error
+    checks:
+    - row-1.5M
+    - first
+    reason: 'go: step 1 {"keys": "g", "wait": "Go to row[\\s\\S]*enter apply"}: never matched ''Go to row[\\s\\S]*enter apply'''
+  help@120x40:
+    status: diff
+    checks:
+    - help
+    - help-pgdn
+    - closed
+    - q-closes
+    reason: diff in help, help-pgdn, closed, q-closes
+  help@200x50:
+    status: diff
+    checks:
+    - help
+    - help-pgdn
+    - closed
+    - q-closes
+    reason: diff in help, help-pgdn, closed, q-closes
+  hidden-linked-column@120x40:
+    status: diff
+    checks:
+    - data
+    reason: diff in data
+  hidden-linked-column@200x50:
+    status: diff
+    checks:
+    - data
+    reason: diff in data
+  hide-keeps-viewport@120x40:
+    status: diff
+    checks:
+    - before
+    - hidden
+    reason: diff in before, hidden
+  hide-keeps-viewport@200x50:
+    status: diff
+    checks:
+    - before
+    - hidden
+    reason: diff in before, hidden
+  hide-pin@120x40:
+    status: diff
+    checks:
+    - hidden
+    - pinned
+    - end-with-pin
+    - home
+    reason: diff in hidden, pinned, end-with-pin, home
+  hide-pin@200x50:
+    status: diff
+    checks:
+    - hidden
+    - pinned
+    - end-with-pin
+    - home
+    reason: diff in hidden, pinned, end-with-pin, home
+  keep-viewport-equals@120x40:
+    status: error
+    checks:
+    - before
+    - after-equals
+    - after-clear
+    reason: 'go: step 4 {"keys": "=", "wait": "› band = ''g''"}: never matched "› band = ''g''"'
+  keep-viewport-equals@200x50:
+    status: error
+    checks:
+    - before
+    - after-equals
+    - after-clear
+    reason: 'go: step 4 {"keys": "=", "wait": "› band = ''g''"}: never matched "› band = ''g''"'
+  keep-viewport-filter@120x40:
+    status: error
+    checks:
+    - before
+    - filtered
+    reason: 'go: step 3 {"check": "before", "expect": ["‹ +c05", "row 30\\b"]}: missing ''‹ +c05'''
+  keep-viewport-filter@200x50:
+    status: diff
+    checks:
+    - before
+    - filtered
+    reason: diff in before, filtered
+  keep-viewport-sort@120x40:
+    status: error
+    checks:
+    - before
+    - sorted
+    - sort-off
+    reason: 'go: step 3 {"check": "before", "expect": "‹ +c05"}: missing ''‹ +c05'''
+  keep-viewport-sort@200x50:
+    status: diff
+    checks:
+    - before
+    - sorted
+    - sort-off
+    reason: diff in before, sorted, sort-off
+  looks-env@120x40:
+    status: diff
+    checks:
+    - first
+    reason: diff in first
+  looks-options@120x40:
+    status: error
+    checks:
+    - first
+    - detail
+    reason: 'go: step 2 {"keys": "d", "wait": "file row"}: never matched ''file row'''
+  metadata-tab@120x40:
+    status: diff
+    checks:
+    - meta
+    - meta-pgdn
+    reason: diff in meta, meta-pgdn
+  metadata-tab@200x50:
+    status: diff
+    checks:
+    - meta
+    - meta-pgdn
+    reason: diff in meta, meta-pgdn
+  option-format@120x40:
+    status: diff
+    checks:
+    - first
+    - end
+    reason: diff in first, end
+  option-format@200x50:
+    status: diff
+    checks:
+    - first
+    - end
+    reason: diff in first, end
+  option-w-sql@120x40:
+    status: diff
+    checks:
+    - first
+    reason: diff in first
+  option-w-sql@200x50:
+    status: diff
+    checks:
+    - first
+    reason: diff in first
+  option-w@120x40:
+    status: diff
+    checks:
+    - first
+    - pgdn
+    reason: diff in first, pgdn
+  option-w@200x50:
+    status: diff
+    checks:
+    - first
+    - pgdn
+    reason: diff in first, pgdn
+  pinned-cursor@120x40:
+    status: diff
+    checks:
+    - scrolled
+    - home
+    - right-again
+    reason: diff in scrolled, home, right-again
+  pinned-cursor@200x50:
+    status: diff
+    checks:
+    - scrolled
+    - home
+    - right-again
+    reason: diff in scrolled, home, right-again
+  plot-dropdown@120x40:
+    status: style
+    checks:
+    - stepped-mode
+    - dropdown
+    - narrowed
+    - chosen
+    reason: style in stepped-mode, dropdown, narrowed, chosen
+  plot-dropdown@200x50:
+    status: style
+    checks:
+    - stepped-mode
+    - dropdown
+    - narrowed
+    - chosen
+    reason: style in stepped-mode, dropdown, narrowed, chosen
+  plot-sky@120x40:
+    status: style
+    checks:
+    - sky
+    - rotated
+    reason: style in sky, rotated
+  plot-sky@200x50:
+    status: style
+    checks:
+    - sky
+    - rotated
+    reason: style in sky, rotated
+  raw-smart@120x40:
+    status: diff
+    checks:
+    - raw
+    - smart
+    reason: diff in raw, smart
+  raw-smart@200x50:
+    status: diff
+    checks:
+    - raw
+    - smart
+    reason: diff in raw, smart
+  resize@120x40:
+    status: diff
+    checks:
+    - smaller
+    - larger
+    reason: diff in smaller, larger
+  sampling-m@120x40:
+    status: diff
+    checks:
+    - sampling-on
+    - sampling-off
+    reason: diff in sampling-on, sampling-off
+  sampling-m@200x50:
+    status: diff
+    checks:
+    - sampling-on
+    - sampling-off
+    reason: diff in sampling-on, sampling-off
+  schema-tab@120x40:
+    status: diff
+    checks:
+    - schema
+    - data-follows
+    reason: diff in schema, data-follows
+  schema-tab@200x50:
+    status: diff
+    checks:
+    - schema
+    - data-follows
+    reason: diff in schema, data-follows
+  schema-types@120x40:
+    status: diff
+    checks:
+    - schema
+    reason: diff in schema
+  schema-types@200x50:
+    status: diff
+    checks:
+    - schema
+    reason: diff in schema
+  sort-click@120x40:
+    status: diff
+    checks:
+    - click-1
+    - click-2
+    reason: diff in click-1, click-2
+  sort-cycle@120x40:
+    status: diff
+    checks:
+    - asc
+    - desc
+    - sort-off
+    reason: diff in asc, desc, sort-off
+  sort-cycle@200x50:
+    status: diff
+    checks:
+    - asc
+    - desc
+    - sort-off
+    reason: diff in asc, desc, sort-off
+  startup@120x40:
+    status: diff
+    checks:
+    - first
+    reason: diff in first
+  startup@200x50:
+    status: diff
+    checks:
+    - first
+    reason: diff in first
+  stats-data-link@120x40:
+    status: diff
+    checks:
+    - data
+    - schema
+    reason: diff in data, schema
+  stats-data-link@200x50:
+    status: diff
+    checks:
+    - data
+    - schema
+    reason: diff in data, schema
+  stats-i@120x40:
+    status: style
+    checks:
+    - stats-snr
+    reason: style in stats-snr
+  stats-i@200x50:
+    status: style
+    checks:
+    - stats-snr
+    reason: style in stats-snr
+  stats-keys@120x40:
+    status: style
+    checks:
+    - psfFlux
+    - log-counts
+    - log-values
+    - fewer-bins
+    - more-bins
+    reason: style in psfFlux, log-counts, log-values, fewer-bins, more-bins
+  stats-keys@200x50:
+    status: style
+    checks:
+    - psfFlux
+    - log-counts
+    - log-values
+    - fewer-bins
+    - more-bins
+    reason: style in psfFlux, log-counts, log-values, fewer-bins, more-bins
+  stats-topvalues@120x40:
+    status: style
+    checks:
+    - band
+    reason: style in band
+  stats-topvalues@200x50:
+    status: style
+    checks:
+    - band
+    reason: style in band
+  tabs@120x40:
+    status: diff
+    checks:
+    - schema
+    - meta
+    - data
+    - next
+    - wrap-prev
+    reason: diff in schema, meta, data, next, wrap-prev
+  tabs@200x50:
+    status: diff
+    checks:
+    - schema
+    - meta
+    - data
+    - next
+    - wrap-prev
+    reason: diff in schema, meta, data, next, wrap-prev
+  theme@120x40:
+    status: diff
+    checks:
+    - first
+    - schema
+    reason: diff in first, schema
+  types-grid@120x40:
+    status: error
+    checks:
+    - first
+    - middle
+    - end
+    - detail-null-row
+    reason: 'go: step 7 {"keys": "d", "wait": "row 3 · file row 3"}: never matched ''row 3 · file row 3'''
+  types-grid@200x50:
+    status: error
+    checks:
+    - first
+    - middle
+    - end
+    - detail-null-row
+    reason: 'go: step 7 {"keys": "d", "wait": "row 3 · file row 3"}: never matched ''row 3 · file row 3'''

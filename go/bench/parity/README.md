@@ -283,8 +283,12 @@ against the targets and against the Go prototype's numbers (+20% is a regression
 Found while making Python pqx pass against itself; worth knowing when a Go difference
 looks odd:
 
-- After a dialog with a text input closes (go to row, format, export), the key bar can
-  keep showing the filter box's keys until focus changes again.
+- The key bar can lag: after a dialog with a text input closes (go to row, format,
+  export) it can keep showing the filter box's keys, and when such a dialog opens it can
+  show the grid's keys for a moment; waits for these dialogs include the key bar.
+- The column readout under the grid (`columns 1–11 of 16 · 5 ›`) isn't always redrawn
+  when the grid widens (the detail panel closing, a tab switch); the scenarios move the
+  cursor right and back first.
 - The Stats histogram is sometimes drawn at a stale width when Stats opens (seen at
   120x40, from `i` and from `3`), and stays so until it is redrawn; the scenarios press
   `l l` before checking it.
