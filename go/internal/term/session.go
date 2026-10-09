@@ -19,6 +19,8 @@ type Session struct {
 	restore func() // raw mode off, the reader stopped, files closed
 	once    sync.Once
 	sig     atomic.Value // the os.Signal that ended the app
+
+	exit func(code int) // os.Exit; ends pqx from a signal while suspended
 }
 
 var active atomic.Pointer[Session]
