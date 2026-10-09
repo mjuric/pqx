@@ -41,9 +41,6 @@ type viewState struct {
 	duckPath, linkDir string
 
 	fb fallback
-
-	viewMu   sync.Mutex
-	viewDone bool
 }
 
 // DuckDB's keywords (lower case), for writing type names: the same for
@@ -136,22 +133,7 @@ func (d *dataset) bindTypes(ctx context.Context) error {
 }
 
 // tableView creates (once) the view t over the file, which SQL views query.
-func (d *dataset) tableView(ctx context.Context) error {
-	d.viewMu.Lock()
-	defer d.viewMu.Unlock()
-	if d.viewDone {
-		return nil
-	}
-	err := d.withConn(ctx, func(c *duckdbConn) error {
-		_, err := c.ExecContext(ctx, "CREATE OR REPLACE VIEW "+tableName+" AS SELECT * FROM "+readParquet(d.duckPath, false), nil)
-		return err
-	})
-	if err != nil {
-		return duckError(err)
-	}
-	d.viewDone = true
-	return nil
-}
+func (d *dataset) tableView(ctx context.Context) error { return d.ensureT(ctx) }
 
 // setupConversions decides, once DuckDB has bound the file, how the plain
 // view reads each column: arrow-go converted to DuckDB's values where that's
@@ -252,17 +234,7 @@ func (d *dataset) orderBy(keys []Sort) (string, error) {
 }
 
 // qcol is the file's column name quoted for SQL, by DuckDB's name for it.
-func (d *dataset) qcol(name string) (string, error) {
-	j, ok := d.byName[name]
-	if !ok {
-		return "", fmt.Errorf("no column %s in this file", Sanitize(name))
-	}
-	sqlName := name
-	if j < len(d.duckNames) {
-		sqlName = d.duckNames[j]
-	}
-	return quoteIdent(sqlName)
-}
+func (d *dataset) qcol(name string) (string, error) { return d.colRef(View{}, name) }
 
 // Validate checks a view without reading data and returns its columns.
 func (d *dataset) Validate(ctx context.Context, v View) ([]Column, error) {

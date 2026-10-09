@@ -27,8 +27,6 @@ import (
 // Ports of pqx's tests/test_data.py (views), tests/test_fetch.py and the data
 // parts of tests/test_security.py. Each test names the Python test it ports.
 
-var bg = context.Background()
-
 func mustFetch(t *testing.T, ds Dataset, v View, start int64, n int, cols []string) Window {
 	t.Helper()
 	w, err := ds.Fetch(bg, v, start, n, cols)
@@ -118,7 +116,7 @@ func TestSortOrder(t *testing.T) {
 				t.Fatalf("desc=%v start %d: %v, want %v", desc, start, w.FileRows, want)
 			}
 			for i, r := range want {
-				if !sameValue(w.Cols["trailLength"][i], tr["trailLength"][r]) {
+				if !sameVal(w.Cols["trailLength"][i], tr["trailLength"][r]) {
 					t.Fatalf("value")
 				}
 			}
@@ -320,7 +318,7 @@ func TestOddFileViews(t *testing.T) {
 		t.Fatalf("Count %d %v", n, err)
 	}
 	w = mustFetch(t, d, View{Where: "len(tags) = 2"}, 0, 5, colNames(d))
-	if !sameValue(w.Cols["tags"][0], List{"a", "b"}) || w.FileRows[0] != -1 {
+	if !sameVal(w.Cols["tags"][0], List{"a", "b"}) || w.FileRows[0] != -1 {
 		t.Fatalf("%v %v", w.Cols["tags"][0], w.FileRows)
 	}
 	// DuckDB sorts NaN above +inf (as Python pqx shows it): 20 NaN, then +inf
@@ -450,7 +448,7 @@ func TestWideDecimals(t *testing.T) {
 			t.Fatalf("%s: %+v", what, w)
 		}
 		for i, r := range w.FileRows {
-			if !sameValue(w.Cols["dec50_2"][i], want(r)) {
+			if !sameVal(w.Cols["dec50_2"][i], want(r)) {
 				t.Fatalf("%s: row %d: %#v, want %#v", what, r, w.Cols["dec50_2"][i], want(r))
 			}
 		}
@@ -789,7 +787,7 @@ func TestConcurrentFetches(t *testing.T) {
 					}
 					for _, c := range colNames(d) {
 						for i := range w.Cols[c] {
-							if !sameValue(w.Cols[c][i], want[off].Cols[c][i]) {
+							if !sameVal(w.Cols[c][i], want[off].Cols[c][i]) {
 								errs <- fmt.Errorf("%d %s %d", off, c, i)
 								return
 							}
@@ -837,7 +835,7 @@ func TestFetchColumns(t *testing.T) {
 				for i, r := range rows {
 					ref := mustFetch(t, c.d, View{}, r, 1, c.cols)
 					for _, col := range c.cols {
-						if !sameValue(w.Cols[col][i], ref.Cols[col][0]) {
+						if !sameVal(w.Cols[col][i], ref.Cols[col][0]) {
 							t.Fatalf("duck=%v %s row %d: %#v vs %#v", duck, col, r, w.Cols[col][i], ref.Cols[col][0])
 						}
 					}
@@ -873,7 +871,7 @@ func TestFetchColumnsForASortedPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range page.Len {
-		if !sameValue(more.Cols["mag"][i], page.Cols["mag"][i]) {
+		if !sameVal(more.Cols["mag"][i], page.Cols["mag"][i]) {
 			t.Fatalf("row %d", i)
 		}
 	}

@@ -221,7 +221,7 @@ func readColumn(ctx context.Context, fr *pqarrow.FileReader, rg int, leaves []in
 		want = int64(len(pick))
 	}
 	out = make([]Value, 0, want)
-	p := 0   // next of pick
+	p := 0 // next of pick
 	for at < hi {
 		if !rr.Next() {
 			if err := rr.Err(); err != nil {

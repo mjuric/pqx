@@ -20,6 +20,24 @@ func valueColumn(arr arrow.Array, lo, hi int, conv func(arrow.Array, int) Value)
 	return out
 }
 
+// duckValueFunc converts DuckDB's Arrow results for a column of DuckDB type
+// duck where DuckDB's Arrow type loses the type: UUIDs come back as text.
+// nil means ValueAt as is. (Top level only; duckCell handles any depth.)
+func duckValueFunc(duck string) func(arrow.Array, int) Value {
+	if duck != "UUID" {
+		return nil
+	}
+	return func(arr arrow.Array, i int) Value {
+		v := ValueAt(arr, i)
+		if s, ok := v.(string); ok {
+			if u, err := parseUUID(s); err == nil {
+				return u
+			}
+		}
+		return v
+	}
+}
+
 func parseUUID(s string) (UUID, error) {
 	var u UUID
 	h := strings.ReplaceAll(s, "-", "")

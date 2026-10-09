@@ -13,7 +13,7 @@ import (
 // sameValue is a == b for Values, with NaN equal to NaN (and -0 not equal
 // to 0), decimals compared by value, scale and precision, and Timestamps by
 // instant, zone flag and unit.
-func sameValue(a, b Value) bool {
+func sameVal(a, b Value) bool {
 	switch a := a.(type) {
 	case float64:
 		b, ok := b.(float64)
@@ -36,7 +36,7 @@ func sameValue(a, b Value) bool {
 			return false
 		}
 		for i := range a {
-			if !sameValue(a[i], b[i]) {
+			if !sameVal(a[i], b[i]) {
 				return false
 			}
 		}
@@ -47,7 +47,7 @@ func sameValue(a, b Value) bool {
 			return false
 		}
 		for i := range a {
-			if a[i].Name != b[i].Name || !sameValue(a[i].Value, b[i].Value) {
+			if a[i].Name != b[i].Name || !sameVal(a[i].Value, b[i].Value) {
 				return false
 			}
 		}
@@ -58,7 +58,7 @@ func sameValue(a, b Value) bool {
 			return false
 		}
 		for i := range a {
-			if !sameValue(a[i].Key, b[i].Key) || !sameValue(a[i].Value, b[i].Value) {
+			if !sameVal(a[i].Key, b[i].Key) || !sameVal(a[i].Value, b[i].Value) {
 				return false
 			}
 		}
@@ -82,7 +82,7 @@ func sameWindow(t *testing.T, what string, a, b Window) {
 			t.Fatalf("%s %s: %d vs %d values", what, c, len(av), len(bv))
 		}
 		for i := range av {
-			if !sameValue(av[i], bv[i]) {
+			if !sameVal(av[i], bv[i]) {
 				t.Errorf("%s %s row %d: %#v vs %#v", what, c, a.FileRows[i], av[i], bv[i])
 			}
 		}
@@ -162,7 +162,7 @@ func TestZooDirectEqualsDuckDB(t *testing.T) {
 				got := slices.Clone(byRows.Cols[c])
 				slices.Reverse(got)
 				for i := range got {
-					if !sameValue(got[i], plain.Cols[c][i]) {
+					if !sameVal(got[i], plain.Cols[c][i]) {
 						t.Errorf("%s FetchColumns %s row %d: %#v vs %#v", what, c, plain.FileRows[i], got[i], plain.Cols[c][i])
 					}
 				}

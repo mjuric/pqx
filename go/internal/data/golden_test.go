@@ -18,8 +18,6 @@ import (
 // (go/testdata/golden/data_*.json): fetch windows, fetch_columns, counts,
 // find_row, fetch_around and validate, view by view.
 
-var goldenFixtures = []string{"demo", "odd", "types", "hostile", "units", "casedup", "rowcol", "nulname"}
-
 type gView struct {
 	Where   string            `json:"where"`
 	OrderBy []json.RawMessage `json:"order_by"`
