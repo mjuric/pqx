@@ -341,7 +341,7 @@ intended:
 The region is left out only when both patterns match; the result is INTENDED (not a
 failure). `region: screen` leaves out the whole checkpoint, so its patterns must pin the
 difference down. In use: detail-wrap (exact 47-digit decimal), raw-smart's `raw`
-(shortest float32), cli-bad-theme (D2's usage error), filter-unbalanced's
+(shortest float32) and `smart` (columns never shrink, so they keep raw mode's widths), cli-bad-theme (D2's usage error), filter-unbalanced's
 `two-statements` (Go pqx's own message; it must still come as a notification: the step
 waits for either app's), esc-cancel-count's status line after Esc (`region: status`, the
 grid's `│ ✓ …` / `│ * …` line: Python shows "Counting rows" until DuckDB has stopped,

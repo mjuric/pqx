@@ -279,6 +279,9 @@ func (g *Grid) onColumnChanged(m kit.ColumnChangedMsg) tea.Cmd {
 	}
 	name := g.st.Current
 	if i, ok := g.byName[name]; ok {
+		if i == g.curCol {
+			return nil // already on it (the details pane following the grid)
+		}
 		g.curCol = i
 		if g.st.Tab != kit.TabData && i >= g.pinned() && i != g.curColShown() {
 			// moved while the Data tab is hidden: DataTable scrolls a
@@ -425,7 +428,19 @@ func (g *Grid) gotoRow(r int64) tea.Cmd {
 	if g.v.total < 0 {
 		g.v.hope = max(g.v.hope, r+1)
 	}
+	// Python's _seek_to: a row in the window the grid holds is moved to (the
+	// view scrolls as little as shows it); any other loads a window centred
+	// on it, shown from its top, scrolled just enough to show the row (it
+	// lands on the last screen row, or where it is in the first screen)
+	w := g.pageRows()
+	if r < g.v.pageOff || r >= g.v.pageOff+w {
+		off := max(0, r-w/2)
+		if g.v.total >= 0 {
+			off = max(0, min(off, g.v.total-w))
+		}
+		g.v.pageOff = off
+		g.top = off
+	}
 	g.curRow = r
-	g.top = r - int64(g.bodyH()/2)
 	return tea.Batch(drop, g.moved())
 }
