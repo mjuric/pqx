@@ -476,3 +476,26 @@ func TestASortKeepsTheCount(t *testing.T) {
 		t.Errorf("filter sorted: total %d, %d counts", r.env.State.Total, r.ds.counts)
 	}
 }
+
+// The hint's first line as Textual shows it at 60, 80 and 100 columns
+// (narrow-title): wrapped at a word, no ellipsis; faint, with --dim
+// bright-black too.
+func TestTheHintIsCutAtAWord(t *testing.T) {
+	h := "SQL WHERE expression, e.g. ssObjectId > 1000133 and band = 'r' — or a full query: select … from t"
+	for w, want := range map[int]string{
+		52: "SQL WHERE expression, e.g. ssObjectId > 1000133 and ",
+		72: "SQL WHERE expression, e.g. ssObjectId > 1000133 and band = 'r' — or a ",
+		92: "SQL WHERE expression, e.g. ssObjectId > 1000133 and band = 'r' — or a full query: select … ",
+		51: "SQL WHERE expression, e.g. ssObjectId > 1000133 and",
+		5:  "SQL ",
+		2:  "SQ",
+	} {
+		if got := firstLine(h, w); got != want {
+			t.Errorf("firstLine(%d) = %q, want %q", w, got, want)
+		}
+	}
+	r := newRig(t, "")
+	if v := r.f.View(200, 1); !strings.Contains(v, "\x1b[2mSQL WHERE") {
+		t.Errorf("not faint: %q", v)
+	}
+}

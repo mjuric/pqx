@@ -9,8 +9,10 @@ package app
 
 import (
 	"github.com/charmbracelet/x/ansi"
+	"image"
 	"regexp"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -50,7 +52,10 @@ type App struct {
 
 	dialogs []kit.Dialog
 	regions []region // where each part was drawn last, for mouse routing
-	w, h    int
+	// tint is the focused table's area (the grid, the Schema table, the row
+	// groups), which a named theme tints as Textual does; empty for none
+	tint image.Rectangle
+	w, h int
 
 	quitting bool
 
@@ -261,7 +266,7 @@ func (a *App) escape(k tea.KeyPressMsg) tea.Cmd {
 	if tasks.Busy() {
 		tags := tasks.CancelAll()
 		return tea.Batch(a.broadcast(kit.CancelledMsg{Tags: tags}),
-			kit.Notify(kit.Info, "Cancelled running queries"))
+			kit.Send(kit.NotifyMsg{Text: "Cancelled running queries", Timeout: 2 * time.Second})) // (Python's timeout)
 	}
 	if a.typing() {
 		if a.tab == kit.TabData {
@@ -394,6 +399,15 @@ func shift(msg tea.MouseMsg, x, y int) tea.Msg {
 // paint applies a named theme to the whole frame (theme.Theme.Paint), if
 // the look has one.
 func (a *App) paint(frame string) string {
+	tint := a.tint
+	if len(a.dialogs) > 0 {
+		tint = image.Rectangle{} // the dialog has the focus
+	}
+	if p, ok := a.env.Look.(interface {
+		PaintTinted(string, int, image.Rectangle) string
+	}); ok {
+		return p.PaintTinted(frame, a.w, tint)
+	}
 	if p, ok := a.env.Look.(interface{ Paint(string, int) string }); ok {
 		return p.Paint(frame, a.w)
 	}
@@ -503,6 +517,7 @@ func activeStyle(s string) string {
 // render draws the screen and returns the text cursor, if a part shows one.
 func (a *App) render() (string, *tea.Cursor) {
 	a.regions = a.regions[:0]
+	a.tint = image.Rectangle{}
 	ch := a.p.Chrome
 	var b strings.Builder
 	b.WriteString(edgeLine(ch.TitleBar(max(1, a.w-2*margin)), a.w))
@@ -549,6 +564,9 @@ func (a *App) render() (string, *tea.Cursor) {
 		// the grid, a blank row and the status line (Python's #status margin)
 		gridH := max(1, bodyH-4)
 		inner := place("grid", a.p.Grid, margin+2, top+1, max(1, gw-4), gridH)
+		if a.focus == "grid" { // the table, between the ‹ › markers
+			a.tint = image.Rect(margin+3, top+1, margin+2+max(1, gw-4)-1, top+1+gridH)
+		}
 		inner += "\n\n" + fitLine(ch.StatusLine(max(1, gw-4)), max(1, gw-4))
 		left := a.frame(inner, gw, bodyH, tabs, nil2(a.p.Grid), a.focus == "grid", a.p.Grid)
 		if a.env.State.DetailOpen {
@@ -569,6 +587,7 @@ func (a *App) render() (string, *tea.Cursor) {
 				pl.Place(margin, top)
 			}
 			body.WriteString(a.panels(pp, W, bodyH, tabs, a.focus == name))
+			a.tint = a.tint.Add(image.Pt(margin, top))
 			break
 		}
 		inner := place(name, p, margin+2, top+1, max(1, W-4), bodyH-2)

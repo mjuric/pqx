@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -593,7 +594,7 @@ func (g *Grid) failedNotice(failed map[string]error) tea.Cmd {
 		s = ""
 	}
 	msg := "Couldn't load " + strconv.Itoa(len(failed)) + " column" + s + ": " + fmtx.Sanitize(truncRunes(firstLine(first), 200), false)
-	return kit.Send(kit.NotifyMsg{Severity: kit.Error, Title: "✗ Columns", Text: msg})
+	return kit.Send(kit.NotifyMsg{Severity: kit.Error, Title: "✗ Columns", Text: msg, Timeout: 6 * time.Second})
 }
 
 // store adds a read window to the cache. Positions come from the request

@@ -18,7 +18,6 @@ from __future__ import annotations
 import base64
 import fcntl
 import os
-import pty
 import re
 import select
 import signal
@@ -79,6 +78,19 @@ class Screen(pyte.Screen):
     def __init__(self, cols, rows, reply):
         super().__init__(cols, rows)
         self._reply = reply
+
+    def resize(self, lines=None, columns=None):
+        """As pyte's, but a smaller screen loses its bottom lines, not its top ones: what
+        xterm and VTE do on the alternate screen when the cursor isn't below the new last
+        line (pyte drops the top, which an app that redraws only the lines it changed,
+        like Textual, then never repaints)."""
+        lines = lines or self.lines
+        if lines < self.lines:
+            for y in range(lines, self.lines):
+                self.buffer.pop(y, None)
+            self.lines = lines  # the base resize then has no lines to drop
+            self.cursor.y = min(self.cursor.y, lines - 1)
+        super().resize(lines, columns)
 
     def write_process_input(self, data):
         self._reply(data.encode())
@@ -213,19 +225,31 @@ class Session:
         self._last_write = 0.0
         self._last_esc = False
         e = dict(os.environ if env is None else env)
-        e.update(TERM="xterm-256color", COLUMNS=str(cols), LINES=str(rows))
-        e.pop("NO_COLOR", None)
-        pid, fd = pty.fork()
+        e["TERM"] = "xterm-256color"
+        # no COLUMNS/LINES: they would override the terminal's size for good (Python's
+        # shutil.get_terminal_size reads them first), and a resize would go unseen
+        for k in ("COLUMNS", "LINES", "NO_COLOR"):
+            e.pop(k, None)
+        # the size is set on the pty before the app starts, so it never sees another
+        master, slave = os.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        pid = os.fork()
         if pid == 0:
             try:
+                os.close(master)
+                os.setsid()
+                fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+                for fd in (0, 1, 2):
+                    os.dup2(slave, fd)
+                if slave > 2:
+                    os.close(slave)
                 if cwd:
                     os.chdir(cwd)
                 os.execvpe(argv[0], argv, e)
             finally:
                 os._exit(127)
-        self.pid, self.fd = pid, fd
-        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-        os.kill(pid, signal.SIGWINCH)
+        os.close(slave)
+        self.pid, self.fd = pid, master
 
     # -- io
     def _answer(self, data: bytes):
