@@ -99,7 +99,11 @@ func (g *Grid) onViewChanged() tea.Cmd {
 	// (the current column stays as it is: a view without it, a SQL
 	// result, doesn't make another current)
 	g.scrollToCursor()
-	return tea.Batch(dropped, kept, g.refreshed(), g.replay(replay))
+	var values map[string]data.Value
+	if next != nil {
+		values = next.values
+	}
+	return tea.Batch(dropped, kept, g.refreshed(), g.replay(replay, values))
 }
 
 // sameView reports whether two views are the same.
