@@ -3,8 +3,6 @@
 # Regenerate with `run.py --write-xfail`; reasons already here are kept.
 xfail:
   clear-x: 'go: startup: never matched ''✓ 20,000 rows'''
-  cli-help: 'diff: 1 checkpoints differ'
-  cli-version: 'diff: 1 checkpoints differ'
   column-paging: 'go: startup: never matched ''✓ 3,000 rows'''
   columns-picker: 'go: step 1 {"keys": "c", "wait": "Visible columns"}: never matched ''Visible columns'''
   copy-cell: 'go: step 2 {"keys": "y", "clipboard": "^322\\.99696", "toast": "Copied", "check": "copied-r: notification ''Copied'' never shown'
@@ -41,9 +39,9 @@ xfail:
   looks-options: 'go: step 2 {"keys": "d", "wait": "file row"}: never matched ''file row'''
   metadata-tab: 'go: startup: never matched ''✓ 20,000 rows'''
   narrow-title: 'go: startup: never matched ''✓ 20,000 rows'''
-  option-format: 'go: app exited with status 2'
-  option-w: 'go: app exited with status 2'
-  option-w-sql: 'go: app exited with status 2'
+  option-format: 'go: startup: never matched ''✓ 20,000 rows'''
+  option-w: 'go: startup: never matched ''✓ [\\d,]+ rows'''
+  option-w-sql: 'go: startup: never matched ''✓ [\\d,]+ rows'''
   plot-dropdown: 'go: startup: never matched ''✓ 20,000 rows'''
   plot-sky: 'go: startup: never matched ''✓ 20,000 rows'''
   quit: 'go: startup: never matched ''✓ 20,000 rows'''
@@ -58,5 +56,5 @@ xfail:
   stats-keys: 'go: startup: never matched ''✓ 20,000 rows'''
   stats-topvalues: 'go: step 2 {"keys": "i", "wait": "Profiled"}: never matched ''Profiled'''
   tabs: 'go: startup: never matched ''✓ 20,000 rows'''
-  theme: 'go: app exited with status 2'
+  theme: 'go: startup: never matched ''✓ 20,000 rows'''
   types-grid: 'go: step 6 {"keys": "down down down d", "wait": "file row"}: never matched ''file row'''
