@@ -75,9 +75,9 @@ func (g *Grid) onViewChanged() tea.Cmd {
 		g.v.setTotal(g.ds.NumRows())
 		g.v.confirmed = true
 	}
-	// widths as the values will likely be, so the leftmost column kept
-	// stays leftmost when they arrive (Python's _reserve_widths)
-	g.reserve(nil)
+	// (widths are reserved for the columns the first rows lack when they
+	// arrive, as Python's _apply_page does; the kept leftmost column goes
+	// to the edge then)
 	// the cursor stays on the current column if the view shows it
 	g.curCol = 0
 	if i, ok := g.byName[st.Current]; ok {

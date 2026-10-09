@@ -733,14 +733,12 @@ func TestAJumpBeforeTheFirstPageDropsTheKeptRecord(t *testing.T) {
 	h.settle()
 	h.g.curCol = h.g.byName["band"]
 	release := make(chan struct{})
-	var once sync.Once
 	ds.mu.Lock()
 	ds.fetchGate = func(v data.View, start int64) chan struct{} {
-		var ch chan struct{}
 		if v.Where != "" {
-			once.Do(func() { ch = release }) // the filtered view's first read hangs (only it)
+			return release // the filtered view's reads hang (a read the grid replaces too)
 		}
-		return ch
+		return nil
 	}
 	ds.mu.Unlock()
 	h.press("=")
