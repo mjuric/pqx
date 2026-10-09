@@ -7,7 +7,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/mjuric/pqx/go/internal/data"
-	"github.com/mjuric/pqx/go/internal/ui"
+	"github.com/mjuric/pqx/go/internal/ui/app"
+	"github.com/mjuric/pqx/go/internal/ui/chrome"
+	"github.com/mjuric/pqx/go/internal/ui/filter"
+	"github.com/mjuric/pqx/go/internal/ui/grid"
+	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
 
 // panicky is the app with a key that panics, for the crash test.
@@ -29,7 +33,10 @@ func panicMain(path string) int {
 		return 3
 	}
 	defer ds.Close()
-	code := runApp(panicky{ui.New(ds)}, os.Stderr)
+	env := &kit.Env{DS: ds, Look: app.BasicLook{}, Tasks: kit.NewTasks()}
+	env.State = newState(ds, env.Opts)
+	m := app.New(env, app.Parts{Grid: grid.New(env), Filter: filter.New(env), Chrome: chrome.New(env)})
+	code := runApp(panicky{m}, os.Stderr)
 	// the terminal is out of raw mode again: a newline is a newline
 	fmt.Print("after\nexit\n")
 	return code

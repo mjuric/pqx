@@ -173,14 +173,14 @@ func checkCleared(t *testing.T, tail string) {
 
 func TestPtyQuitClearsScreen(t *testing.T) {
 	a := startPty(t, "1", fixtureFile(t))
-	if !a.waitFor("of 100", 20*time.Second) {
+	if !a.waitFor("row 0", 20*time.Second) {
 		t.Fatalf("no first frame: %q", a.output())
 	}
 	time.Sleep(300 * time.Millisecond)
 	out := a.output()
-	if !strings.Contains(out, "\x1b[?1006h") || strings.Contains(out, "1016") {
+	if !strings.Contains(out, "\x1b[?1006h") || strings.Contains(out, "?1016") {
 		t.Errorf("mouse modes: SGR on %v, 1016 touched %v",
-			strings.Contains(out, "\x1b[?1006h"), strings.Contains(out, "1016"))
+			strings.Contains(out, "\x1b[?1006h"), strings.Contains(out, "?1016"))
 	}
 	// the terminal turns the renderer's "\n" into "\r\n" (output processing
 	// stays on in raw mode)
@@ -205,7 +205,7 @@ func TestPtyQuitClearsScreen(t *testing.T) {
 // keeps running.
 func TestPtySplitX10ClickDoesNotQuit(t *testing.T) {
 	a := startPty(t, "1", fixtureFile(t))
-	if !a.waitFor("of 100", 20*time.Second) {
+	if !a.waitFor("row 0", 20*time.Second) {
 		t.Fatalf("no first frame: %q", a.output())
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -229,7 +229,7 @@ func TestPtySplitX10ClickDoesNotQuit(t *testing.T) {
 
 func TestPtyCrashRestoresTerminal(t *testing.T) {
 	a := startPty(t, "panic", fixtureFile(t))
-	if !a.waitFor("of 100", 20*time.Second) {
+	if !a.waitFor("row 0", 20*time.Second) {
 		t.Fatalf("no first frame: %q", a.output())
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -291,7 +291,7 @@ func (a *ptyApp) state() string {
 
 func (a *ptyApp) started() {
 	a.t.Helper()
-	if !a.waitFor("of 100", 20*time.Second) {
+	if !a.waitFor("row 0", 20*time.Second) {
 		a.t.Fatalf("no first frame: %q", a.output())
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -359,7 +359,7 @@ func startShellWith(t *testing.T, line string) (*ptyApp, int) {
 		t.Fatalf("no prompt: %q", a.output())
 	}
 	a.write(line + "\n")
-	if !a.waitFor("row 1 of", 20*time.Second) {
+	if !a.waitFor("row 0", 20*time.Second) {
 		t.Fatalf("no first frame: %q", a.output())
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -452,7 +452,7 @@ func TestShellSuspendAndResume(t *testing.T) {
 		a.write("fg\n")
 		time.Sleep(500 * time.Millisecond)
 		tail = a.output()[n:]
-		for _, on := range []string{"\x1b[?1049h", "\x1b[?1006h", "row 1 of"} {
+		for _, on := range []string{"\x1b[?1049h", "\x1b[?1006h", "row 0"} {
 			if !strings.Contains(tail, on) {
 				t.Errorf("round %d: %q not written on resume: %q", round, on, tail)
 			}
@@ -570,7 +570,7 @@ func TestShellWrapperSuspend(t *testing.T) {
 	n := len(a.output())
 	a.write("fg\n")
 	time.Sleep(500 * time.Millisecond)
-	if st := procState(pid); st == "T" || !strings.Contains(a.output()[n:], "row 1 of") {
+	if st := procState(pid); st == "T" || !strings.Contains(a.output()[n:], "row 0") {
 		for _, q := range inSession(a.cmd.Process.Pid) {
 			b, _ := os.ReadFile(fmt.Sprintf("/proc/%d/status", q))
 			w, _ := os.ReadFile(fmt.Sprintf("/proc/%d/wchan", q))
@@ -609,7 +609,7 @@ func TestShellBackgroundWithTTOUIgnored(t *testing.T) {
 	n = len(a.output())
 	a.write("fg\n")
 	time.Sleep(500 * time.Millisecond)
-	if !strings.Contains(a.output()[n:], "row 1 of") {
+	if !strings.Contains(a.output()[n:], "row 0") {
 		t.Fatalf("fg didn't bring pqx back: %q", a.output()[n:])
 	}
 	a.write("q")
