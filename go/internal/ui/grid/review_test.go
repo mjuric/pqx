@@ -67,7 +67,7 @@ func hostileFake() *fakeDS {
 
 func TestHostileTextNeverReachesTheScreen(t *testing.T) {
 	ds := hostileFake()
-	h := newHarness(t, ds, 220, 30)
+	h := newHarness(t, ds, 220, 30, hopts{page: 1})
 	check := func(what string) {
 		t.Helper()
 		if bad := rawControls(h.raw()); len(bad) > 0 {
@@ -413,7 +413,7 @@ func TestFailedAndShortReadsAreNotRetried(t *testing.T) {
 // Columns read for rows evicted (or renumbered) meanwhile aren't stored;
 // a failure marks only rows read.
 func TestColumnResultsAreCheckedAgainstTheCache(t *testing.T) {
-	h := newHarness(t, newFake(1000, 4), 120, 30)
+	h := newHarness(t, newFake(1000, 4), 120, 30, hopts{page: 1})
 	g := h.g
 	gen := g.v.gen
 	w := data.Window{Len: 2, FileRows: []int64{900, 901}, Cols: map[string][]data.Value{"zz": {int64(1), int64(2)}}}
@@ -437,7 +437,7 @@ func TestColumnResultsAreCheckedAgainstTheCache(t *testing.T) {
 func TestJumpPastTheEnd(t *testing.T) {
 	ds := newFake(1000, 3)
 	ds.countGate = make(chan struct{})
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	h.filterWith("id % 2 = 0")
 	known := h.g.v.known
 	h.send(kit.GotoMsg{Row: 5000})
@@ -696,4 +696,45 @@ func leftmost(g *Grid) int {
 		return g.pinned()
 	}
 	return first
+}
+
+// Reads take Python's window of rows around the cursor, and widths fit all
+// of it: a long value 900 rows down widens its column on the first screen.
+func TestWidthsFitPythonsWindow(t *testing.T) {
+	ds := newFake(5000, 4)
+	long := strings.Repeat("z", 30)
+	ds.special = func(name string, fr int64) (data.Value, bool) {
+		if name == "name" && fr == 900 {
+			return long, true
+		}
+		return nil, false
+	}
+	h := newHarness(t, ds, 120, 30)
+	if c := ds.fetches()[0]; c.start != 0 || c.n != 1000 {
+		t.Errorf("first read %+v, want Python's window [0, 1000)", c)
+	}
+	if w := h.g.colWidth("name"); w != len(long) {
+		t.Errorf("name %d wide on the first screen, want %d", w, len(long))
+	}
+}
+
+// A small plain file is read whole (Python's window_cost and
+// LAZY_MIN_SAVING_MS); a big one lazily.
+func TestSmallPlainFilesLoadWhole(t *testing.T) {
+	h := newHarness(t, openFixture(t, "demo"), 120, 40)
+	if c := h.ds.(interface{ Columns() []data.Column }); c == nil {
+		t.Fatal()
+	}
+	if !h.g.wholeIsCheap(0, 1000, 8) {
+		t.Error("demo's first window isn't read whole")
+	}
+	for _, n := range []string{"ingestTime", "detector"} {
+		if _, ok := h.g.v.cell(n, 0); !ok {
+			t.Errorf("%s not read with the first window", n)
+		}
+	}
+	big := newHarness(t, newFake(10_000, 120), 120, 40)
+	if big.g.wholeIsCheap(0, 1000, 8) {
+		t.Error("a big file's window is read whole")
+	}
 }

@@ -67,6 +67,7 @@ type hopts struct {
 	where   string
 	noDlg   bool
 	formats map[string]fmtx.Override
+	page    int64 // Grid.window: rows read around the cursor (0: Python's window)
 	session map[string]fmtx.Override
 }
 
@@ -98,6 +99,7 @@ func newHarness(t testing.TB, ds data.Dataset, w, h int, o ...hopts) *harness {
 		env.Dialogs = fakeDialogs{hs}
 	}
 	hs.g = New(env)
+	hs.g.window = op.page
 	env.Grid = hs.g // (as cmd/pqx wires it)
 	hs.f = filter.New(env)
 	hs.app = app.New(env, app.Parts{Grid: hs.g, Filter: hs.f})

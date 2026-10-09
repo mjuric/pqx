@@ -211,6 +211,9 @@ func (g *Grid) labelSlot() slot {
 // GridTable.window): its row labels are as wide as the widest label in the
 // window, so the grid sizes its row labels for the same rows.
 func (g *Grid) pageRows() int64 {
+	if g.window > 0 {
+		return g.window
+	}
 	return int64(max(150, min(1000, 40_000/max(1, len(g.ds.Columns())))))
 }
 

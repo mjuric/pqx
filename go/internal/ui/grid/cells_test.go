@@ -109,7 +109,7 @@ func TestColumnGrowsWhenAWiderCellIsDrawn(t *testing.T) {
 		}
 		return nil, false
 	}
-	h := newHarness(t, ds, 120, 30)
+	h := newHarness(t, ds, 120, 30, hopts{page: 1})
 	g := h.g
 	w0 := g.colWidth("name")
 	if w0 >= len(long) {

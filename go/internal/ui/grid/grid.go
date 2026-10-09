@@ -128,6 +128,7 @@ type Grid struct {
 	// the scrollable width and whether the cursor was on screen when last
 	// drawn (View keeps it there when the width changes)
 	lastViewW  int
+	window     int64 // pageRows, if set (tests of reads near the screen only)
 	lastInView bool
 }
 

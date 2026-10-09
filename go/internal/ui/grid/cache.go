@@ -179,6 +179,58 @@ func (g *Grid) ensure() tea.Cmd {
 	return g.ensureCols()
 }
 
+// wholeIsCheap reports whether reading every column of rows [start, end)
+// of the plain view costs little more than the columns on screen (Python
+// pqx's window_cost and LAZY_MIN_SAVING_MS: small files are read whole).
+// The bytes of each row group and column are estimated from the file's
+// totals.
+func (g *Grid) wholeIsCheap(start, end int64, visible int) bool {
+	info := g.ds.Info()
+	rgs := g.ds.RowGroups()
+	total, ncols := g.ds.NumRows(), len(g.ds.Columns())
+	if total <= 0 || ncols == 0 || len(rgs) == 0 {
+		return true
+	}
+	const (
+		paNsPerByte    = 3.0
+		duckSkipRatio  = 0.3
+		duckMsBase     = 4.0
+		duckMsPerCol   = 0.1
+		duckMsPerRG    = 0.16
+		duckMsPerRGCol = 0.001
+		firstPageBytes = 256 << 10
+		minSavingMs    = 20.0
+	)
+	perCol := float64(info.Uncompressed) / float64(total) / float64(ncols) // bytes per row and column
+	decoded, pos := 0.0, int64(0)
+	for _, n := range rgs {
+		a, b := pos, pos+n
+		pos = b
+		if b <= start || a >= end || n <= 0 {
+			continue
+		}
+		size := perCol * float64(n) // a column chunk
+		decoded += float64(ncols) * max(size*float64(min(end, b)-a)/float64(n), min(size, firstPageBytes))
+	}
+	cost := func(cols int, decoded float64) float64 {
+		pa := paNsPerByte * 1e-6 * decoded
+		duck := duckMsBase + duckMsPerCol*float64(cols) +
+			float64(len(rgs))*(duckMsPerRG+duckMsPerRGCol*float64(cols)) + duckSkipRatio*pa
+		return min(pa, duck)
+	}
+	return cost(ncols, decoded)-cost(visible, decoded*float64(visible)/float64(ncols)) < minSavingMs
+}
+
+// readRange is the rows a read takes: Python pqx's window around the
+// cursor (GridTable.window rows, pageRows), and a screen above and below
+// the screen; column widths are fitted to all of them, as Python fits its
+// window's.
+func (g *Grid) readRange() (int64, int64) {
+	n := int64(g.bodyH())
+	d := g.v
+	return g.rowRange(min(d.pageOff, g.top-n), max(d.pageOff+g.pageRows(), g.top+2*n))
+}
+
 // rowRange is [a, b) clipped to the rows that may exist.
 func (g *Grid) rowRange(a, b int64) (int64, int64) {
 	a = max(a, 0)
@@ -208,7 +260,7 @@ func (g *Grid) ensureRows() tea.Cmd {
 	if !missing {
 		return nil
 	}
-	fa, fb := g.rowRange(g.top-n, g.top+2*n)
+	fa, fb := g.readRange()
 	if fa >= fb {
 		return nil
 	}
@@ -217,6 +269,9 @@ func (g *Grid) ensureRows() tea.Cmd {
 	cols := g.allNames()
 	if d.ids {
 		cols = g.nearNames(0)
+		if d.view.Plain() && g.wholeIsCheap(fa, fb, len(cols)) {
+			cols = g.allNames() // nothing to load later, nothing reserved
+		}
 	}
 	req := fetchReq{gen: d.gen, start: fa, n: int(fb - fa), cols: cols}
 	if g.page != nil && g.env.Tasks.Running("page") && g.page.covers(req) {
@@ -256,7 +311,7 @@ func (g *Grid) ensureCols() tea.Cmd {
 			}
 		}
 	}
-	fa, fb := g.rowRange(g.top-n, g.top+2*n)
+	fa, fb := g.readRange()
 	req := g.colsRequest("cols", g.missingNames(g.nearNames(2), fa, fb), fa, fb)
 	if len(req.rows) == 0 || len(req.cols) == 0 {
 		return nil

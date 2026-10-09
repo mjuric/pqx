@@ -19,7 +19,7 @@ import (
 
 func TestFirstScreen(t *testing.T) {
 	ds := newFake(1000, 4)
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	calls := ds.fetches()
 	if len(calls) != 1 {
 		t.Fatalf("want one fetch, got %d: %+v", len(calls), calls)
@@ -60,7 +60,7 @@ func TestFirstScreen(t *testing.T) {
 
 func TestCursorKeys(t *testing.T) {
 	ds := newFake(1000, 6)
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	g := h.g
 	n := int64(g.bodyH())
 	h.press("down", "down", "right")
@@ -113,7 +113,7 @@ func TestCursorKeys(t *testing.T) {
 
 func TestPgDnPastWindowFetches(t *testing.T) {
 	ds := newFake(100000, 3)
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	n := h.g.bodyH()
 	before := len(ds.fetches())
 	h.press("pgdown") // rows [n, 2n) are read already (the first read took 2n)
@@ -143,7 +143,7 @@ func itoa(n int64) string { return strings.ReplaceAll(commas(n), ",", "") }
 func TestSupersededFetchIsCancelled(t *testing.T) {
 	ds := newFake(1_000_000, 3)
 	ds.gate = make(chan struct{})
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	if len(ds.fetches()) != 1 || !h.env.Tasks.Running("page") {
 		t.Fatalf("want one fetch running, got %d", len(ds.fetches()))
 	}
@@ -172,7 +172,7 @@ func TestSupersededFetchIsCancelled(t *testing.T) {
 
 func TestOldViewResultsAreDropped(t *testing.T) {
 	ds := newFake(1000, 3)
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	oldGen := h.g.v.gen
 	ds.countGate = make(chan struct{})
 	h.filterWith("id % 10 = 0")
@@ -194,7 +194,7 @@ func TestOldViewResultsAreDropped(t *testing.T) {
 
 func TestBadFilterKeepsView(t *testing.T) {
 	ds := newFake(1000, 3)
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	gen := h.g.v.gen
 	h.press("/")
 	if !h.f.TypingFocused() {
@@ -228,7 +228,7 @@ func TestBadFilterKeepsView(t *testing.T) {
 func TestGoodFilterSwitchesAndCounts(t *testing.T) {
 	ds := newFake(1000, 3)
 	ds.countGate = make(chan struct{})
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	h.press("down", "down", "down")
 	h.filterWith("id % 10 = 0")
 	g, st := h.g, h.env.State
@@ -293,7 +293,7 @@ func TestGoodFilterSwitchesAndCounts(t *testing.T) {
 func TestEscCancelsCount(t *testing.T) {
 	ds := newFake(1000, 3)
 	ds.countGate = make(chan struct{})
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	h.filterWith("id % 7 = 0")
 	if !h.env.Tasks.Running("count") {
 		t.Fatal("no count running")
@@ -318,7 +318,7 @@ func TestFilterReadErrorReverts(t *testing.T) {
 	// read failed (the count's failure is only a toast)
 	for _, readFirst := range []bool{true, false} {
 		ds := newFake(1000, 3)
-		h := newHarness(t, ds, 80, 20)
+		h := newHarness(t, ds, 80, 20, hopts{page: 1})
 		h.press("down", "down")
 		ds.gate, ds.countGate = make(chan struct{}), make(chan struct{})
 		h.filterWith("bad")
@@ -351,7 +351,7 @@ func TestFilterReadErrorReverts(t *testing.T) {
 
 func TestGoTo(t *testing.T) {
 	ds := newFake(1000, 3)
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	h.press("g")
 	if len(h.dialogs) != 1 || h.dialogs[0] != "goto" {
 		t.Fatalf("g opened %v", h.dialogs)
@@ -379,7 +379,7 @@ func TestGoTo(t *testing.T) {
 func TestGoToBeforeTheCount(t *testing.T) {
 	ds := newFake(1000, 3)
 	ds.countGate = make(chan struct{})
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	h.filterWith("id % 2 = 0")
 	h.press("ctrl+end")
 	if !h.noted("Still counting rows…") || h.g.curRow != 0 {
@@ -401,7 +401,7 @@ func TestGoToBeforeTheCount(t *testing.T) {
 
 func TestMouse(t *testing.T) {
 	ds := newFake(1000, 4)
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	g := h.g
 	h.send(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 10, Y: 10})
 	h.settle()
@@ -437,7 +437,7 @@ func TestMouse(t *testing.T) {
 
 func TestHorizontalScroll(t *testing.T) {
 	ds := newFake(1000, 300)
-	h := newHarness(t, ds, 100, 20)
+	h := newHarness(t, ds, 100, 20, hopts{page: 1})
 	first := ds.fetches()[0]
 	if len(first.cols) >= 300 || len(first.cols) < 5 {
 		t.Errorf("first fetch asked for %d columns, want those near the screen", len(first.cols))
@@ -466,7 +466,7 @@ func TestHorizontalScroll(t *testing.T) {
 
 func TestViewSmallGrid(t *testing.T) {
 	ds := newFake(5, 3)
-	h := newHarness(t, ds, 62, 18)
+	h := newHarness(t, ds, 62, 18, hopts{page: 1})
 	want := []string{
 		"      id  name  c002",
 		"     i64  str    i64",
@@ -512,7 +512,7 @@ func TestCommas(t *testing.T) {
 func TestLateCancelledCountIsIgnored(t *testing.T) {
 	ds := newFake(1000, 3)
 	ds.countGate = make(chan struct{})
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	h.filterWith("id % 7 = 0")
 	h.send(kp("esc")) // cancel the count; its message is still on the way
 	if h.env.Tasks.Running("count") {
@@ -536,7 +536,7 @@ func TestInterruptErrorIsNotAFailure(t *testing.T) {
 	ds := newFake(1_000_000, 3)
 	ds.countGate = make(chan struct{})
 	ds.interruptErr = errors.New("INTERRUPT Error: Interrupted!")
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	ds.gate = make(chan struct{})
 	h.filterWith("id % 3 = 0")
 	h.press("ctrl+x") // nothing typed: … the grid has focus; ctrl+x clears
@@ -561,7 +561,7 @@ func TestInterruptErrorIsNotAFailure(t *testing.T) {
 func TestEmptyWindowAtOffset(t *testing.T) {
 	ds := newFake(1000, 3)
 	ds.countGate = make(chan struct{})
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	h.filterWith("id % 10 = 0")
 	gen := h.g.v.gen
 	h.g.Update(kit.DoneMsg{Tag: "page", Msg: pageResult{req: fetchReq{gen: gen, start: 50, n: 30, cols: []string{"id"}}, win: data.Window{}}})
@@ -578,7 +578,7 @@ func TestEmptyWindowAtOffset(t *testing.T) {
 func TestEscCancelsFetch(t *testing.T) {
 	ds := newFake(1000, 3)
 	ds.gate = make(chan struct{})
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	if !h.env.Tasks.Running("page") {
 		t.Fatal("no fetch running")
 	}
@@ -603,7 +603,7 @@ func TestEscCancelsFetch(t *testing.T) {
 func TestReapplyFilterRestartsCount(t *testing.T) {
 	ds := newFake(1000, 3)
 	ds.countGate = make(chan struct{})
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	h.filterWith("id % 10 = 0")
 	h.press("esc")
 	if h.env.Tasks.Running("count") {
@@ -627,7 +627,7 @@ func TestReapplyFilterRestartsCount(t *testing.T) {
 func TestShortReadShowsTotal(t *testing.T) {
 	ds := newFake(1000, 3)
 	ds.countGate = make(chan struct{})
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	h.filterWith("id % 200 = 0")
 	if h.g.v.limit() != 5 {
 		t.Errorf("limit with a short read: %d", h.g.v.limit())
@@ -650,7 +650,7 @@ func TestShortReadShowsTotal(t *testing.T) {
 
 func TestTinyTerminal(t *testing.T) {
 	ds := newFake(1000, 3)
-	h := newHarness(t, ds, 80, 20)
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
 	for _, size := range [][2]int{{80, 9}, {20, 20}, {10, 3}, {4, 12}} {
 		h.send(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		h.settle()
