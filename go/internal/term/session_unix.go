@@ -227,6 +227,12 @@ func (c suspend) Run() error {
 		if background && t.foreground() {
 			break // the shell continued pqx (fg) before it stopped itself
 		}
+		// Known limitation (as in Python pqx on Textual): when only pqx
+		// gets SIGTSTP (kill -TSTP PID) while a wrapper that doesn't exec
+		// it waits for it, the shell keeps waiting on the wrapper and can't
+		// fg pqx; it stays stopped until it gets SIGCONT. The terminal's
+		// Ctrl+Z stops the whole job, which works.
+		//
 		// Stop pqx itself, as SIGTSTP's default action would (only this
 		// process: without job control its group holds its parent and
 		// siblings, which must not be frozen). SIGSTOP, because once Go
