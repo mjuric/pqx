@@ -181,6 +181,17 @@ func (p *Pane) build(summary []data.ChunkSummary) {
 			if v == nil {
 				return dash()
 			}
+			if _, ok := v.(data.Decimal); ok {
+				// Python's footer statistics are decimal.Decimal whatever the
+				// width (fmtx turns decimals wider than 38 digits into floats,
+				// as DuckDB gives them to Python's grid): str(Decimal), cut
+				// at the width
+				t := []rune(fmtx.Format(v, kind, fmtx.Opts{Raw: true}))
+				if len(t) > fmtx.DefaultWidth {
+					t = append(t[:fmtx.DefaultWidth-1], '…')
+				}
+				return right(string(t), styled.Style{})
+			}
 			return fmtx.Cell(v, kind, fmtx.Opts{Width: fmtx.DefaultWidth})
 		}
 		rows = append(rows, []styled.Text{
