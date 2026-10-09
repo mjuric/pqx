@@ -42,6 +42,7 @@ type Chrome struct {
 	viewAt    time.Time
 	countSecs float64
 	haveSecs  bool
+	shown     data.View // the view the time is for
 
 	// hidden is the current column, hidden in the grid, that the status
 	// line points out (Python's _hidden_hint).
@@ -80,10 +81,19 @@ func (c *Chrome) Update(msg tea.Msg) tea.Cmd {
 		if c.status.Severity == kit.Error {
 			c.status = kit.StatusMsg{}
 		}
-		c.viewAt = c.now()
-		// a count already known (the filter keeps them) took no time; its
-		// TotalMsg can also arrive before this message
-		c.countSecs, c.haveSecs = 0, c.env.State.Total >= 0
+		v := c.env.State.View
+		if v.IsSQL() || c.shown.IsSQL() || strings.TrimSpace(v.Where) != strings.TrimSpace(c.shown.Where) {
+			c.viewAt = c.now()
+			// a count already known (the filter keeps them) took no time;
+			// its TotalMsg can also arrive before this message
+			// (the whole file isn't counted: no time, sorted or not)
+			c.countSecs, c.haveSecs = 0, c.env.State.Total >= 0 && (v.IsSQL() || strings.TrimSpace(v.Where) != "")
+		} else {
+			// only the sort changed: the count stands, and so does its time
+			// (Python's _sort_by), none for the whole file
+			c.viewAt = time.Time{}
+		}
+		c.shown = v
 		c.hidden = ""
 	case kit.TotalMsg:
 		if c.env.State.Total >= 0 && !c.viewAt.IsZero() {

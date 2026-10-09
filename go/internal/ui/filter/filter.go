@@ -189,7 +189,9 @@ func (f *Filter) View(w, h int) string {
 	v := f.in.Value()
 	// the mode label in the accent colour, then a plain space (Python's
 	// #filter-mode with margin-right 1)
-	line := look.Render(styled.New(strings.TrimSuffix(p, " "), look.Style("accent"))) + " "
+	// ($primary: the accent, or a named theme's primary colour, which the
+	// focused border has too)
+	line := look.Render(styled.New(strings.TrimSuffix(p, " "), look.Style("border-focus"))) + " "
 	switch {
 	case fmtx.HasControls(v, false):
 		// text set by another part (a value of the file, quoted) can hold
@@ -198,7 +200,12 @@ func (f *Filter) View(w, h int) string {
 	case v == "":
 		// the hint, faint whatever --dim says (Textual's placeholder style),
 		// the rest of the line plain
-		line += look.Render(styled.New(ansi.Truncate(f.hint, max(0, w-ansi.StringWidth(p)), "…"), styled.Style{Dim: true}))
+		// faint whatever --dim says (Textual's placeholder style; a named
+		// theme's Paint blends it), word-wrapped as Rich does, its first
+		// line shown
+		if h := firstLine(f.hint, max(0, w-ansi.StringWidth(p))); h != "" {
+			line += "\x1b[2m" + h + "\x1b[m"
+		}
 	case f.sel && f.focused && ansi.StringWidth(v) < f.w:
 		line += look.Render(styled.New(v, look.Style("selection")))
 	case f.showSuggestion():
@@ -533,10 +540,7 @@ func (f *Filter) onValidated(r validated) tea.Cmd {
 		st.Total = f.env.DS.NumRows()
 	} else if sortOnly {
 		// only the sort changed: the count stands (Python's _sort_by keeps
-		// its total; a filter's count time is still shown)
-		if strings.TrimSpace(v.Where) != "" {
-			cmds = append(cmds, kit.Send(kit.TotalMsg{}))
-		}
+		// its total), not counted nor timed again
 	} else if n, ok := f.counts[countKey(v)]; ok {
 		st.Total = n
 		cmds = append(cmds, kit.Send(kit.TotalMsg{}))
@@ -629,7 +633,8 @@ func (f *Filter) onCounted(r counted) tea.Cmd {
 		// that can't be counted can't be read either, and the read's error
 		// (with the previous view kept) must not be replaced by this one,
 		// whichever arrives first.
-		return kit.Send(kit.NotifyMsg{Severity: kit.Error, Title: "✗ Count failed", Text: fmtx.Sanitize(trunc(r.err.Error(), 600), true)})
+		return kit.Send(kit.NotifyMsg{Severity: kit.Error, Title: "✗ Count failed",
+			Text: fmtx.Sanitize(trunc(r.err.Error(), 600), true), Timeout: 8 * time.Second}) // (Python's _show_error)
 	}
 	f.counts[countKey(r.view)] = r.n
 	f.st.Total = r.n
@@ -654,4 +659,30 @@ func sameView(a, b data.View) bool {
 		}
 	}
 	return true
+}
+
+// firstLine is the first line of s word-wrapped at w cells, as Rich wraps
+// Textual's placeholder (at the input's width plus one) and the input
+// shows its first line, cut to w: no ellipsis, a word that doesn't fit
+// left out but the space before it kept (one longer than the line is cut).
+func firstLine(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	out := ""
+	for _, word := range strings.Split(s, " ") {
+		next := word
+		if out != "" {
+			next = out + " " + word
+		}
+		if ansi.StringWidth(next) > w+1 {
+			if out == "" {
+				return ansi.Truncate(word, w, "")
+			}
+			out += " " // (Rich keeps the space a line breaks at)
+			break
+		}
+		out = next
+	}
+	return ansi.Truncate(out, w, "")
 }
