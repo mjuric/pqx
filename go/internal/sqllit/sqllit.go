@@ -291,16 +291,21 @@ func isoformat(t time.Time) string {
 	return s
 }
 
-// And is cond added to the filter where. The filter is always put in
-// parentheses, so an OR in it (however it is spaced) can't take the
-// condition in, and its "--" comments become /* */ ones (OneLine), so they
-// can't comment the condition out and the result holds on one line, as the
-// filter box does. (Python pqx parenthesizes only a filter holding " or ",
-// and a comment swallows the condition.)
+// And is cond added to the filter where, as Python pqx writes it ("band =
+// 'i' and x = 1"), unless the filter needs parentheses (needsParens: an OR
+// at its top level, or a comment). Then it is put in them, so the OR can't
+// take the condition in (however it is spaced or cased), and its "--"
+// comments become /* */ ones (OneLine), so they can't comment the
+// condition out and the result holds on one line, as the filter box does.
+// (Python pqx parenthesizes only a filter holding " or ", and a comment
+// swallows the condition.)
 func And(where, cond string) string {
-	cur := strings.TrimSpace(OneLine(where))
+	cur := strings.TrimSpace(where)
 	if cur == "" {
 		return cond
 	}
-	return "(" + cur + ") and " + cond
+	if !needsParens(cur) {
+		return cur + " and " + cond
+	}
+	return "(" + strings.TrimSpace(OneLine(cur)) + ") and " + cond
 }

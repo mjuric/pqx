@@ -135,7 +135,7 @@ func TestEqualsTwiceQuickly(t *testing.T) {
 	h.settle()
 	first := "band = '" + tr["band"][0].(string) + "'"
 	cond, _ := sqllit.Equals("psfFlux", tr["psfFlux"][0])
-	want := "(" + first + ") and " + cond
+	want := first + " and " + cond
 	if w := h.env.State.View.Where; w != want || h.record() != 0 {
 		t.Errorf("where %q, want %q", w, want)
 	}
