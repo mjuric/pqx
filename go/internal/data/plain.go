@@ -121,6 +121,11 @@ func (d *dataset) readDirect(ctx context.Context, rows []int64, fields []int) ([
 // group) of row group rg, for the given top-level columns, as Values; up to
 // ReadParallel columns at once.
 func (d *dataset) readRowGroup(ctx context.Context, pf *file.Reader, rg int, local []int64, fields []int) ([][]Value, error) {
+	if readRGHook != nil {
+		if err := readRGHook(rg, fields); err != nil {
+			return nil, err
+		}
+	}
 	lo, hi := local[0], local[len(local)-1]+1
 	fr, err := pqarrow.NewFileReader(pf, pqarrow.ArrowReadProperties{BatchSize: min(hi-lo, maxBatch)}, memory.DefaultAllocator)
 	if err != nil {
@@ -173,6 +178,10 @@ func (d *dataset) readRowGroup(ctx context.Context, pf *file.Reader, rg int, loc
 // maxBatch bounds the rows arrow-go decodes at once when it reads a long
 // stretch of a row group for a few rows.
 const maxBatch = 64 << 10
+
+// readRGHook, if set (by tests), runs before each read of a row group, with
+// the columns read; an error it returns is the read's.
+var readRGHook func(rg int, fields []int) error
 
 // readHook, if set (by tests), runs before each column's read in a row
 // group; an error it returns is the read's.

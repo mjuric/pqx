@@ -643,13 +643,13 @@ func duckTypeName(ti duckdb.TypeInfo, keywords map[string]bool) string {
 }
 
 // optionallyQuoted is name as DuckDB writes it in a type: bare if it is
-// lower-case letters, digits and underscores, not starting with a digit,
-// and not a keyword; else quoted.
+// ASCII letters, digits and underscores, not starting with a digit, and not
+// a keyword in any case; else quoted.
 func optionallyQuoted(name string, keywords map[string]bool) string {
-	plain := name != "" && !keywords[name]
+	plain := name != "" && !keywords[strings.ToLower(name)]
 	for i := 0; i < len(name) && plain; i++ {
 		c := name[i]
-		plain = c == '_' || c >= 'a' && c <= 'z' || i > 0 && c >= '0' && c <= '9'
+		plain = c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && c >= '0' && c <= '9'
 	}
 	if plain {
 		return name

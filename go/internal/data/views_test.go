@@ -237,7 +237,7 @@ func TestSQLView(t *testing.T) {
 		}
 	}
 	// types of a SQL result, as DuckDB names them (DESCRIBE)
-	q := `select {'select': 1, 'Name': 2, 'x1': [1.5]} s, uuid() u, [uuid()] lu, 1::DECIMAL(5,1) dd,
+	q := `select {'select': 1, 'Name': 2, 'x1': [1.5], 'Ab': 1, 'B': 2, 'xY': 3, 'Type': 4, '1a': 5, 'é': 6, 'ÉA': 7} s, uuid() u, [uuid()] lu, 1::DECIMAL(5,1) dd,
 		'x'::ENUM('x', 'y''z') e, [1,2]::INTEGER[2] a, MAP {'k': 1} m, NULL n, TIMESTAMPTZ '2020-01-01' tz,
 		'{}'::JSON j, 1::HUGEINT h, INTERVAL 1 DAY i, TIMESTAMP_NS '2020-01-01' tns, TIME '01:02:03' tm`
 	cols, err = d.Validate(bg, View{SQL: q})
@@ -707,24 +707,24 @@ func TestUnpinnedReadErrorRemembersRowGroups(t *testing.T) {
 	d := manyRowGroups(t)
 	var mu sync.Mutex
 	var calls []int
-	defer func() { readHook = nil }()
-	// row group 3 fails once (a read of all its columns); the probes that
-	// follow (each column alone) don't
-	fail := true
+	defer func() { readHook, readRGHook = nil, nil }()
 	readHook = func(rg int, leaves []int) error {
 		mu.Lock()
 		defer mu.Unlock()
 		calls = append(calls, rg)
-		if rg == 3 && fail {
-			fail = false
+		return nil
+	}
+	// row group 3 fails when its columns are read together, never alone
+	readRGHook = func(rg int, fields []int) error {
+		if rg == 3 && len(fields) > 1 {
 			return errors.New("bad page deep in row group 3")
 		}
 		return nil
 	}
-	want := mustFetch(t, d, View{Where: "true"}, 300, 20, colNames(d))
-	w := mustFetch(t, d, View{}, 300, 20, colNames(d))
+	want := mustFetch(t, d, View{Where: "true"}, 130, 200, colNames(d))
+	w := mustFetch(t, d, View{}, 130, 200, colNames(d)) // row groups 1 and 3
 	sameWindow(t, "row group 3", w, want)
-	if !d.fb.badRGs[3] || len(d.fb.excluded) > 0 {
+	if !d.fb.badRGs[3] || d.fb.badRGs[1] || len(d.fb.badRGs) != 1 || len(d.fb.excluded) > 0 {
 		t.Fatalf("bad %v excluded %v", d.fb.badRGs, d.fb.excluded)
 	}
 	calls = nil
@@ -735,6 +735,26 @@ func TestUnpinnedReadErrorRemembersRowGroups(t *testing.T) {
 	mustFetch(t, d, View{}, 0, 20, []string{"id"})
 	if !slices.Equal(calls, []int{0}) {
 		t.Fatalf("other row groups: %v", calls)
+	}
+}
+
+// A column that fails in one row group only is found there, and only that
+// column goes to DuckDB (not the row group read before it).
+func TestReadErrorInALaterRowGroup(t *testing.T) {
+	d := manyRowGroups(t)
+	x := d.leaves[d.byName["x"]][0]
+	readHook = func(rg int, leaves []int) error {
+		if rg == 3 && leaves[0] == x {
+			return errors.New("corrupt chunk of x in row group 3")
+		}
+		return nil
+	}
+	defer func() { readHook = nil }()
+	want := mustFetch(t, d, View{Where: "true"}, 120, 100, colNames(d))
+	w := mustFetch(t, d, View{}, 120, 100, colNames(d)) // row groups 1 and 3
+	sameWindow(t, "x in row group 3", w, want)
+	if !d.fb.excluded[d.byName["x"]] || len(d.fb.excluded) != 1 || len(d.fb.badRGs) != 0 {
+		t.Fatalf("bad %v excluded %v", d.fb.badRGs, d.fb.excluded)
 	}
 }
 

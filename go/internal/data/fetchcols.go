@@ -292,8 +292,9 @@ func (d *dataset) rowGroupsOf(rows []int64) []int {
 
 // noteDirectFailure learns from a failed arrow-go read of the columns fields:
 // an I/O error counts (three in a row and the columns are probed); any
-// other error probes them now: each column read alone (one row) that fails
-// is left to DuckDB from now on; if none fails alone, the row groups are.
+// other error probes them now. Each row group of the read is read again on
+// its own, and in each one that fails, each column alone: a column that
+// fails alone is left to DuckDB from now on; if none does, that row group is.
 func (d *dataset) noteDirectFailure(ctx context.Context, err error, rows []int64, rgs []int, fields []int) {
 	if isIOError(err) {
 		d.fb.mu.Lock()
@@ -304,34 +305,42 @@ func (d *dataset) noteDirectFailure(ctx context.Context, err error, rows []int64
 			return
 		}
 	}
-	probe := []int64{d.rgStart[rgs[0]]}
-	found := false
-	for _, j := range fields {
-		if _, err := d.readDirect(ctx, probe, []int{j}); err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			if isIOError(err) {
-				continue
-			}
-			d.fb.mu.Lock()
-			if d.fb.excluded == nil {
-				d.fb.excluded = map[int]bool{}
-			}
-			d.fb.excluded[j] = true
-			d.fb.mu.Unlock()
-			found = true
-		}
+	// a failure that isn't the OS's (an I/O error is no one column's fault)
+	fails := func(rows []int64, fields []int) bool {
+		_, err := d.readDirect(ctx, rows, fields)
+		return err != nil && ctx.Err() == nil && !isIOError(err)
 	}
-	if !found {
-		d.fb.mu.Lock()
-		if d.fb.badRGs == nil {
-			d.fb.badRGs = map[int]bool{}
+	for i := 0; i < len(rows); {
+		rg := sort.Search(len(d.rgRows), func(k int) bool { return d.rgStart[k+1] > rows[i] })
+		j := i
+		for j < len(rows) && rows[j] < d.rgStart[rg+1] {
+			j++
 		}
-		for _, rg := range rgs {
+		in := rows[i:j]
+		i = j
+		if !fails(in, fields) {
+			continue
+		}
+		found := false
+		for _, f := range fields {
+			if fails(in, []int{f}) {
+				d.fb.mu.Lock()
+				if d.fb.excluded == nil {
+					d.fb.excluded = map[int]bool{}
+				}
+				d.fb.excluded[f] = true
+				d.fb.mu.Unlock()
+				found = true
+			}
+		}
+		if !found && ctx.Err() == nil {
+			d.fb.mu.Lock()
+			if d.fb.badRGs == nil {
+				d.fb.badRGs = map[int]bool{}
+			}
 			d.fb.badRGs[rg] = true
+			d.fb.mu.Unlock()
 		}
-		d.fb.mu.Unlock()
 	}
 }
 
