@@ -41,7 +41,7 @@ func (a *App) tabStrip() styled.Text {
 // tabAt is the tab whose number or name is at (x, y) on the top border of
 // the tab panel: the strip starts three cells in (corner, rule, space).
 func (a *App) tabAt(x, y int) (kit.Tab, bool) {
-	if y != titleRows+filterRows {
+	if y != bodyTop {
 		return 0, false
 	}
 	x -= margin + 3

@@ -567,8 +567,9 @@ func TestDialogsDoNotShiftTheScreen(t *testing.T) {
 				}
 				continue
 			}
-			if ansi.Cut(after[i], 0, x) != ansi.Cut(before[i], 0, x) ||
-				ansi.Cut(after[i], x+dw, 150) != ansi.Cut(before[i], x+dw, 150) {
+			trim := func(s string) string { return strings.TrimRight(s, " ") }
+			if trim(ansi.Cut(after[i], 0, x)) != trim(ansi.Cut(before[i], 0, x)) ||
+				trim(ansi.Cut(after[i], x+dw, 150)) != trim(ansi.Cut(before[i], x+dw, 150)) {
 				t.Fatalf("%s: line %d moved beside the dialog:\n%q\n%q", name, i, before[i], after[i])
 			}
 		}

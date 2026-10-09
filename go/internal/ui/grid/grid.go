@@ -34,7 +34,7 @@ const Part = "grid"
 // the column between it and the grid.
 const (
 	margin    = 1
-	aboveRows = 2 + 3
+	aboveRows = 2 + 3 + 1
 	keyRows   = 1
 	panelRows = 2 + 1 + 1
 	sideCells = 4

@@ -34,8 +34,11 @@ const (
 	margin     = 1 // the screen's side margin (Python's Screen padding)
 	titleRows  = 2 // the title bar and a blank row (the filter box's top margin)
 	filterRows = 3 // a bordered one-line input
-	keyRows    = 1
-	detailW    = 53 // the details pane's width (PR #24), one column from the grid's panel
+	gapRows    = 1 // a blank row between the filter box and the tabs
+	// bodyTop is the first row of the tabs' panels.
+	bodyTop = titleRows + filterRows + gapRows
+	keyRows = 1
+	detailW = 53 // the details pane's width (PR #24), one column from the grid's panel
 )
 
 // App is the root model.
@@ -333,7 +336,7 @@ func (a *App) onMouse(msg tea.MouseMsg) tea.Cmd {
 		x, y := a.dialogPos(d)
 		return d.Update(shift(msg, x, y))
 	}
-	if _, ok := msg.(tea.MouseClickMsg); ok && m.Y >= titleRows+filterRows {
+	if _, ok := msg.(tea.MouseClickMsg); ok && m.Y >= bodyTop {
 		if t, ok := a.tabAt(m.X, m.Y); ok {
 			return a.switchTab(t)
 		}
@@ -496,10 +499,11 @@ func (a *App) render() (string, *tea.Cursor) {
 
 	// filter bar: a bordered one-line panel
 	inner := place("filter", a.p.Filter, margin+2, titleRows+1, max(1, W-4), 1)
-	body.WriteString(a.frame(inner, W, filterRows, styled.Text{}, styled.Text{}, a.focus == "filter", a.p.Filter))
+	body.WriteString(a.frame(inner, W, filterRows, a.filterTitle(), styled.Text{}, a.focus == "filter", a.p.Filter))
+	body.WriteString("\n") // the blank row under the filter box
 
-	bodyH := max(3, a.h-titleRows-filterRows-keyRows)
-	top := titleRows + filterRows
+	bodyH := max(3, a.h-bodyTop-keyRows)
+	top := bodyTop
 	tabs := a.tabStrip()
 	body.WriteString("\n")
 	switch a.tab {
@@ -577,4 +581,13 @@ func baseName(p string) string {
 		return p[i+1:]
 	}
 	return p
+}
+
+// filterTitle is the filter box's border title: "filter", dim (Python's
+// #filterbox border_title), unless the filter pane has its own.
+func (a *App) filterTitle() styled.Text {
+	if t := title(a.p.Filter); t.Plain != "" {
+		return t
+	}
+	return styled.New("filter", a.env.Look.Style("dim"))
 }

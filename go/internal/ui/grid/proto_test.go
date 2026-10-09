@@ -473,7 +473,6 @@ func TestViewSmallGrid(t *testing.T) {
 		"  2    2  r2    2002",
 		"  3    3  r3    3002",
 		"  4    4  r4    4002",
-		"                                                        ",
 	}
 	gl := h.grid()
 	for i, w := range want {
