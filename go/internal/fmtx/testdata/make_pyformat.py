@@ -91,6 +91,17 @@ for t in TIMES:
             continue
         add(t, f)
 
+# every directive with every modifier and some flags and widths (not %s: it depends on the time zone)
+for c in [chr(i) for i in range(33, 127)] + ["é", "漢"]:
+    if c == "s":
+        continue
+    for mod in ("", "E", "O"):
+        for fl in ("", "-", "_", "0", "^", "#", "5", "-5", "05", "^8", "_3"):
+            for t in (TIMES[0], TIMES[1], TIMES[5], TIMES[7]):
+                add(t, "%" + fl + mod + c + "|")
+for f in ("%1022Y", "%1023Y", "%1024Y", "%2047Y|", "%Y" * 600, "%c" * 120, "%9999999Y", "%%" * 300 + "%1000Y"):
+    add(TIMES[0], f)
+
 out = os.path.join(HERE, "pyformat.json")
 with open(out, "w", encoding="utf-8") as fh:
     fh.write("[\n" + ",\n".join(json.dumps(r, ensure_ascii=False) for r in recs) + "\n]\n")

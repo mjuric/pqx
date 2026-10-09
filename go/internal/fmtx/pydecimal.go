@@ -155,6 +155,9 @@ func formatDecimal(dv data.Decimal, specText string) (string, error) {
 		return "", errDecSpec
 	}
 	g := func(name string) string { return m[decSpecRE.SubexpIndex(name)] }
+	if strings.HasPrefix(g("width"), "0") {
+		return "", errDecSpec // the width can't start with 0 ((?!0)\d+ in _pydecimal): "00G"
+	}
 	fill, align := g("fill"), g("align")
 	zeropad := g("zero") != ""
 	if zeropad && (fill != "" || align != "") {

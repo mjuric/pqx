@@ -2,9 +2,11 @@ package fmtx
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Python's datetime.strftime on Linux: Python replaces %z, %:z, %Z and %f
@@ -66,13 +68,35 @@ func strftime(pt pyTime, format string) string {
 		}
 		i++
 	}
-	return glibcStrftime(pt.t, b.String())
+	f := b.String()
+	return strftimeLimit(pt.t, f, outputLimit(utf8.RuneCountInString(f)))
+}
+
+// outputLimit is the buffer Python's time.strftime ends with for a format
+// of n characters: from 1024, doubled until it is at least 256 × n. Output
+// that doesn't fit (with its terminating NUL) comes back as "".
+func outputLimit(n int) int {
+	i := 1024
+	for i < 256*n {
+		i *= 2
+	}
+	return i
 }
 
 // glibcStrftime is glibc's strftime in the C locale (__strftime_internal).
-func glibcStrftime(t time.Time, f string) string {
+func glibcStrftime(t time.Time, f string) string { return strftimeLimit(t, f, math.MaxInt32) }
+
+// strftimeLimit is glibcStrftime, or "" if the output would take limit
+// characters or more (it stops as soon as it knows).
+func strftimeLimit(t time.Time, f string, limit int) string {
 	var out strings.Builder
+	over := func() bool {
+		return out.Len() >= limit && utf8.RuneCountInString(out.String()) >= limit
+	}
 	for i := 0; i < len(f); i++ {
+		if over() {
+			return ""
+		}
 		if f[i] != '%' {
 			out.WriteByte(f[i])
 			continue
@@ -108,10 +132,20 @@ func glibcStrftime(t time.Time, f string) string {
 			modifier = f[j]
 			j++
 		}
+		if width >= limit {
+			return "" // at least width characters: too many
+		}
 		g := glibcField{width: width, pad: padc, upper: upper}
 		bad := func() {
 			if j >= len(f) { // % at the end: copy what there is
 				j = len(f) - 1
+			}
+			if f[j] >= 0x80 {
+				// a non-ASCII character: the directive is copied without
+				// it, and the character follows as text
+				g.text(&out, f[start:j])
+				j--
+				return
 			}
 			g.text(&out, f[start:j+1])
 		}
@@ -129,10 +163,6 @@ func glibcStrftime(t time.Time, f string) string {
 		}
 		switch c {
 		case '%':
-			if modifier != 0 {
-				bad()
-				break
-			}
 			g.text(&out, "%")
 		case 'a', 'A':
 			if modifier != 0 {
@@ -148,12 +178,12 @@ func glibcStrftime(t time.Time, f string) string {
 			}
 			g.text(&out, name)
 		case 'b', 'h', 'B':
+			if changeCase {
+				g.upper = true // (before the check: a bad %#Eb is copied in capitals)
+			}
 			if modifier == 'E' {
 				bad()
 				break
-			}
-			if changeCase {
-				g.upper = true
 			}
 			name := months[t.Month()-1]
 			if c != 'B' {
@@ -180,22 +210,14 @@ func glibcStrftime(t time.Time, f string) string {
 			}
 			g.sub(&out, t, "%m/%d/%y")
 		case 'X', 'T':
-			if (c == 'X' && modifier == 'O') || (c == 'T' && modifier != 0) {
+			if c == 'X' && modifier == 'O' {
 				bad()
 				break
 			}
 			g.sub(&out, t, "%H:%M:%S")
 		case 'r':
-			if modifier != 0 {
-				bad()
-				break
-			}
 			g.sub(&out, t, "%I:%M:%S %p")
 		case 'R':
-			if modifier != 0 {
-				bad()
-				break
-			}
 			g.sub(&out, t, "%H:%M")
 		case 'F':
 			if modifier != 0 {
@@ -204,7 +226,7 @@ func glibcStrftime(t time.Time, f string) string {
 			}
 			g.sub(&out, t, "%Y-%m-%d")
 		case 'd', 'e', 'H', 'I', 'k', 'l', 'j', 'm', 'M', 'S', 'U', 'W', 'V', 'g', 'G', 'u', 'w', 'y', 'Y':
-			if modifier == 'E' && c != 'y' && c != 'Y' || modifier == 'O' && c == 'Y' {
+			if modifier == 'E' && c != 'y' && c != 'Y' && c != 'u' || modifier == 'O' && c == 'Y' {
 				bad()
 				break
 			}
@@ -274,13 +296,19 @@ func glibcStrftime(t time.Time, f string) string {
 			u := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, time.Local).Unix()
 			g.number(&out, 1, u, false)
 		case 'z':
-			g.text(&out, "+0000") // (with flags: Python leaves it to glibc)
+			// (with flags: Python leaves it to glibc, which writes nothing:
+			// Python's struct_time has tm_isdst -1)
 		case 'Z':
-			g.text(&out, "")
+			if padc != '-' { // (an empty zone: the - flag leaves even the padding out)
+				g.text(&out, "")
+			}
 		default:
 			bad()
 		}
 		i = j
+	}
+	if over() {
+		return ""
 	}
 	return out.String()
 }

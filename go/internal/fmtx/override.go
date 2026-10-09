@@ -145,8 +145,12 @@ func overrideError(o Override, k Kind, sample data.Value) string {
 	return errs[0]
 }
 
+// pySpace is Python's str.isspace: Unicode white space and the
+// separators U+001C to U+001F.
+func pySpace(r rune) bool { return unicode.IsSpace(r) || (r >= 0x1C && r <= 0x1F) }
+
 func parseOverride(text string) Override {
-	text = strings.TrimFunc(text, unicode.IsSpace)
+	text = strings.TrimFunc(text, pySpace)
 	if text == "" {
 		return Override{}
 	}

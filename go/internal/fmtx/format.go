@@ -85,13 +85,7 @@ func formatValue(v data.Value, k Kind, raw bool, width int, ov Override, safe bo
 	}
 	if ov.Set && ov.Spec != "" && !raw && !noSpec(k) {
 		if s, err := pyFormat(v, ov.Spec); err == nil {
-			if safe {
-				s = Sanitize(s, true)
-			}
-			if width > 0 && !numericKind(k) && utf8.RuneCountInString(s) > width {
-				s = cutRunes(s, width-1) + "…"
-			}
-			return s
+			return finish(s, safe, width > 0 && !numericKind(k), width)
 		}
 	}
 	digitsSet := ov.Set && ov.Spec == ""
@@ -162,10 +156,25 @@ func formatValue(v data.Value, k Kind, raw bool, width int, ov Override, safe bo
 	default:
 		s = pyStr(v)
 	}
+	return finish(s, safe, !raw && width > 0, width)
+}
+
+// finish sanitizes s (if safe) and cuts it to width with "…" (if cut). A
+// long s is cut first: sanitizing never makes a character shorter, so the
+// result is the same, without sanitizing megabytes for a 40-cell column.
+func finish(s string, safe, cut bool, width int) string {
+	if cut {
+		if p := cutRunes(s, width); len(p) < len(s) {
+			if safe {
+				p = Sanitize(p, true)
+			}
+			return cutRunes(p, width-1) + "…"
+		}
+	}
 	if safe {
 		s = Sanitize(s, true)
 	}
-	if !raw && width > 0 && utf8.RuneCountInString(s) > width {
+	if cut && utf8.RuneCountInString(s) > width {
 		s = cutRunes(s, width-1) + "…"
 	}
 	return s

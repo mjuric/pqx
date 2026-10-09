@@ -21,8 +21,10 @@ var (
 	reLat        = regexp.MustCompile(`(?i)(^|_)(dec|decl|lat|glat|elat|beta|latitude)(\n?$|_)`)
 	reLatCamel   = regexp.MustCompile(`^(dec|decl)(\n?$|[A-Z0-9_])|(Dec|DEC)\n?$`)
 	reErr        = regexp.MustCompile(`(?i)err|sigma|unc|std|rms|cov`)
-	reMag        = regexp.MustCompile(`(?i)mag(\n?$|[A-Z_])|^mag|Mag`)
-	reFlux       = regexp.MustCompile(`(?i)flux`)
+	// fmt._MAG is mag($|[A-Z_])|^mag|Mag with re.I: its last branch alone
+	// matches any "mag".
+	reMag  = regexp.MustCompile(`(?i)mag`)
+	reFlux = regexp.MustCompile(`(?i)flux`)
 )
 
 func isDegUnit(u string) bool { return u == "deg" || u == "degree" || u == "degrees" }

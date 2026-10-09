@@ -168,12 +168,16 @@ func DefaultDigits(k Kind) int { return defaultDigits(k) }
 func StepOverride(o Override, k Kind, delta int) Override { return stepOverride(o, k, delta) }
 
 // DescribeOverride is o in words for the header and notices ("3 digits", ".2f").
-func DescribeOverride(o Override, k Kind) string { return describeOverride(o, k) }
+// The spec is the user's text: it comes back sanitized (Python shows it raw).
+func DescribeOverride(o Override, k Kind) string { return Sanitize(describeOverride(o, k), false) }
 
 // OverrideError is why value can't be a format for kind (checked against
 // sample, a value of the column, if not nil), or "" if it can. Kind ""
-// is Python's kind=None: the spec only has to suit some column.
-func OverrideError(o Override, k Kind, sample data.Value) string { return overrideError(o, k, sample) }
+// is Python's kind=None: the spec only has to suit some column. Messages
+// quote the spec; they come back sanitized (Python's are raw).
+func OverrideError(o Override, k Kind, sample data.Value) string {
+	return Sanitize(overrideError(o, k, sample), false)
+}
 
 // ParseOverride is the format dialog's and formats.yaml's text: "3" is 3
 // digits, "" automatic, anything else a spec (config.parse_override).

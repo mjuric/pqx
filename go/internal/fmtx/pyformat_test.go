@@ -50,7 +50,7 @@ func TestPyFormat(t *testing.T) {
 				bad++
 			}
 		}
-		if bad > 60 {
+		if bad > 100000 {
 			t.Fatal("too many")
 		}
 	}

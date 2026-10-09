@@ -19,14 +19,28 @@ var mjdEpoch = time.Date(1858, 11, 17, 0, 0, 0, 0, time.UTC)
 const mjdMin, mjdMax = -700_000, 3_000_000
 
 func mjdToISO(mjd float64) string {
-	if math.IsNaN(mjd) || math.IsInf(mjd, 0) {
+	us, ok := mjdMicros(mjd)
+	if !ok {
 		return ""
 	}
-	// timedelta(days=mjd), as CPython's delta_new builds it: whole days
-	// exactly, the fraction in microseconds rounded half to even.
+	days := floorDiv(us, 86_400_000_000)
+	t := mjdEpoch.AddDate(0, 0, int(days)).Add(time.Duration(us-days*86_400_000_000) * time.Microsecond)
+	if t.Year() < 1 || t.Year() > 9999 {
+		return ""
+	}
+	return glibcStrftime(t, "%Y-%m-%d %H:%M:%S.") + fmt.Sprintf("%03d", t.Nanosecond()/1e6)
+}
+
+// mjdMicros is timedelta(days=mjd) in microseconds, as CPython's
+// delta_new builds it: whole days exactly, the fraction in microseconds
+// rounded half to even (on the total so far).
+func mjdMicros(mjd float64) (int64, bool) {
+	if math.IsNaN(mjd) || math.IsInf(mjd, 0) {
+		return 0, false
+	}
 	ip, fp := math.Modf(mjd)
 	if ip < mjdMin || ip > mjdMax {
-		return ""
+		return 0, false
 	}
 	us := int64(ip) * 86_400_000_000
 	if fp != 0 {
@@ -39,12 +53,7 @@ func mjdToISO(mjd float64) string {
 		}
 		us += int64(whole)
 	}
-	days := floorDiv(us, 86_400_000_000)
-	t := mjdEpoch.AddDate(0, 0, int(days)).Add(time.Duration(us-days*86_400_000_000) * time.Microsecond)
-	if t.Year() < 1 || t.Year() > 9999 {
-		return ""
-	}
-	return glibcStrftime(t, "%Y-%m-%d %H:%M:%S.") + fmt.Sprintf("%03d", t.Nanosecond()/1e6)
+	return us, true
 }
 
 // pyMod is Python's float %: the remainder has the divisor's sign.
@@ -97,6 +106,9 @@ func degToDMS(deg float64, plus bool) string {
 	}
 	// round(abs(deg) * 360_000): hundredths of an arcsecond, half to even
 	csf := math.RoundToEven(math.Abs(deg) * 360_000)
+	if math.IsInf(csf, 0) {
+		return "" // (Python raises OverflowError)
+	}
 	cs, _ := new(big.Float).SetFloat64(csf).Int(nil)
 	full := big.NewInt(360 * 360_000)
 	if !plus && 0 <= deg && deg < 360 && cs.Cmp(full) == 0 {
