@@ -6,7 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/mjuric/pqx/go/internal/data"
-	"github.com/mjuric/pqx/go/internal/ui/kit"
+	"github.com/mjuric/pqx/go/internal/ui/chrome"
 )
 
 // onViewChanged switches to State.View: a fresh cache (or the one kept for
@@ -50,11 +50,14 @@ func (g *Grid) onViewChanged() tea.Cmd {
 		if st.Total >= 0 {
 			g.v.setTotal(st.Total)
 		}
-		msg := g.revertErr
-		g.revertErr = ""
-		return tea.Batch(dropped, g.refreshed(), kit.Send(kit.StatusMsg{Severity: kit.Error, Text: msg}))
+		var said tea.Cmd
+		if g.revertErr != nil {
+			said = chrome.QueryError(g.revertErr)
+		}
+		g.revertErr = nil
+		return tea.Batch(dropped, g.refreshed(), said)
 	}
-	g.revertErr = ""
+	g.revertErr = nil
 	if !st.View.Plain() {
 		g.prev = &saved{v: g.v, curRow: g.curRow, top: g.top, curCol: g.curCol, left: g.left}
 	} else {

@@ -3,10 +3,13 @@ package sqllit
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"math"
 	"math/big"
+	"math/rand/v2"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -119,7 +122,7 @@ func TestEqualsLiterals(t *testing.T) {
 		{1.5e-7, "x = 1.5e-07"},
 		{0.0001, "x = 0.0001"},
 		{math.Copysign(0, -1), "x = -0.0"},
-		{float32(0.1), "x = 0.10000000149011612"},
+		{float32(0.1), "x = 0.10000000149011612e0"},
 		{math.NaN(), "isnan(x)"},
 		{float32(math.NaN()), "isnan(x)"},
 		{math.Inf(1), "x = 'inf'::DOUBLE"},
@@ -157,12 +160,97 @@ func TestEqualsLiterals(t *testing.T) {
 func TestAnd(t *testing.T) {
 	for _, c := range [][3]string{
 		{"", "b = 1", "b = 1"},
-		{"  a = 1 ", "b = 1", "a = 1 and b = 1"},
+		{"  a = 1 ", "b = 1", "(a = 1) and b = 1"},
 		{"a = 1 OR c = 2", "b = 1", "(a = 1 OR c = 2) and b = 1"},
-		{"orbit = 1", "b = 1", "orbit = 1 and b = 1"},
+		{"band = 'r' or(band = 'g')", "b = 1", "(band = 'r' or(band = 'g')) and b = 1"},
+		{"(band = 'r')or(band = 'g')", "b = 1", "((band = 'r')or(band = 'g')) and b = 1"},
+		{"band = 'r' -- note", "b = 1", "(band = 'r' -- note\n) and b = 1"},
 	} {
 		if got := And(c[0], c[1]); got != c[2] {
 			t.Errorf("And(%q, %q) = %q", c[0], c[1], got)
+		}
+	}
+}
+
+// Every double "=" writes is read back by DuckDB as exactly that double
+// (a DECIMAL literal of 16–17 digits isn't: its cast is off by an ulp), for
+// DOUBLE and REAL columns: brute force over random doubles of every scale.
+func TestDoubleLiteralsAreExact(t *testing.T) {
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rng := rand.New(rand.NewPCG(1, 2))
+	var vals []float64
+	for len(vals) < 1500 {
+		f := math.Float64frombits(rng.Uint64())
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			continue
+		}
+		switch len(vals) % 3 { // and plenty of ordinary magnitudes
+		case 1:
+			f = (rng.Float64() - 0.5) * math.Pow(10, float64(rng.IntN(30)-12))
+		case 2:
+			f = float64(float32(rng.Float64() * 1000))
+		}
+		vals = append(vals, f)
+	}
+	for _, typ := range []string{"DOUBLE", "REAL"} {
+		for lo := 0; lo < len(vals); lo += 500 {
+			batch := vals[lo:min(lo+500, len(vals))]
+			var rows, conds []string
+			for i, f := range batch {
+				if typ == "REAL" {
+					f = float64(float32(f))
+					if math.IsInf(f, 0) {
+						f = 1
+					}
+				}
+				// the exact value, from its shortest text (strtod, correctly rounded)
+				rows = append(rows, fmt.Sprintf("(%d, '%s')", i, strconv.FormatFloat(f, 'g', -1, 64)))
+				cond, _ := Equals("x", f)
+				if typ == "REAL" {
+					cond, _ = Equals("x", float32(f))
+				}
+				conds = append(conds, fmt.Sprintf("(i = %d AND %s)", i, cond))
+			}
+			q := fmt.Sprintf("SELECT count(*) FROM (SELECT i, s::%s AS x FROM (VALUES %s) v(i, s)) WHERE %s",
+				typ, strings.Join(rows, ", "), strings.Join(conds, " OR "))
+			var n int
+			if err := db.QueryRow(q).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			if n != len(batch) {
+				t.Errorf("%s: %d of %d values matched", typ, n, len(batch))
+			}
+		}
+	}
+	// the value the review found (demo trailLength): a DECIMAL(17,16) literal
+	if got, _ := Equals("x", 1.9101520992509673); got != "x = 1.9101520992509673e0" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestIsControl(t *testing.T) {
+	want := map[rune]bool{0x7f: true}
+	for r := rune(0); r < 0x20; r++ {
+		want[r] = true
+	}
+	for r := rune(0x80); r <= 0x9f; r++ {
+		want[r] = true
+	}
+	for r := rune(0); r < 0x300; r++ {
+		if IsControl(r) != want[r] {
+			t.Errorf("IsControl(%U) = %v", r, !want[r])
+		}
+	}
+	if HasControls("tab\tx") != true || HasControls("é ✓ \u202e") {
+		t.Error("HasControls")
+	}
+	for f, want := range map[float64]string{1e-05: "1e-05", 0.0001: "0.0001", 123456789012345.0: "123456789012345.0", 1234567890123456.0: "1234567890123456.0"} {
+		if got := pyRepr(f); got != want {
+			t.Errorf("pyRepr(%v) = %q, want %q", f, got, want)
 		}
 	}
 }

@@ -3,6 +3,7 @@ package filter
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -326,5 +327,60 @@ func TestCursorInTheSanitizedBox(t *testing.T) {
 	end := len([]rune(strings.TrimRight(shown, " ")))
 	if c == nil || c.Position.X != end {
 		t.Errorf("cursor at %+v, the text shown ends at %d: %q", c, end, shown)
+	}
+}
+
+// History: Enter adds a filter unless it is the last one; a view "=" made
+// is added once it applies (so ↑ brings it back first); the filter
+// reverted to, or the one shown, isn't added.
+func TestHistoryEntries(t *testing.T) {
+	r := newRig(t, "")
+	r.run(r.f.Focus())
+	for _, s := range []string{"x > 1", "x > 1", "x > 2"} {
+		r.f.in.SetValue(s)
+		r.key(tea.KeyEnter, 0)
+		r.run(r.f.Focus())
+	}
+	if h := r.f.History(); len(h) != 2 || h[0] != "x > 1" || h[1] != "x > 2" {
+		t.Fatalf("history %q", h)
+	}
+	r.send(kit.SetViewMsg{View: data.View{Where: "(x > 2) and s = 'a'"}, KeepFileRow: 3}) // "="
+	r.send(kit.SetViewMsg{View: data.View{Where: "(x > 2) and s = 'a'"}, KeepFileRow: 3}) // the same view again
+	r.send(kit.SetViewMsg{View: data.View{Where: "x > 2"}, KeepFileRow: -1})              // a revert
+	r.send(kit.SetViewMsg{View: data.View{Where: "bad"}, KeepFileRow: 3})                 // fails: not added
+	if h := r.f.History(); len(h) != 3 || h[2] != "(x > 2) and s = 'a'" {
+		t.Fatalf("history %q", h)
+	}
+	r.run(r.f.Focus())
+	r.key(tea.KeyUp, 0)
+	if r.f.Value() != "(x > 2) and s = 'a'" {
+		t.Errorf("↑ after =: %q", r.f.Value())
+	}
+}
+
+func TestOpenWithAQueryOrABadFilter(t *testing.T) {
+	r := newRig(t, "select x from t")
+	if !r.env.State.View.IsSQL() || len(r.env.State.Columns) != 1 || r.f.Value() != "select x from t" {
+		t.Errorf("-w select: %+v", r.env.State.View)
+	}
+	r = newRig(t, "bad")
+	if !r.env.State.View.Plain() || !r.f.BorderError() || r.f.Value() != "bad" || r.f.TypingFocused() {
+		t.Errorf("-w bad: %+v border %v box %q", r.env.State.View, r.f.BorderError(), r.f.Value())
+	}
+	if len(r.f.History()) != 0 {
+		t.Errorf("history %q", r.f.History())
+	}
+}
+
+// Completion offers DuckDB's names: name_1 for the second of Name and name.
+func TestCompletionByDuckDBsNames(t *testing.T) {
+	ds, err := data.Open(filepath.Join("..", "..", "..", "testdata", "fixtures", "casedup.parquet"), data.Options{Threads: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.Close()
+	f := New(&kit.Env{DS: ds, Look: look{}, Tasks: kit.NewTasks(), State: &kit.State{Columns: ds.Columns()}})
+	if got := f.suggest("x > 1 and name_"); got != "x > 1 and name_1" {
+		t.Errorf("suggest %q", got)
 	}
 }

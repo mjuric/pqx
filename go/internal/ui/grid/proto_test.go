@@ -339,7 +339,7 @@ func TestFilterReadErrorReverts(t *testing.T) {
 		if g.curRow != 2 {
 			t.Errorf("read first %v: cursor not restored: %d", readFirst, g.curRow)
 		}
-		if !h.noted("Binder Error") || h.status.Severity != kit.Error || !strings.Contains(h.status.Text, "previous view kept") {
+		if !h.noted("Binder Error") || h.status.Severity != kit.Error || h.status.Text != `column "bad" not found` {
 			t.Errorf("read first %v: status %+v, notes %+v", readFirst, h.status, h.notes)
 		}
 		if !strings.Contains(strings.Join(h.grid(), "\n"), "r2") {

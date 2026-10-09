@@ -11,6 +11,7 @@ import (
 
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/fmtx"
+	"github.com/mjuric/pqx/go/internal/ui/chrome"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
 
@@ -416,10 +417,8 @@ func (g *Grid) onPage(r pageResult) tea.Cmd {
 		req := r.req
 		g.failed = &req
 		g.dropUnloadedWaiters()
-		msg := fmtx.Sanitize(truncRunes(firstLine(r.err), 160), false)
-		return tea.Batch(drop,
-			kit.Send(kit.NotifyMsg{Severity: kit.Error, Title: "✗ Query failed", Text: fmtx.Sanitize(truncRunes(r.err.Error(), 600), true)}),
-			kit.Send(kit.StatusMsg{Severity: kit.Error, Text: "read failed: " + msg}))
+		// (the status line's own "✗ Query failed   reason: …", Python's _show_error)
+		return tea.Batch(drop, chrome.QueryError(r.err))
 	}
 	start, n := r.req.start, r.req.n
 	if r.req.around && r.win.Start > start && r.win.Start < start+int64(n) {
@@ -644,13 +643,9 @@ func (g *Grid) evict() {
 func (g *Grid) revert(err error) tea.Cmd {
 	p := g.prev
 	g.cancelReads()
-	g.v.setTotal(0) // nothing more is read for it
-	msg := firstLine(err)
-	g.revertErr = "Query failed: " + fmtx.Sanitize(truncRunes(msg, 160), false) + " · previous view kept"
-	return tea.Batch(
-		kit.Send(kit.SetViewMsg{View: p.v.view, KeepFileRow: -1}),
-		kit.Send(kit.NotifyMsg{Severity: kit.Error, Title: "✗ Query failed", Text: fmtx.Sanitize(truncRunes(msg, 600), true)}),
-	)
+	g.v.setTotal(0)   // nothing more is read for it
+	g.revertErr = err // said once the view is back (a new view clears the status line)
+	return kit.Send(kit.SetViewMsg{View: p.v.view, KeepFileRow: -1})
 }
 
 // cancelReads stops the reads for the view on screen (a new one is coming).

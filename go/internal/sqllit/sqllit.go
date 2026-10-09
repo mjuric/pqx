@@ -97,8 +97,9 @@ func ColumnRef(name string) string {
 // match (binary, nested, times of day, durations, UUIDs: Python's "Can't
 // filter on this value type").
 //
-// Unlike Python pqx, decimals of up to 38 digits match exactly (Python
-// refuses decimals; DuckDB reads wider ones as doubles), a timestamp with
+// Unlike Python pqx, doubles of 16 or 17 digits match (see doubleLiteral),
+// decimals of up to 38 digits match exactly (Python refuses decimals;
+// DuckDB reads wider ones as doubles), a timestamp with
 // nanoseconds is a TIMESTAMP_NS literal (Python's TIMESTAMP literal drops
 // them and matches nothing), and infinities are written 'inf'::DOUBLE
 // (Python writes inf, which DuckDB takes for a column name).
@@ -117,9 +118,9 @@ func Equals(sqlName string, v data.Value) (cond string, ok bool) {
 	case uint64:
 		return q + " = " + strconv.FormatUint(v, 10), true
 	case float32:
-		return floatCond(q, float64(v)), true // (Python sees a float32 as the double it is)
+		return floatCond(q, float64(v), true), true // (Python sees a float32 as the double it is)
 	case float64:
-		return floatCond(q, v), true
+		return floatCond(q, v, false), true
 	case data.Decimal:
 		if v.Unscaled == nil || v.Precision > 38 {
 			return "", false
@@ -141,7 +142,7 @@ func Equals(sqlName string, v data.Value) (cond string, ok bool) {
 	return "", false
 }
 
-func floatCond(q string, f float64) string {
+func floatCond(q string, f float64, f32 bool) string {
 	switch {
 	case math.IsNaN(f):
 		return "isnan(" + q + ")"
@@ -150,7 +151,25 @@ func floatCond(q string, f float64) string {
 	case math.IsInf(f, -1):
 		return q + " = '-inf'::DOUBLE"
 	}
-	return q + " = " + pyRepr(f)
+	return q + " = " + doubleLiteral(f, f32)
+}
+
+// doubleLiteral is f as a literal DuckDB reads as exactly f: Python's repr,
+// with "e0" added (a literal with an exponent is a DOUBLE, parsed exactly)
+// when it has more than 15 significant digits, or always for a FLOAT
+// column's value. DuckDB reads 1.9101520992509673 as a DECIMAL(17,16),
+// whose cast to DOUBLE isn't correctly rounded for so many digits, and its
+// cast of a DECIMAL to FLOAT rounds twice.
+func doubleLiteral(f float64, f32 bool) string {
+	s := pyRepr(f)
+	if strings.ContainsRune(s, 'e') {
+		return s
+	}
+	digits := strings.TrimLeft(strings.NewReplacer("-", "", ".", "").Replace(s), "0")
+	if f32 || len(digits) > 15 {
+		s += "e0"
+	}
+	return s
 }
 
 // pyRepr is Python's repr of a finite float.
@@ -198,15 +217,18 @@ func isoformat(t time.Time) string {
 	return s
 }
 
-// And is cond added to the filter where: parenthesized if it has an "or"
-// (Python pqx's _filter_value).
+// And is cond added to the filter where. The filter is always put in
+// parentheses, so an OR in it (however it is spaced) can't take the
+// condition in; if it has a "--" comment, the closing parenthesis goes on a
+// line of its own, out of the comment's reach. (Python pqx parenthesizes
+// only a filter holding " or ", and a comment swallows the condition.)
 func And(where, cond string) string {
 	cur := strings.TrimSpace(where)
 	switch {
 	case cur == "":
 		return cond
-	case strings.Contains(strings.ToLower(cur), " or "):
-		return "(" + cur + ") and " + cond
+	case strings.Contains(cur, "--"):
+		return "(" + cur + "\n) and " + cond
 	}
-	return cur + " and " + cond
+	return "(" + cur + ") and " + cond
 }

@@ -102,14 +102,15 @@ type Grid struct {
 	waiters       []waiter
 	lastRow       int64 // State.Row and FileRow as last announced
 	lastFileRow   int64
-	hiddenHint    string   // the current column is hidden in the grid (status hint)
-	next          *keepReq // a view on its way that keeps a record (keep.go)
-	kept          *keeping // the record being looked for in the view shown
-	carry         *carried // keys behind a replayed "=", for the view it makes
-	locateSeq     int      // the last lookup's number
-	anchorLeft    string   // the column a new view shows leftmost
-	revertErr     string   // why the view was reverted, for the status line once it is back
-	foundEnd      bool     // a short read found the view's end before its count
+	hiddenHint    string     // the current column is hidden in the grid (status hint)
+	next          *keepReq   // a view on its way that keeps a record (keep.go)
+	kept          *keeping   // the record being looked for in the view shown
+	sent          *data.View // a view "=" asked for, not yet seen as a SetViewMsg
+	onTheWay      *data.View // the last view asked for (SetViewMsg), while it is checked
+	locateSeq     int        // the last lookup's number
+	anchorLeft    string     // the column a new view shows leftmost
+	revertErr     error      // why the view was reverted, for the status line once it is back
+	foundEnd      bool       // a short read found the view's end before its count
 	footer        map[string][2]data.Value
 	footerStarted bool
 

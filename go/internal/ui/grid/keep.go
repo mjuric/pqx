@@ -61,13 +61,6 @@ type keeping struct {
 	seq    int // of its lookup: a stale lookup's result is ignored
 }
 
-// carried are keys queued behind an "=" replayed on a record: they wait for
-// the view that "=" makes, which keeps the same record.
-type carried struct {
-	fileRow int64
-	queue   []queued
-}
-
 // located is a lookup's result.
 type located struct {
 	gen, seq int
@@ -81,8 +74,9 @@ type located struct {
 // with keep_file_row, and _anchor_row).
 func (g *Grid) onSetView(m kit.SetViewMsg) {
 	g.next = nil
-	c := g.carry
-	g.carry = nil
+	g.sent = nil
+	v := m.View
+	g.onTheWay = &v
 	if m.KeepFileRow < 0 {
 		return
 	}
@@ -92,9 +86,6 @@ func (g *Grid) onSetView(m kit.SetViewMsg) {
 		k.screenRow, k.values = p.screenRow, p.values
 	} else {
 		k.values = g.recordValues(m.KeepFileRow)
-	}
-	if c != nil && c.fileRow == m.KeepFileRow {
-		k.queue = append(k.queue, c.queue...)
 	}
 	for _, key := range m.Keys {
 		k.queue = append(k.queue, queued{key: key, column: g.st.Current})
@@ -290,20 +281,18 @@ func (g *Grid) land(r int64) tea.Cmd {
 }
 
 // replay runs the keys that waited for the record, each on its column (if
-// it is still shown). Keys after an "=" wait for the view it makes.
+// it is still shown), all at once as Python pqx does: keys after an "="
+// act on the same record, and a second "=" adds to the view the first one
+// asked for.
 func (g *Grid) replay(queue []queued) tea.Cmd {
 	var cmds []tea.Cmd
-	for i, q := range queue {
+	for _, q := range queue {
 		col, ok := g.byName[q.column]
 		if !ok {
 			continue
 		}
 		g.curCol = col
 		cmds = append(cmds, g.moved(), g.cellKey(q.key))
-		if q.key.String() == "=" && i+1 < len(queue) {
-			g.carry = &carried{fileRow: g.fileRowAt(g.curRow), queue: append([]queued(nil), queue[i+1:]...)}
-			break
-		}
 	}
 	return tea.Batch(cmds...)
 }
@@ -363,7 +352,8 @@ func (g *Grid) cellKey(k tea.KeyPressMsg) tea.Cmd {
 
 // filterValue is "=": the filter narrowed to the cursor's value, keeping
 // the record (Python's _filter_value). The condition is added to the
-// filter applied.
+// filter applied, or to the one on its way if a view is being checked
+// (Python adds it to the box's text).
 func (g *Grid) filterValue(name string, v data.Value) tea.Cmd {
 	if g.st.View.IsSQL() {
 		return notice(kit.Warning, "= filtering works on the table, not on SQL results", 0)
@@ -380,8 +370,19 @@ func (g *Grid) filterValue(name string, v data.Value) tea.Cmd {
 	if !ok {
 		return notice(kit.Warning, "Can't filter on this value type", 0)
 	}
-	where := sqllit.And(g.st.View.Where, cond)
-	return kit.Send(kit.SetViewMsg{View: data.View{Where: where, OrderBy: g.st.View.OrderBy}, KeepFileRow: g.fileRowAt(g.curRow)})
+	base := g.st.View
+	switch {
+	case g.sent != nil:
+		base = *g.sent // an "=" a moment ago, its view not yet seen
+	case g.onTheWay != nil && g.env.Tasks.Running("validate"):
+		base = *g.onTheWay // a view being checked: the condition adds to it
+	}
+	nv := data.View{Where: sqllit.And(base.Where, cond), OrderBy: base.OrderBy}
+	if base.IsSQL() {
+		nv = data.View{Where: cond}
+	}
+	g.sent = &nv
+	return kit.Send(kit.SetViewMsg{View: nv, KeepFileRow: g.fileRowAt(g.curRow)})
 }
 
 // keptFileRow is the file row x keeps: the record on its way, else the

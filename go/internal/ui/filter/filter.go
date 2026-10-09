@@ -57,6 +57,7 @@ type Filter struct {
 	pending  *kit.SetViewMsg // the view being checked ("validate")
 	own      *data.View      // a SetViewMsg the filter sent itself, on its way
 	typed    bool            // the view on its way was typed (Enter): a failure focuses the box again
+	remember string          // the filter "=" made, for the history once it applies
 	prevView data.View       // the view before the one shown (the grid's revert asks for it)
 	noted    bool            // DuckDB can't read the file: said once
 
@@ -240,8 +241,13 @@ func (f *Filter) Update(msg tea.Msg) tea.Cmd {
 		return f.onSetView(msg)
 	case kit.CancelledMsg:
 		for _, t := range msg.Tags {
-			if t == "validate" {
+			if t == "validate" && f.pending != nil {
+				// Esc stopped the check: the box holds a filter not applied,
+				// and says so (red border) until it is edited
 				f.pending = nil
+				if !sameView(f.viewFor(f.in.Value()), f.st.View) {
+					f.err = "the query was cancelled"
+				}
 			}
 		}
 	case kit.DoneMsg:
@@ -275,18 +281,25 @@ func (f *Filter) onSetView(m kit.SetViewMsg) tea.Cmd {
 	v := m.View
 	own := f.own != nil && sameView(*f.own, v)
 	f.own = nil
+	f.remember = ""
 	if !own {
 		f.typed = false
 		where := strings.TrimSpace(v.Where)
 		revert := m.KeepFileRow < 0 && sameView(v, f.prevView)
-		if !v.IsSQL() && where != "" && where != strings.TrimSpace(f.st.View.Where) && !revert &&
-			(len(f.history) == 0 || f.history[len(f.history)-1] != where) {
-			f.history = append(f.history, where)
-			f.histPos = len(f.history)
+		if !v.IsSQL() && where != "" && where != strings.TrimSpace(f.st.View.Where) && !revert {
+			f.remember = where // (once it applies: one replaced meanwhile isn't kept)
 		}
 	}
 	f.setText(viewText(v))
 	return f.apply(v, m.KeepFileRow)
+}
+
+// addHistory adds text to the history unless it is the last entry.
+func (f *Filter) addHistory(text string) {
+	if text != "" && (len(f.history) == 0 || f.history[len(f.history)-1] != text) {
+		f.history = append(f.history, text)
+	}
+	f.histPos = len(f.history)
 }
 
 // setText puts text in the box, the cursor at its end.
@@ -344,10 +357,7 @@ func (f *Filter) onKey(k tea.KeyPressMsg) tea.Cmd {
 	switch k.String() {
 	case "enter":
 		text := strings.TrimSpace(f.in.Value())
-		if text != "" && (len(f.history) == 0 || f.history[len(f.history)-1] != text) {
-			f.history = append(f.history, text)
-		}
-		f.histPos = len(f.history)
+		f.addHistory(text)
 		f.typed = true
 		// focus leaves the box at once: keys typed while the query is
 		// checked are commands, not text (it comes back if it fails)
@@ -403,10 +413,11 @@ func (f *Filter) ClearFilter() tea.Cmd {
 }
 
 type validated struct {
-	req   kit.SetViewMsg
-	typed bool
-	cols  []data.Column
-	err   error
+	req      kit.SetViewMsg
+	typed    bool
+	remember string
+	cols     []data.Column
+	err      error
 }
 
 type counted struct {
@@ -418,8 +429,8 @@ type counted struct {
 
 // apply checks view with the dataset ("validate"), then shows it.
 func (f *Filter) apply(v data.View, keep int64) tea.Cmd {
-	typed := f.typed
-	f.typed = false
+	typed, remember := f.typed, f.remember
+	f.typed, f.remember = false, ""
 	if sameView(v, f.st.View) {
 		f.pending = nil
 		f.env.Tasks.Cancel("validate")
@@ -439,7 +450,7 @@ func (f *Filter) apply(v data.View, keep int64) tea.Cmd {
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		}
-		return validated{req: req, typed: typed, cols: cols, err: err}
+		return validated{req: req, typed: typed, remember: remember, cols: cols, err: err}
 	})
 }
 
@@ -450,6 +461,9 @@ func (f *Filter) onValidated(r validated) tea.Cmd {
 			return nil
 		}
 		return f.fail(r.err, r.typed)
+	}
+	if r.remember != "" {
+		f.addHistory(r.remember)
 	}
 	st := f.st
 	v := r.req.View
