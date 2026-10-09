@@ -308,15 +308,15 @@ func (p *Pane) fileLines(w int) []string {
 	}
 	vw := max(1, w-kw-2)
 	for _, r := range ov {
-		for i, l := range footer.Wrap(r[1], vw) {
+		for i, l := range footer.WrapCell(r[1], vw) {
+			// the label's cell, padding and gap included, is in the label's
+			// style (Rich's column style), on every line of the row
 			k := ""
 			if i == 0 {
-				k = look.Render(r[0].Lines()[0])
-				k = footer.Pad(k, footer.Width(r[0].Plain), kw, styled.Left)
-			} else {
-				k = strings.Repeat(" ", kw)
+				k = r[0].Lines()[0].Plain
 			}
-			out = append(out, k+"  "+look.Render(l))
+			k += strings.Repeat(" ", max(0, kw+2-footer.Width(k)))
+			out = append(out, look.Render(styled.New(k, r[0].Style))+look.Render(l))
 		}
 	}
 	for _, t := range p.kv {
@@ -445,7 +445,7 @@ func (p *Pane) Panels(w, h int) []kit.Panel {
 	tw := max(1, rw-4)
 	th := max(1, h-2-2)
 	cur := styled.Style{}
-	if p.table.Len() > 0 {
+	if p.table.Len() > 0 && p.focused && p.inner == 1 { // a blurred DataTable shows no cursor
 		cur = look.Style("cursor")
 	}
 	right := p.table.View(look, tw, th, cur)

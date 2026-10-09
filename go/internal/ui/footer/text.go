@@ -56,8 +56,14 @@ func Slice(t styled.Text, a, b int) styled.Text {
 
 // Wrap breaks t into lines of at most w cells, at "\n" and between words
 // (dropping the spaces at a break), cutting words longer than a line, as
-// Rich wraps a Static's text.
-func Wrap(t styled.Text, w int) []styled.Text {
+// Textual wraps a Static's text.
+func Wrap(t styled.Text, w int) []styled.Text { return wrap(t, w, false) }
+
+// WrapCell is Wrap as Rich wraps a table cell's text: the spaces at a break
+// stay at the end of the line as far as they fit.
+func WrapCell(t styled.Text, w int) []styled.Text { return wrap(t, w, true) }
+
+func wrap(t styled.Text, w int, keep bool) []styled.Text {
 	w = max(1, w)
 	var out []styled.Text
 	for _, line := range t.Lines() {
@@ -79,18 +85,22 @@ func Wrap(t styled.Text, w int) []styled.Text {
 			if end == start { // a character wider than the line
 				end++
 			}
-			next := end
+			// break before the last word that doesn't fit; the spaces
+			// before it stay on the line as far as they fit (Rich's
+			// divide_line, then rstrip_end)
+			e, next := end, end
 			if end < len(r) && r[end] != ' ' {
-				// break at the last space in the line, if any
 				for i := end - 1; i > start; i-- {
 					if r[i] == ' ' {
-						end, next = i, i
+						e, next = i, i
+						for keep && e < end && r[e] == ' ' {
+							e++
+						}
 						break
 					}
 				}
 			}
-			e := end
-			for e > start && r[e-1] == ' ' && end < len(r) {
+			for !keep && e > start && end < len(r) && r[e-1] == ' ' {
 				e--
 			}
 			out = append(out, Slice(line, start, e))

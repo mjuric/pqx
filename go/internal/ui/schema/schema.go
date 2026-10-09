@@ -296,7 +296,7 @@ func (p *Pane) desc() (styled.Text, styled.Text) {
 	inf := p.info[c.Name]
 	S := func(s string) string { return fmtx.Sanitize(s, false) }
 	t.Append(S(c.Name), styled.Style{Bold: true, Fg: "cyan"})
-	t.Append("   "+S(arrowName(c.Arrow)), styled.Style{})
+	t.Append("   "+S(typeName(c.Name, c.Arrow)), styled.Style{})
 	if c.Unit != "" {
 		t.Append("   ["+S(c.Unit)+"]", styled.Style{})
 	}
@@ -375,7 +375,7 @@ func (p *Pane) Panels(w, h int) []kit.Panel {
 	look := p.env.Look
 	tableH, descH := p.split()
 	cur := styled.Style{}
-	if p.built {
+	if p.built && p.focused { // a blurred DataTable shows no cursor
 		cur = look.Style("cursor")
 	}
 	lines := p.table.View(look, max(1, w-4), max(1, tableH-2), cur)

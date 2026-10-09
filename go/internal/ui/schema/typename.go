@@ -11,7 +11,12 @@ import (
 // "string", "timestamp[us, tz=UTC]", "list<element: int64>"): the Schema
 // tab's description shows it, as Python pqx does. Types PyArrow names as
 // arrow-go does fall through to t.String().
-func arrowName(t arrow.DataType) string {
+func arrowName(t arrow.DataType) string { return typeName("entries", t) }
+
+// typeName is arrowName for the type of a field called name: PyArrow, reading
+// a Parquet file, names a map's entries field after the map's own field (a
+// column "mp" is "map<string, int64 ('mp')>"), which arrow-go doesn't keep.
+func typeName(name string, t arrow.DataType) string {
 	if t == nil {
 		return "null"
 	}
@@ -71,7 +76,7 @@ func arrowName(t arrow.DataType) string {
 		if tt.KeysSorted {
 			s += ", keys_sorted"
 		}
-		return s + named(tt.ElemField().Name, "entries") + ">"
+		return s + named(name, "entries") + ">"
 	case *arrow.StructType:
 		parts := make([]string, len(tt.Fields()))
 		for i, f := range tt.Fields() {
@@ -92,7 +97,7 @@ func arrowName(t arrow.DataType) string {
 }
 
 func field(f arrow.Field) string {
-	s := f.Name + ": " + arrowName(f.Type)
+	s := f.Name + ": " + typeName(f.Name, f.Type)
 	if !f.Nullable {
 		s += " not null"
 	}
