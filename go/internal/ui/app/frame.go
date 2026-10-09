@@ -109,9 +109,12 @@ func borderLine(look kit.Look, l, r string, w int, t styled.Text, bs styled.Styl
 		if lipgloss.Width(t.Plain) > room {
 			tt = styled.Text{Plain: ansi.Truncate(t.Plain, room, "…")}
 		}
-		b.WriteString(look.Render(styled.New("─ ", bs)))
+		// the spaces around the title are the title's (plain), as Textual
+		// draws a border title
+		b.WriteString(look.Render(styled.New("─", bs)))
+		b.WriteString(look.Render(styled.New(" ", styled.Style{})))
 		b.WriteString(look.Render(tt))
-		b.WriteString(look.Render(styled.New(" ", bs)))
+		b.WriteString(look.Render(styled.New(" ", styled.Style{})))
 		used += 3 + lipgloss.Width(tt.Plain)
 	}
 	b.WriteString(look.Render(styled.New(strings.Repeat("─", max(0, w-used-1))+r, bs)))
