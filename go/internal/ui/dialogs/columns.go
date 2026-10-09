@@ -246,7 +246,7 @@ func (d *columnsDialog) apply() tea.Cmd {
 		}
 	}
 	if len(vis) == 0 {
-		return kit.Send(kit.NotifyMsg{Severity: kit.Warning, Text: "Select at least one column"})
+		return kit.Send(kit.NotifyMsg{Severity: kit.Warning, Text: "Select at least one column", Timeout: textualTimeout})
 	}
 	return closeWith(kit.ColumnsPickedMsg{Visible: vis})
 }

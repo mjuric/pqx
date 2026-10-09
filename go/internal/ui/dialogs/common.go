@@ -9,6 +9,7 @@ package dialogs
 
 import (
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -52,6 +53,11 @@ func (f *Factory) Help() kit.Dialog { return newHelp(f.env) }
 var inputKeys = []kit.KeyHint{{Key: "enter", Help: "apply"}, {Key: "esc", Help: "back"},
 	{Key: "ctrl+x", Help: "clear"}, {Key: "↑↓", Help: "history"}, {Key: "→", Help: "complete"},
 	{Key: "select … from t", Help: "full query"}}
+
+// textualTimeout is Textual's default notification timeout, which Python's
+// notices without a timeout of their own get (kit's default is 3 s, 8 s for
+// errors).
+const textualTimeout = 5 * time.Second
 
 // The dialogs' sizes (app.tcss: .dialog 80 wide, at most 95% of the
 // screen; .small 60; height auto, at most 90%).
