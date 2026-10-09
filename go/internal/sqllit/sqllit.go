@@ -100,9 +100,10 @@ func ColumnRef(name string) string {
 //
 // Unlike Python pqx, doubles of 16 or 17 digits match (see doubleLiteral),
 // decimals of up to 38 digits match exactly (Python refuses decimals;
-// DuckDB reads wider ones as doubles), a timestamp with
-// nanoseconds is a TIMESTAMP_NS literal (Python's TIMESTAMP literal drops
-// them and matches nothing), infinities are written 'inf'::DOUBLE (Python
+// DuckDB reads wider ones as doubles), timestamps with nanoseconds and at
+// the ends of the range match (see timestampCond; Python's TIMESTAMP
+// literal drops nanoseconds and matches nothing), infinities are written
+// 'inf'::DOUBLE (Python
 // writes inf, which DuckDB takes for a column name), and a UUID matches by
 // its text (Python refuses it).
 func Equals(sqlName string, v data.Value) (cond string, ok bool) {
@@ -124,19 +125,24 @@ func Equals(sqlName string, v data.Value) (cond string, ok bool) {
 	case float64:
 		return floatCond(q, v, false), true
 	case data.Decimal:
-		if v.Unscaled == nil || v.Precision > 38 {
+		// as the column's own DECIMAL(p,s): a number literal of 39 characters'
+		// digits (0.000…) would be a DOUBLE
+		if v.Unscaled == nil || v.Precision > 38 || v.Scale < 0 || v.Scale > v.Precision {
 			return "", false
 		}
-		return q + " = " + decimalText(v), true
+		return q + " = '" + decimalText(v) + "'::DECIMAL(" + strconv.Itoa(int(v.Precision)) + "," + strconv.Itoa(int(v.Scale)) + ")", true
 	case data.Timestamp:
-		switch {
-		case v.Zoned:
-			return q + " = TIMESTAMPTZ '" + isoformat(v.T) + "+00:00'", true
-		case v.Unit == time.Nanosecond && v.T.Nanosecond()%1000 != 0:
-			return q + " = TIMESTAMP_NS '" + isoformat(v.T) + "'", true
-		}
-		return q + " = TIMESTAMP '" + isoformat(v.T) + "'", true
+		return timestampCond(q, v)
 	case data.Date:
+		switch {
+		case v == math.MaxInt32:
+			return q + " = 'infinity'::DATE", true
+		case v == -math.MaxInt32:
+			return q + " = '-infinity'::DATE", true
+		}
+		if y := v.Time().Year(); y < 1 || y > 9999 {
+			return "", false
+		}
 		return q + " = DATE '" + v.Time().Format("2006-01-02") + "'", true
 	case string:
 		return q + " = " + TextLiteral(v), true
@@ -145,6 +151,69 @@ func Equals(sqlName string, v data.Value) (cond string, ok bool) {
 		return q + " = '" + h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:] + "'", true
 	}
 	return "", false
+}
+
+// timestampCond matches a timestamp as DuckDB reads it from the file: its
+// ±infinity (the int64 limits) by name; a nanosecond one with a
+// TIMESTAMP_NS literal (a TIMESTAMP literal drops the nanoseconds), or by
+// its count (epoch_ns) at the range's ends, which no literal reaches; a
+// zoned nanosecond one before 1970, which DuckDB keeps in microseconds
+// truncated toward zero, by epoch_us; others as Python's literals. A time outside years 1–9999 that isn't an
+// infinity is refused.
+func timestampCond(q string, v data.Timestamp) (string, bool) {
+	typ := "TIMESTAMP"
+	if v.Zoned {
+		typ = "TIMESTAMPTZ"
+	}
+	if v.Unit == time.Nanosecond {
+		inf := "TIMESTAMP_NS"
+		if v.Zoned {
+			inf = typ
+		}
+		ns := v.T.UnixNano()
+		switch {
+		case ns == math.MaxInt64:
+			return q + " = 'infinity'::" + inf, true
+		case ns == -math.MaxInt64:
+			return q + " = '-infinity'::" + inf, true
+		case v.Zoned && ns < 0 && ns%1000 != 0:
+			// (a literal's extra digits are cut, which for a time before
+			// 1970 isn't toward zero)
+			return "epoch_us(" + q + ") = " + strconv.FormatInt(ns/1000, 10), true
+		case !v.Zoned && (v.T.Year() <= 1677 || v.T.Year() >= 2262):
+			return "epoch_ns(" + q + ") = " + strconv.FormatInt(ns, 10), true
+		case !v.Zoned && ns%1000 != 0:
+			return q + " = TIMESTAMP_NS '" + isoformat(v.T) + "'", true
+		}
+	}
+	if v.Unit == time.Microsecond {
+		switch us := v.T.UnixMicro(); {
+		case v.T.Equal(time.UnixMicro(math.MaxInt64)):
+			return q + " = 'infinity'::" + typ, true
+		case v.T.Equal(time.UnixMicro(-math.MaxInt64)):
+			return q + " = '-infinity'::" + typ, true
+		case us == math.MaxInt64/1000 || us == -math.MaxInt64/1000:
+			// DuckDB gives a nanosecond column's ±infinity read as
+			// microseconds as these: either may be meant
+			inf := "'infinity'"
+			if us < 0 {
+				inf = "'-infinity'"
+			}
+			return "(" + q + " = " + typ + " '" + isoformat(v.T) + offset(v) + "' or " + q + " = " + inf + "::" + typ + ")", true
+		}
+	}
+	if y := v.T.Year(); y < 1 || y > 9999 {
+		return "", false
+	}
+	return q + " = " + typ + " '" + isoformat(v.T) + offset(v) + "'", true
+}
+
+// offset is a zoned time's "+00:00" (pqx's times are UTC).
+func offset(v data.Timestamp) string {
+	if v.Zoned {
+		return "+00:00"
+	}
+	return ""
 }
 
 func floatCond(q string, f float64, f32 bool) string {
@@ -224,16 +293,14 @@ func isoformat(t time.Time) string {
 
 // And is cond added to the filter where. The filter is always put in
 // parentheses, so an OR in it (however it is spaced) can't take the
-// condition in; if it has a "--" comment, the closing parenthesis goes on a
-// line of its own, out of the comment's reach. (Python pqx parenthesizes
-// only a filter holding " or ", and a comment swallows the condition.)
+// condition in, and its "--" comments become /* */ ones (OneLine), so they
+// can't comment the condition out and the result holds on one line, as the
+// filter box does. (Python pqx parenthesizes only a filter holding " or ",
+// and a comment swallows the condition.)
 func And(where, cond string) string {
-	cur := strings.TrimSpace(where)
-	switch {
-	case cur == "":
+	cur := strings.TrimSpace(OneLine(where))
+	if cur == "" {
 		return cond
-	case strings.Contains(cur, "--"):
-		return "(" + cur + "\n) and " + cond
 	}
 	return "(" + cur + ") and " + cond
 }

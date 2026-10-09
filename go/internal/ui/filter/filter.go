@@ -58,7 +58,7 @@ type Filter struct {
 	own      *data.View      // a SetViewMsg the filter sent itself, on its way
 	typed    bool            // the view on its way was typed (Enter): a failure focuses the box again
 	remember string          // the filter "=" made, for the history once it applies
-	prevView data.View       // the view before the one shown (the grid's revert asks for it)
+	mark     string          // the error to show once the view on its way applies (a revert)
 	noted    bool            // DuckDB can't read the file: said once
 
 	counts map[string]int64
@@ -273,6 +273,12 @@ func (f *Filter) send(v data.View, keep int64) tea.Cmd {
 	return kit.Send(kit.SetViewMsg{View: v, KeepFileRow: keep})
 }
 
+// KeepRevert is the KeepFileRow of the grid's SetViewMsg going back to the
+// previous view after a filter failed on its first read: no record is
+// kept, and the box keeps the filter typed, marked as failed (Python keeps
+// the text).
+const KeepRevert = -2
+
 // onSetView applies a view asked for: the box shows its text. A view "="
 // made (a new filter, not one the filter sent itself, nor the grid's
 // revert to the previous view) goes into the history, as Python pqx's
@@ -285,10 +291,14 @@ func (f *Filter) onSetView(m kit.SetViewMsg) tea.Cmd {
 	if !own {
 		f.typed = false
 		where := strings.TrimSpace(v.Where)
-		revert := m.KeepFileRow < 0 && sameView(v, f.prevView)
-		if !v.IsSQL() && where != "" && where != strings.TrimSpace(f.st.View.Where) && !revert {
+		if !v.IsSQL() && where != "" && where != strings.TrimSpace(f.st.View.Where) && m.KeepFileRow != KeepRevert {
 			f.remember = where // (once it applies: one replaced meanwhile isn't kept)
 		}
+	}
+	if m.KeepFileRow == KeepRevert {
+		f.typed = false
+		f.mark = "the query failed reading its first rows" // (the grid reports why)
+		return f.apply(v, -1)
 	}
 	f.setText(viewText(v))
 	return f.apply(v, m.KeepFileRow)
@@ -416,6 +426,7 @@ type validated struct {
 	req      kit.SetViewMsg
 	typed    bool
 	remember string
+	mark     string
 	cols     []data.Column
 	err      error
 }
@@ -429,8 +440,8 @@ type counted struct {
 
 // apply checks view with the dataset ("validate"), then shows it.
 func (f *Filter) apply(v data.View, keep int64) tea.Cmd {
-	typed, remember := f.typed, f.remember
-	f.typed, f.remember = false, ""
+	typed, remember, mark := f.typed, f.remember, f.mark
+	f.typed, f.remember, f.mark = false, "", ""
 	if sameView(v, f.st.View) {
 		f.pending = nil
 		f.env.Tasks.Cancel("validate")
@@ -450,7 +461,7 @@ func (f *Filter) apply(v data.View, keep int64) tea.Cmd {
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		}
-		return validated{req: req, typed: typed, remember: remember, cols: cols, err: err}
+		return validated{req: req, typed: typed, remember: remember, mark: mark, cols: cols, err: err}
 	})
 }
 
@@ -469,7 +480,6 @@ func (f *Filter) onValidated(r validated) tea.Cmd {
 	v := r.req.View
 	wasSQL := st.View.IsSQL()
 	f.env.Tasks.Cancel("count") // the old view's: stale (a failure would land on the new one)
-	f.prevView = st.View
 	st.View = v
 	if v.IsSQL() || wasSQL || len(st.Columns) != len(r.cols) {
 		st.Hidden = map[string]bool{}
@@ -487,7 +497,7 @@ func (f *Filter) onValidated(r validated) tea.Cmd {
 		st.Total = -1
 		cmds = append(cmds, f.count(v))
 	}
-	f.err = ""
+	f.err = r.mark
 	return tea.Sequence(kit.Send(kit.StatusMsg{}), tea.Batch(cmds...))
 }
 

@@ -346,7 +346,7 @@ func TestHistoryEntries(t *testing.T) {
 	}
 	r.send(kit.SetViewMsg{View: data.View{Where: "(x > 2) and s = 'a'"}, KeepFileRow: 3}) // "="
 	r.send(kit.SetViewMsg{View: data.View{Where: "(x > 2) and s = 'a'"}, KeepFileRow: 3}) // the same view again
-	r.send(kit.SetViewMsg{View: data.View{Where: "x > 2"}, KeepFileRow: -1})              // a revert
+	r.send(kit.SetViewMsg{View: data.View{Where: "x > 2"}, KeepFileRow: KeepRevert})      // a revert
 	r.send(kit.SetViewMsg{View: data.View{Where: "bad"}, KeepFileRow: 3})                 // fails: not added
 	if h := r.f.History(); len(h) != 3 || h[2] != "(x > 2) and s = 'a'" {
 		t.Fatalf("history %q", h)
@@ -382,5 +382,15 @@ func TestCompletionByDuckDBsNames(t *testing.T) {
 	f := New(&kit.Env{DS: ds, Look: look{}, Tasks: kit.NewTasks(), State: &kit.State{Columns: ds.Columns()}})
 	if got := f.suggest("x > 1 and name_"); got != "x > 1 and name_1" {
 		t.Errorf("suggest %q", got)
+	}
+}
+
+// A view with the filter shown (a sort, say) doesn't add it to the history,
+// even when it isn't the last entry (-w isn't in the history).
+func TestTheFilterShownIsntAddedAgain(t *testing.T) {
+	r := newRig(t, "x > 5")
+	r.send(kit.SetViewMsg{View: data.View{Where: "x > 5", OrderBy: []data.Sort{{Column: "x", Desc: true}}}, KeepFileRow: -1})
+	if len(r.env.State.View.OrderBy) != 1 || len(r.f.History()) != 0 {
+		t.Errorf("view %+v history %q", r.env.State.View, r.f.History())
 	}
 }

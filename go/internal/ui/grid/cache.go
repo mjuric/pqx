@@ -12,6 +12,7 @@ import (
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/fmtx"
 	"github.com/mjuric/pqx/go/internal/ui/chrome"
+	"github.com/mjuric/pqx/go/internal/ui/filter"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
 )
 
@@ -645,7 +646,7 @@ func (g *Grid) revert(err error) tea.Cmd {
 	g.cancelReads()
 	g.v.setTotal(0)   // nothing more is read for it
 	g.revertErr = err // said once the view is back (a new view clears the status line)
-	return kit.Send(kit.SetViewMsg{View: p.v.view, KeepFileRow: -1})
+	return kit.Send(kit.SetViewMsg{View: p.v.view, KeepFileRow: filter.KeepRevert})
 }
 
 // cancelReads stops the reads for the view on screen (a new one is coming).

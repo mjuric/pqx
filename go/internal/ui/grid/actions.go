@@ -56,7 +56,7 @@ func (g *Grid) onKey(k tea.KeyPressMsg) tea.Cmd {
 	case "=", "y", "i", "F", "<", ">":
 		// a record on its way: the key waits to act on it (Python's
 		// _queue_for_keep)
-		if g.QueueKey(k, g.curName()) {
+		if g.queueKey(k, g.curName(), g.fromPane) {
 			return nil
 		}
 		return g.cellKey(k)

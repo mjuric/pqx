@@ -134,8 +134,8 @@ func TestEqualsLiterals(t *testing.T) {
 		{data.Timestamp{T: ts.Truncate(time.Second), Unit: time.Microsecond, Zoned: true}, "x = TIMESTAMPTZ '2026-01-02T03:04:05+00:00'"},
 		{data.Timestamp{T: ts.Add(9), Unit: time.Nanosecond}, "x = TIMESTAMP_NS '2026-01-02T03:04:05.678000009'"},
 		{data.Timestamp{T: ts.Add(9), Unit: time.Nanosecond, Zoned: true}, "x = TIMESTAMPTZ '2026-01-02T03:04:05.678000009+00:00'"},
-		{data.Decimal{Unscaled: big.NewInt(-5), Scale: 2, Precision: 9}, "x = -0.05"},
-		{data.Decimal{Unscaled: big.NewInt(12345), Scale: 0, Precision: 9}, "x = 12345"},
+		{data.Decimal{Unscaled: big.NewInt(-5), Scale: 2, Precision: 9}, "x = '-0.05'::DECIMAL(9,2)"},
+		{data.Decimal{Unscaled: big.NewInt(12345), Scale: 0, Precision: 9}, "x = '12345'::DECIMAL(9,0)"},
 	} {
 		got, ok := Equals("x", c.v)
 		if !ok || got != c.want {
@@ -158,16 +158,35 @@ func TestEqualsLiterals(t *testing.T) {
 }
 
 func TestAnd(t *testing.T) {
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
 	for _, c := range [][3]string{
 		{"", "b = 1", "b = 1"},
 		{"  a = 1 ", "b = 1", "(a = 1) and b = 1"},
 		{"a = 1 OR c = 2", "b = 1", "(a = 1 OR c = 2) and b = 1"},
 		{"band = 'r' or(band = 'g')", "b = 1", "(band = 'r' or(band = 'g')) and b = 1"},
 		{"(band = 'r')or(band = 'g')", "b = 1", "((band = 'r')or(band = 'g')) and b = 1"},
-		{"band = 'r' -- note", "b = 1", "(band = 'r' -- note\n) and b = 1"},
+		{"band = 'r' -- note", "b = 1", "(band = 'r' /* note */) and b = 1"},
+		{"a = '--x' -- c */ d /* e\n or b = 2", "c = 3", "(a = '--x' /* c * / d / * e */  or b = 2) and c = 3"},
+		{"a = $$--$$ and \"--\" = 1 /* -- */", "c = 3", "(a = $$--$$ and \"--\" = 1 /* -- */) and c = 3"},
 	} {
 		if got := And(c[0], c[1]); got != c[2] {
 			t.Errorf("And(%q, %q) = %q", c[0], c[1], got)
+		}
+		// DuckDB reads it as one condition on one line
+		got := And(c[0], c[1])
+		if strings.ContainsAny(got, "\n\r") {
+			t.Errorf("%q isn't one line", got)
+		}
+		if c[0] != "" {
+			var n int
+			q := `SELECT count(*) FROM (SELECT '--x' AS a, 2 AS b, 3 AS c, 'r' AS band, 1 AS "--") WHERE ` + got
+			if err := db.QueryRow(q).Scan(&n); err != nil {
+				t.Errorf("%q: %v", got, err)
+			}
 		}
 	}
 }
@@ -295,5 +314,19 @@ func TestConditionsRunInDuckDB(t *testing.T) {
 		if got, _ := Equals(name, cases[name]); got != want {
 			t.Errorf("%s: %q, want %q", name, got, want)
 		}
+	}
+}
+
+// The exponent goes on from 16 significant digits (15 are exact as a
+// DECIMAL), always on a FLOAT's value.
+func TestDoubleLiteralThreshold(t *testing.T) {
+	for f, want := range map[float64]string{0.123456789012345: "0.123456789012345", 0.1234567890123456: "0.1234567890123456e0",
+		123456789012345.6: "123456789012345.6e0", 12345678901234.5: "12345678901234.5", -0.000123456789012345: "-0.000123456789012345"} {
+		if got := doubleLiteral(f, false); got != want {
+			t.Errorf("doubleLiteral(%v) = %q, want %q", f, got, want)
+		}
+	}
+	if got := doubleLiteral(0.5, true); got != "0.5e0" {
+		t.Errorf("float32: %q", got)
 	}
 }

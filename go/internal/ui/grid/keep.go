@@ -32,8 +32,9 @@ import (
 // queued is a cell key waiting for the record, with the column it was
 // pressed on.
 type queued struct {
-	key    tea.KeyPressMsg
-	column string
+	key      tea.KeyPressMsg
+	column   string
+	fromPane bool // pressed in the details pane (its notices say so)
 }
 
 // keepReq is a view on its way to the filter part (a SetViewMsg) that keeps
@@ -295,7 +296,10 @@ func (g *Grid) replay(queue []queued) tea.Cmd {
 			continue
 		}
 		g.curCol = col
-		cmds = append(cmds, g.moved(), g.cellKey(q.key))
+		cmds = append(cmds, g.moved())
+		g.fromPane = q.fromPane
+		cmds = append(cmds, g.cellKey(q.key))
+		g.fromPane = false
 	}
 	return tea.Batch(cmds...)
 }
@@ -304,10 +308,14 @@ func (g *Grid) replay(queue []queued) tea.Cmd {
 // elsewhere (the details pane) waits for the record on its way, to act on
 // column then; false if no record is on its way, and the key should act now.
 func (g *Grid) QueueKey(k tea.KeyPressMsg, column string) bool {
+	return g.queueKey(k, column, true)
+}
+
+func (g *Grid) queueKey(k tea.KeyPressMsg, column string, fromPane bool) bool {
 	if g.kept == nil {
 		return false
 	}
-	g.kept.queue = append(g.kept.queue, queued{key: k, column: column})
+	g.kept.queue = append(g.kept.queue, queued{key: k, column: column, fromPane: fromPane})
 	return true
 }
 
@@ -322,7 +330,7 @@ func (g *Grid) pendingRecord() (kit.Record, bool) {
 		return kit.Record{}, false
 	}
 	rec := kit.Record{Row: g.curRow, FileRow: k.fileRow, Values: map[string]data.Value{}, Pending: true}
-	for _, c := range g.all {
+	for _, c := range g.cols { // (the columns shown, as Record has them)
 		if v, ok := k.values[c.Name]; ok {
 			rec.Values[c.Name] = v
 		} else {
