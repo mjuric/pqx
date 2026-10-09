@@ -39,7 +39,8 @@ func (d *gotoDialog) Size(w, h int) (int, int) {
 	return dialogSize(smallW, 1+len(d.hintLines(innerW(min(smallW, w*95/100))))+3, w, h)
 }
 
-func (d *gotoDialog) Keys() []kit.KeyHint { return nil }
+// Keys: the filter's keys (Python shows them for any focused Input).
+func (d *gotoDialog) Keys() []kit.KeyHint { return inputKeys }
 
 func (d *gotoDialog) hint() string {
 	if d.total < 0 {
