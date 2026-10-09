@@ -146,6 +146,9 @@ func (d *dataset) prepare(ctx context.Context, v View) error {
 	if !v.IsSQL() {
 		return nil
 	}
+	if _, err := sqlBodyChecked(v); err != nil {
+		return err
+	}
 	return d.ensureT(ctx)
 }
 
@@ -158,7 +161,10 @@ func (d *dataset) ensureT(ctx context.Context) error {
 	if a.tReady {
 		return nil
 	}
-	_, err := d.db.ExecContext(ctx, "CREATE OR REPLACE VIEW t AS SELECT * FROM "+readParquet(d.path, false))
+	err := d.withConn(ctx, func(c *duckdbConn) error {
+		_, err := c.ExecContext(ctx, "CREATE OR REPLACE VIEW "+tableName+" AS SELECT * FROM "+readParquet(d.duckPath, false), nil)
+		return err
+	})
 	if err != nil {
 		return duckError(err)
 	}

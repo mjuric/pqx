@@ -50,7 +50,7 @@ func FuzzFormat(f *testing.F) {
 		f.Add(s, s, 1.5, int64(7), 40, false)
 	}
 	f.Add(".3e", "x", math.Inf(1), int64(-1), 0, true)
-	f.Add("<99999", "‮", math.NaN(), int64(math.MinInt64), 3, false)
+	f.Add("<99999", "\u202e", math.NaN(), int64(math.MinInt64), 3, false)
 	f.Fuzz(func(t *testing.T, spec, s string, x float64, n int64, width int, raw bool) {
 		width = max(0, width%200)
 		for _, v := range fuzzValues(s, x, n) {
@@ -73,7 +73,7 @@ func FuzzFormat(f *testing.F) {
 // FuzzSanitize: the safe text has no controls, keeps tab and newline only
 // when asked, and HasControls agrees with Sanitize.
 func FuzzSanitize(f *testing.F) {
-	for _, s := range []string{"", "abc", "a\tb\nc", "\x1b[2J", "\u009b31m", "‮", "\xff\xfe", "é ✓ 漢字"} {
+	for _, s := range []string{"", "abc", "a\tb\nc", "\x1b[2J", "\u009b31m", "\u202e", "\xff\xfe", "é ✓ 漢字"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {

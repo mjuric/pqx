@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/parquet"
 	"github.com/apache/arrow-go/v18/parquet/file"
 	"github.com/apache/arrow-go/v18/parquet/metadata"
 	"github.com/apache/arrow-go/v18/parquet/pqarrow"
@@ -42,13 +42,11 @@ type dataset struct {
 	bindErr   error
 	duckNames []string
 	duckTypes []string
-	// conv converts the plain view's values of each column so they are
-	// DuckDB's (see plainValueFunc); nil entries use ValueAt.
-	conv      []func(arrow.Array, int) Value
 	hasRowNum bool // the file has no column of its own named file_row_number
 	closeOnce sync.Once
 
-	an analysis // footer scan, encodings, totals and the view t (meta.go)
+	an        analysis // footer scan, encodings, totals and the view t (meta.go)
+	viewState          // (views.go)
 }
 
 // Open opens a Parquet file: it parses the footer and schema once with
@@ -79,6 +77,7 @@ func open(path string, f *os.File, opts Options) (_ *dataset, err error) {
 		return nil, safeErr(fmt.Errorf("%s is a directory", path))
 	}
 	d := &dataset{path: path, f: f, size: st.Size(), bound: make(chan struct{})}
+	d.duckPath, d.linkDir, d.linkLock = duckPathFor(path)
 
 	// DuckDB first, so its bind overlaps arrow-go's footer parse.
 	dsn := ":memory:?TimeZone=UTC&enable_object_cache=true"
@@ -96,6 +95,7 @@ func open(path string, f *os.File, opts Options) (_ *dataset, err error) {
 		if err != nil {
 			<-d.bound
 			d.db.Close()
+			d.removeLink()
 			err = safeErr(fmt.Errorf("%s: %w", path, err))
 		}
 	}()
@@ -149,21 +149,24 @@ func open(path string, f *os.File, opts Options) (_ *dataset, err error) {
 			d.hasRowNum = false
 		}
 	}
-	d.src = readParquet(path, d.hasRowNum)
+	d.src = readParquet(d.duckPath, d.hasRowNum)
 
 	// Wait for DuckDB's bind (it ran alongside the footer parse above), to
 	// show DuckDB's types and to format the plain view's cells to match.
 	// If DuckDB can't read the file, the plain view still works.
 	<-d.bound
 	if d.bindErr == nil && len(d.duckTypes) == len(d.cols) {
-		d.conv = make([]func(arrow.Array, int) Value, len(d.cols))
 		for i := range d.cols {
+			if strings.ContainsRune(d.cols[i].Name, 0) {
+				// (DuckDB's C API cuts names at a NUL: keep the whole
+				// name, which SQL can't refer to; quoteIdent says so)
+				d.duckNames[i] = d.cols[i].Name
+			}
 			d.cols[i].Type = d.duckTypes[i]
 			d.cols[i].SQLName = d.duckNames[i]
-			int96 := len(d.leaves[i]) == 1 && d.md.Schema.Column(d.leaves[i][0]).PhysicalType() == parquet.Types.Int96
-			d.conv[i] = plainValueFunc(sc.Field(i).Type, d.duckTypes[i], int96)
 		}
 	}
+	d.setupConversions(sc)
 	return d, nil
 }
 
@@ -190,27 +193,38 @@ func readParquet(path string, rowNumbers bool) string {
 	return "read_parquet(" + pathLiteral(path) + opts + ")"
 }
 
+// bindHook, if set (by tests), runs before each try of the bind; an error it
+// returns is the try's.
+var bindHook func(d *dataset) error
+
 // bind has DuckDB read the footer (into its cache), and name the columns
-// and their types.
+// and their types (bindTypes).
+//
+// DuckDB 1.5.6 now and then (about one time in 300 here, in Python too)
+// says "No files found that match the pattern" for a file that was written
+// just before; the bind is tried again then, a few times.
 func (d *dataset) bind() {
 	defer close(d.bound)
-	rows, err := d.db.QueryContext(context.Background(), "SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM "+readParquet(d.path, false)+")")
-	if err != nil {
-		d.bindErr = duckError(err)
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var name, typ string
-		if err := rows.Scan(&name, &typ); err != nil {
-			d.bindErr = duckError(err)
+	for try := 0; ; try++ {
+		var err error
+		if bindHook != nil {
+			err = bindHook(d)
+		}
+		if err == nil {
+			err = d.bindTypes(context.Background())
+		}
+		if err == nil {
 			return
 		}
-		d.duckNames = append(d.duckNames, name)
-		d.duckTypes = append(d.duckTypes, typ)
-	}
-	if err := rows.Err(); err != nil {
+		if try < 4 && strings.Contains(err.Error(), "No files found") {
+			if _, serr := os.Stat(d.duckPath); serr == nil {
+				d.duckInfos, d.duckNames, d.duckArrow, d.duckTypes = nil, nil, nil, nil
+				time.Sleep(time.Duration(try+1) * 10 * time.Millisecond)
+				continue
+			}
+		}
 		d.bindErr = duckError(err)
+		return
 	}
 }
 
@@ -240,6 +254,7 @@ func (d *dataset) Close() error {
 	d.closeOnce.Do(func() {
 		<-d.bound
 		err = errors.Join(d.db.Close(), d.f.Close())
+		d.removeLink()
 	})
 	return err
 }
@@ -249,19 +264,19 @@ func (d *dataset) Fetch(ctx context.Context, v View, start int64, n int, cols []
 	if err := ctx.Err(); err != nil {
 		return Window{}, err
 	}
+	start = max(start, 0)
+	n = max(n, 0)
+	if v.IsSQL() {
+		return d.fetchSQL(ctx, v, start, n, cols)
+	}
 	idx, err := d.columnIndices(cols)
 	if err != nil {
 		return Window{}, err
 	}
-	start = max(start, 0)
-	n = max(n, 0)
 	if isPlain(v) {
 		return d.fetchPlain(ctx, start, n, cols, idx)
 	}
-	if v.IsSQL() || len(v.OrderBy) > 0 {
-		return Window{}, ErrNotImplemented // WP1
-	}
-	return d.fetchFiltered(ctx, v.Where, start, n, cols, idx)
+	return d.fetchView(ctx, v, start, n, cols, idx)
 }
 
 // Count counts the rows of a view.
@@ -272,8 +287,16 @@ func (d *dataset) Count(ctx context.Context, v View) (int64, error) {
 	if isPlain(v) {
 		return d.numRows, nil
 	}
-	if v.IsSQL() || len(v.OrderBy) > 0 {
-		return 0, ErrNotImplemented // WP1
+	if v.IsSQL() {
+		return d.countSQL(ctx, v)
+	}
+	if strings.TrimSpace(v.Where) == "" {
+		for _, k := range v.OrderBy { // (a sort alone keeps every row)
+			if _, err := d.qcol(k.Column); err != nil {
+				return 0, err
+			}
+		}
+		return d.numRows, nil
 	}
 	return d.countFiltered(ctx, v.Where)
 }
@@ -373,12 +396,4 @@ func duckType(t arrow.DataType) string {
 		return duckType(t.StorageType())
 	}
 	return strings.ToUpper(Sanitize(t.String()))
-}
-
-// duckTypeOf is DuckDB's type of column name ("" if DuckDB didn't bind the file).
-func (d *dataset) duckTypeOf(name string) string {
-	if j, ok := d.byName[name]; ok && j < len(d.duckTypes) {
-		return d.duckTypes[j]
-	}
-	return ""
 }

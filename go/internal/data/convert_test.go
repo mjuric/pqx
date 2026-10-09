@@ -37,7 +37,7 @@ func TestSanitize(t *testing.T) {
 		{"a\tb\nc", "a␉b␊c", "a\tb\nc"},
 		{"a\tb\nc\x1b", "a␉b␊c␛", "a\tb\nc␛"},
 		{"é ✓ 漢字  ", "é ✓ 漢字  ", "é ✓ 漢字  "},
-		{"abc‮dcba", "abc⟨U+202E⟩dcba", "abc⟨U+202E⟩dcba"},
+		{"abc\u202edcba", "abc⟨U+202E⟩dcba", "abc⟨U+202E⟩dcba"},
 		{"bad \x9b byte \xff", "bad \\x9b byte \\xff", "bad \\x9b byte \\xff"},
 	}
 	for _, c := range cases {

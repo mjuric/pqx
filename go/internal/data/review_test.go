@@ -185,7 +185,10 @@ func writeLogicalStrings(t *testing.T, path string, cols map[string]schema.Logic
 		t.Fatal(err)
 	}
 	w := file.NewParquetWriter(f, root)
-	rg := w.AppendRowGroup()
+	rg, err := w.AppendRowGroupChecked()
+	if err != nil {
+		t.Fatal(err)
+	}
 	data := make([]parquet.ByteArray, len(vals))
 	defs := make([]int16, len(vals)+1)
 	for i, v := range vals {

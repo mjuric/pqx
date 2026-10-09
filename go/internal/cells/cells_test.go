@@ -204,7 +204,7 @@ func TestWidestCandidatesFindTheWidestNumber(t *testing.T) {
 
 func TestWidthTabsAndLines(t *testing.T) {
 	for s, w := range map[string]int{"": 0, "abc": 3, "a\tb": 9, "ab\n日本語\nx": 6, "\x1b[31m": 4, "é": 1,
-		"👨‍👩‍👧": 2, "❤️": 2, "a\r\tb": 10, "\xff": 1} {
+		"👨\u200d👩\u200d👧": 2, "❤️": 2, "a\r\tb": 10, "\xff": 1} {
 		if got := Width(s); got != w {
 			t.Errorf("Width(%q) = %d, want %d", s, got, w)
 		}
