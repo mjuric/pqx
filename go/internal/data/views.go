@@ -229,6 +229,16 @@ func (d *dataset) orderBy(keys []Sort) (string, error) {
 	}
 	if d.hasRowNum {
 		parts = append(parts, "file_row_number")
+	} else {
+		// DuckDB can't number this file's rows: break ties on every column
+		// of the file instead, so pages of the sort are consistent (rows
+		// alike in every column are interchangeable). pqx has no tiebreak
+		// here, and its pages can repeat or skip rows of a tie.
+		for _, c := range d.cols {
+			if q, err := quoteIdent(c.SQLName); err == nil && !strings.HasPrefix(c.Type, "MAP(") {
+				parts = append(parts, q+" ASC NULLS LAST")
+			}
+		}
 	}
 	return strings.Join(parts, ", "), nil
 }

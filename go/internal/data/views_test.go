@@ -1211,3 +1211,95 @@ func TestCancelViews(t *testing.T) {
 		}
 	}
 }
+
+// A sort of a file DuckDB can't number pages consistently through ties:
+// every row once across the windows (pqx Python can repeat or skip rows here).
+func TestSortTiesWithoutRowNumbers(t *testing.T) {
+	_, ds0 := fixture(t)
+	p := filepath.Join(t.TempDir(), "ties.parquet")
+	duckExec(t, ds0, "COPY (SELECT i AS id, i % 3 AS k, i * 10 AS file_row_number, CASE WHEN i % 7 = 0 THEN NULL ELSE i % 5 END AS m, "+
+		"[i % 2] AS l, {'a': i % 4} AS s FROM range(1706) r(i) ORDER BY hash(i)) TO "+quoteStr(p)+" (FORMAT parquet, ROW_GROUP_SIZE 300)")
+	ds, err := Open(p, Options{Threads: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.Close()
+	if ds.(*dataset).hasRowNum {
+		t.Fatal("the file has its own file_row_number")
+	}
+	for _, v := range []View{{OrderBy: []Sort{{Column: "k"}}}, {OrderBy: []Sort{{Column: "m", Desc: true}}}, {Where: "k > 0", OrderBy: []Sort{{Column: "l"}}}} {
+		n, _ := ds.Count(bg, v)
+		seen := map[int64]int{}
+		for start := int64(0); start < n; start += 37 {
+			w := mustFetch(t, ds, v, start, 37, []string{"id"})
+			for _, id := range w.Cols["id"] {
+				seen[id.(int64)]++
+			}
+		}
+		if int64(len(seen)) != n {
+			t.Errorf("%+v: %d distinct rows of %d", v, len(seen), n)
+		}
+		for id, c := range seen {
+			if c != 1 {
+				t.Errorf("%+v: row %d %d times", v, id, c)
+			}
+		}
+	}
+}
+
+// The guard for DuckDB's own PIVOT statements: a query that DuckDB splits
+// into several statements is allowed only with no ; of its own and a PIVOT.
+func TestPivotGuard(t *testing.T) {
+	dir := t.TempDir()
+	_, ds0 := fixture(t)
+	p := filepath.Join(dir, "t.parquet")
+	duckExec(t, ds0, "COPY (SELECT i AS a, ['x', 'y'][i % 2 + 1] AS s FROM range(5) r(i)) TO "+quoteStr(p)+" (FORMAT parquet)")
+	ds, err := Open(p, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.Close()
+	pwn := filepath.Join(dir, "pwn.csv")
+	for _, q := range []string{
+		"select 1) ; COPY (SELECT 1) TO " + quoteStr(pwn) + " ; PIVOT t ON s USING count(*",
+		"select 1) ;; COPY (SELECT 1) TO " + quoteStr(pwn) + " ;; PIVOT t ON s USING count(*",
+		"select xe'\\') ; COPY (SELECT 1) TO " + quoteStr(pwn) + " ; PIVOT t ON s USING count(*",
+	} {
+		v := View{SQL: q}
+		if _, err := ds.Validate(bg, v); err == nil {
+			t.Errorf("Validate(%q) accepted", q)
+		}
+		if _, err := ds.Fetch(bg, v, 0, 5, nil); err == nil {
+			t.Errorf("Fetch(%q) ran", q)
+		}
+		if _, err := ds.Count(bg, v); err == nil {
+			t.Errorf("Count(%q) ran", q)
+		}
+	}
+	if _, err := os.Stat(pwn); err == nil {
+		t.Fatal("a smuggled COPY ran")
+	}
+	if n, err := ds.Count(bg, View{SQL: "PIVOT t ON s USING count(*)"}); err != nil || n != 5 {
+		t.Fatalf("PIVOT: %d %v", n, err)
+	}
+	for q, want := range map[string]bool{
+		"pivot t on s using count(*)":           true,
+		"PIVOT t ON s USING count(*)":           true,
+		"select 1":                              false, // no PIVOT
+		"select 'pivot'":                        false, // (in a literal)
+		"pivot t on s; select 1":                false,
+		"pivot t on s;; select 1":               false,
+		"select xe'\\' ; pivot t on s":          false, // xe is a name, not E'': the ; is outside
+		"select e'\\' ; x' from (pivot t on s)": true,  // E'': \' is a quote, the ; is inside
+		"select 1 -- ; \n pivot t on s":         true,
+		"select \"a;\" from (pivot t on s)":     true,
+	} {
+		if got := implicitStatementsOnly(q); got != want {
+			t.Errorf("implicitStatementsOnly(%q) = %v", q, got)
+		}
+	}
+	// the same lexer guards filters: xe'\' is a name and a one-character string
+	if _, err := whereSQL("s = xe'\\' ) OR (1"); err == nil || !strings.Contains(err.Error(), "closes nothing") {
+		t.Errorf("xe'\\': %v", err)
+	}
+}
