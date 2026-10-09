@@ -284,7 +284,8 @@ Intended differences from Python pqx, each listed in its PR:
 - **Exactness.** Decimals wider than 38 digits are exact; float16 subnormals decode right; float32 raw values print in their shortest form.
 - **Sorting a file with its own `file_row_number` column** breaks ties on up to 64 columns, so paging is consistent (Python repeats or skips rows: issue #51).
 - **Export** writes a temporary file of its own and renames it over the target, keeping the umask; it refuses read-only and directory targets (Python's export can truncate the file being explored: issue #44).
-- **Grid.** A number column cut off at the right edge shows blank cells, not a truncated number; a failed column is reported once per view; the cache holds 4,000 rows per view.
+- **Grid.** A column cut off at the right edge is cropped as Python's DataTable crops it, numbers too (parity decision 1; the blank cells tried first were reverted in `a83191c`); a failed column is reported once per view; the cache holds 4,000 rows per view.
+- **Column types in a sorted view.** A dictionary column's header type stays `dict<str>` (the file's type) in every view; Python shows `str` once the view is sorted (DuckDB's result type) and `dict<str>` otherwise. Integrator decision 2026-10-09, pending the owner's confirmation (real-data run, finding 7).
 - **Suspend** stops only pqx; SIGHUP and SIGQUIT restore the terminal; SIGINT quits quietly. Known limitation, as in Python: a wrapper that doesn't exec pqx, with SIGTSTP sent to pqx alone, leaves pqx stopped until SIGCONT (Ctrl+Z stops the whole job and works).
 - **formats.yaml** is read as PyYAML's `safe_load` reads it, and Go refuses (never rewrites) the few odd files it can't read the same way; stale temporary files are cleaned up.
 - **Limits** where Python would allocate without bound: 16M cells for histograms and 2-D bins; strftime output capped as Python's buffer is; YAML nesting and merge expansion bounded.
@@ -391,3 +392,141 @@ notarization of the archives.
 - **Note**: the xy plot's bins move by a cell between runs on the same file
   (the "count" legend reads 298, 299 or 300), as in Python: the range comes from
   DuckDB's `approx_quantile`, which isn't deterministic across threads.
+
+### Real data and benchmarks (2026-10-09)
+
+**Machine.** The shared SDF node (AMD EPYC 7713P, 128 cores, 503 GiB, Rocky
+Linux 10.2); load average 10–14 throughout, no other heavy jobs. Go pqx built
+from `native-port` at `c59e347` (`make build VERSION=0.3.0`); Python pqx 0.2.0
+from `/root/parquet-explorer/.venv`. The real files are the read-only delivery
+of 2026-10-06; wide300 (200,000 × 300, 4 row groups) and rg2000 (2,000,000 ×
+20, 2,000 row groups of 1,000) were written by `bench.py --gen` into
+`/dev/shm` and deleted afterwards; every export went to `/dev/shm`.
+
+**What was run.**
+
+- `go/bench/pty/bench.py --targets /dev/shm/realdata --apps python,go --runs 3`
+  (one warm-up run each, 200×50, `--threads 8`, serially).
+- The same harness on the prototype binary (`54400ea`, rebuilt) and on the
+  current one, 5 runs each, to separate harness effects from app changes.
+- The grid's frame benchmarks (`go test -bench Frame ./internal/ui/grid`).
+- Peak RSS with `/usr/bin/time -v` around each app in the pty.
+- A scripted walk through every tab and the main actions with the Go binary
+  on all five files (and the same steps with Python pqx on SSObject and
+  SSSource, to compare screens); counts checked against DuckDB 1.5.6.
+
+**Targets** (medians in ms; Python and the prototype for comparison; the
+"prototype" column is `bench.py`'s table of the prototype's slowest runs, the
+"proto, same harness" column the prototype binary rerun now, median of 5):
+
+| metric | file | target | Go | Python | prototype | proto, same harness |
+|---|---|---|---|---|---|---|
+| first screen | SSSource | 250 | **203** | 3,462 | 174 | 144 |
+| first screen | rg2000 | 400 | **361** (one run of 8 at 402) | 1,409 | 319 | 274 |
+| first screen | mpc_orbits | – | 201 | 4,323 | 213 | 153 |
+| first screen | wide300 | – | 193 | 3,110 | 182 | 135 |
+| PgDn | SSSource / mpc_orbits / wide300 / rg2000 | 50 | **29 / 20 / 24 / 17** | 56 / 42 / 49 / 55 | 44 / 41 / 46 / 48 | 25 / 28 / 18 / 27 |
+| `g` to the middle | SSSource / mpc_orbits / wide300 / rg2000 | 150 | **71 / 150 / 60 / 56** | 245 / 254 / 209 / 127 | 66 / 140 / 69 / 41 | 60 / 130 / 67 / 26 |
+| Ctrl+End | SSSource / mpc_orbits / wide300 / rg2000 | 150 | **63 / 67 / 65 / 52** | 200 / 148 / 145 / 106 | 65 / 57 / 66 / 41 | 63 / 65 / 32 / 44 |
+| Esc until "cancelled" | SSSource | 100 | **77** | 114 | 66 | – |
+| frame, 300 columns (in the app) | `BenchmarkFrame` / `FramePage` / `FrameScroll` | 5 | **2.6 / 3.2 / 3.1** | – | – | – |
+| → on wide300, pty bytes (upper bound) | wide300 | – | 9 | 25 | – | – |
+
+Every target is met; `g` on mpc_orbits is at the limit (150 ms median, runs
+141–162; 146 in a second set of 5). Against the prototype's numbers, `bench.py`
+flags rg2000 `g` (56 against 41) and Ctrl+End (52 against 41), and mpc_orbits
+Ctrl+End in the 5-run set (72 against 68); see the findings.
+
+**Memory** (peak RSS, 3 runs each): opening SSSource and waiting for the first
+screen and the footer scan, Go **114–119 MiB**, Python 205–208 MiB; with `g`
+to 50%, Ctrl+End, the sky map and the Stats tab as well, Go **168–173 MiB**,
+Python 271–346 MiB.
+
+**Real-data walk.** On SSSource, mpc_orbits, SSObject, wide300 and rg2000:
+open; Schema, Metadata, Stats and Plot (`r` to rotate); a filter; export of
+the filtered view to Parquet; `x`; a `select … from t` query; `x`; `s` on a
+column, `d` (details pane), Esc, `s s`; `=` on a cell; `x`; `i` on a numeric
+and (where there is one) a string column. Every screen was checked for
+escape sequences or stray bytes on the screen, pyte parse errors, `✗`
+messages and panics: none. Each session quit with status 0; the only OSC the
+app wrote is the window title (OSC 2).
+
+| file | filter → rows (DuckDB) | `=` → rows (DuckDB) | export | SQL result |
+|---|---|---|---|---|
+| SSSource | `band = 'r' and apMag < 21` → 546,646 (546,646) | `band = 'i'` → 2,537,993 (2,537,993) | 546,646 × 184, same rows (hash of `diaSourceId, obsid`) | per-band counts and means equal DuckDB's |
+| mpc_orbits | `e > 0.3 and q < 1.3` → 32,364 (32,364) | `orbit_type_int = 2` → 6,886 (6,886) | 32,364 × 53 | 14 groups equal DuckDB's, NULL group included |
+| SSObject | `nObs > 100` → 9,433 (9,433) | `nObs = 145` → 45 (45) | 9,433 × 80 | equal |
+| wide300 | `c000 > 0 and c001 < 0` → 49,938 (49,938) | `id = 58385` → 1 (1) | 49,938 × 300, no row outside the filter | equal |
+| rg2000 | `c00 > 1 and c01 < 0` → 158,685 (158,685) | `id = 1389459` → 1 (1) | 158,685 × 20 | equal |
+
+Also checked: the Metadata row groups add up to the row count; the Schema
+tab's nulls, min and max and the Stats tab's nulls, min, max and mean for
+`a` (mpc_orbits) equal DuckDB's; the sky map of SSSource (`ra` × `dec`, found
+automatically) covers dec −52° to +18° and rotates; a sort on
+`midpointMjdTai` starts at the Schema tab's minimum; the cursor keeps its
+record across `=` and `x`.
+
+Go against Python on the same steps (SSObject, SSSource): open, Schema,
+Metadata, data, filter, export dialog, SQL, sort and details screens are
+identical apart from timings in the status line; Stats quantiles differ
+within `approx_quantile`'s run-to-run spread (exact p1 of SSSource `ra` 4.82;
+Go 5.33, Python 5.07). The differences found are in the findings.
+
+**Findings.**
+
+1. **First screen is 50–90 ms later than the prototype's** in the same
+   harness (SSSource 202 against 144 ms, rg2000 362 against 274 ms), still
+   within the targets. Two causes:
+   - The first frame is about 30 KB (the Python layout: borders, filter box,
+     tab strip, types row, styles) against the prototype's 4–13 KB, and the
+     harness's emulator (pyte) takes about 10 ms per 4 KB. On the raw pty
+     bytes the frame with row 0 is complete at 143 ms on wide300 (prototype
+     117 ms), so the app itself is about 25 ms slower; the rest is the
+     measurement.
+   - On rg2000, `data.Open` waits for DuckDB's bind before returning
+     (`internal/data/open.go:157`, `<-d.bound`): DuckDB reads the 2,000-row-group
+     footer in about 155 ms, arrow-go in about 76 ms, so the first byte comes
+     about 100 ms later than the prototype's. rg2000 is 361 ms median, with
+     one run of 8 at 402 ms, just over 0.4 s. Not waiting for the bind before
+     the first frame (DuckDB's types are needed for formatting, so this is a
+     design choice) would give that margin back. Issue #93.
+2. **`g` to the middle of mpc_orbits is at the 150 ms limit** (prototype 130 ms
+   in the same harness). The read is 754 rows × 7 columns, 95–105 ms: the
+   row window is Python's (`pageRows`, `internal/ui/grid/layout.go:226`,
+   40,000 cells / 53 columns; used by `readRange`,
+   `internal/ui/grid/cache.go:230`), where the prototype read three screens;
+   most of the time is arrow-go decompressing the pages before the row in the
+   large `mpc_orb_jsonb` string chunk (`readDirect`,
+   `internal/data/plain.go:78`). Fitting widths over the 754 rows
+   (`onPage`) adds 7–10 ms. Issue #94.
+3. **rg2000 `g` and Ctrl+End** are flagged against the prototype's table
+   (56 and 52 ms against 41), but the prototype rerun in the same harness is
+   bimodal (25 or 61 ms) and both are far under the 150 ms target: not a
+   regression worth chasing.
+4. **Frame**: the 5 ms target holds inside the app (2.6–3.4 ms for a whole
+   frame, `internal/ui/grid/bench_test.go`). The pty measurement (9 ms) adds
+   the pty and the input path and is an upper bound, as the parity README says.
+5. **Two quick `s` presses** (ascending → `s s`) leave the sort descending
+   instead of turning it off: `sortBy` (`internal/ui/grid/actions.go:152`)
+   reads `g.st.View`, which the first press's `SetViewMsg` (sent as a
+   command, line 170) hasn't changed yet. Python misbehaves differently on
+   the same keys (it sorted by another column). Minor.
+6. **Stats column list**: a name of 29 characters or more
+   (`midpointMjdTai_flag_degraded`) has its type cut to `b` on the same line;
+   Python wraps the type to the next line. `cursorlist.Fit` cuts every item
+   to one line (`internal/ui/cursorlist/cursorlist.go:203`). Minor parity
+   difference.
+7. **Types in a sorted view**: dictionary columns' header type is
+   `dict<str>` in Go in every view; Python shows `str` once the view is
+   sorted (DuckDB's result type) and `dict<str>` otherwise. Go takes the
+   file's type (`internal/ui/grid/layout.go:130`). Listed as intended
+   above (integrator decision, pending the owner's confirmation).
+8. **Cropped numbers**: the partly visible last column shows the first
+   characters of each number (1,197.9 shows as `11`), as Python does; this
+   doc's decisions list still said such cells were blank, which was reverted
+   in `a83191c` (parity decision 1). Corrected above.
+9. Harness notes, not pqx bugs: the export toast reads `Wrote 546.6k rows`
+   (`HumanCount`), so a check must not expect digits only; in Python pqx,
+   Ctrl+U in the export dialog's path field doesn't always clear it before
+   typing, so the Python exports in this walk went to a mangled path and
+   failed (and were not compared).
