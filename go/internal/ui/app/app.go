@@ -4,9 +4,7 @@
 // stacks dialogs over the screen without moving it, runs the Esc rules, and
 // broadcasts the parts' messages (kit) to every part.
 //
-// The parts come from Parts; a nil part shows a placeholder. Until the grid
-// is ported (WP7), the prototype's model (internal/ui) is the Data tab as a
-// Legacy part: it draws everything below the title bar itself.
+// The parts come from Parts; a nil part shows a placeholder.
 package app
 
 import (
@@ -29,9 +27,6 @@ type Parts struct {
 	Filter, Grid, Detail      kit.Pane
 	Schema, Stats, Plot, Meta kit.Pane
 	Chrome                    kit.Chrome
-	// Legacy, if set, is the Data tab drawn whole below the title bar, with
-	// every key but the tab keys (the prototype, until WP7 replaces it).
-	Legacy kit.Pane
 }
 
 // Layout constants (Python pqx's layout).
@@ -84,19 +79,13 @@ func (a *App) parts() map[string]kit.Pane {
 	return map[string]kit.Pane{
 		"filter": a.p.Filter, "grid": a.p.Grid, "detail": a.p.Detail,
 		"schema": a.p.Schema, "stats": a.p.Stats, "plot": a.p.Plot, "meta": a.p.Meta,
-		"legacy": a.p.Legacy,
 	}
 }
 
 // focused is the pane with focus, or nil.
 func (a *App) focused() kit.Pane {
-	if a.legacyData() {
-		return a.p.Legacy
-	}
 	return a.parts()[a.focus]
 }
-
-func (a *App) legacyData() bool { return a.p.Legacy != nil && a.tab == kit.TabData }
 
 // typing reports whether a text input has focus (single-letter keys are
 // then text, not commands).
@@ -113,7 +102,7 @@ func (a *App) typing() bool {
 // broadcast sends msg to every part (and the chrome).
 func (a *App) broadcast(msg tea.Msg) tea.Cmd {
 	var cmds []tea.Cmd
-	for _, name := range []string{"filter", "grid", "detail", "schema", "stats", "plot", "meta", "legacy"} {
+	for _, name := range []string{"filter", "grid", "detail", "schema", "stats", "plot", "meta"} {
 		if p := a.parts()[name]; p != nil {
 			cmds = append(cmds, p.Update(msg))
 		}
@@ -140,11 +129,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.w, a.h = msg.Width, msg.Height
-		var cmd tea.Cmd
-		if a.p.Legacy != nil {
-			cmd = a.p.Legacy.Update(tea.WindowSizeMsg{Width: a.w, Height: max(1, a.h-titleRows)})
-		}
-		return a, tea.Batch(cmd, a.broadcast(msg))
+		return a, a.broadcast(msg)
 	case tea.KeyPressMsg:
 		// the chrome sees input too: a key may start a task, and its
 		// spinner starts at once
@@ -204,9 +189,6 @@ func (a *App) onKey(k tea.KeyPressMsg) tea.Cmd {
 		if len(s) == 1 && s >= "1" && s <= "5" {
 			return a.switchTab(kit.Tab(s[0] - '1'))
 		}
-	}
-	if a.legacyData() {
-		return a.p.Legacy.Update(k)
 	}
 	if !a.typing() {
 		switch s {
@@ -351,12 +333,6 @@ func (a *App) onMouse(msg tea.MouseMsg) tea.Cmd {
 		x, y := a.dialogPos(d)
 		return d.Update(shift(msg, x, y))
 	}
-	if a.legacyData() {
-		if m.Y < titleRows {
-			return nil
-		}
-		return a.p.Legacy.Update(shift(msg, 0, titleRows))
-	}
 	if _, ok := msg.(tea.MouseClickMsg); ok && m.Y >= titleRows+filterRows {
 		if t, ok := a.tabAt(m.X, m.Y); ok {
 			return a.switchTab(t)
@@ -398,9 +374,6 @@ func (a *App) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = "pqx " + fmtx.Sanitize(baseName(a.env.DS.Path()), false)
-	if q, ok := a.p.Legacy.(interface{ Quitting() bool }); ok && q.Quitting() {
-		a.quitting = true
-	}
 	if a.quitting || a.w <= 0 || a.h <= 0 {
 		return v
 	}
@@ -496,17 +469,6 @@ func (a *App) render() (string, *tea.Cursor) {
 	ch := a.p.Chrome
 	var b strings.Builder
 	b.WriteString(edgeLine(ch.TitleBar(max(1, a.w-2*margin)), a.w))
-	if a.legacyData() {
-		b.WriteString("\n")
-		b.WriteString(a.p.Legacy.View(a.w, a.h-titleRows))
-		var cur *tea.Cursor
-		if c, ok := a.p.Legacy.(kit.Cursored); ok {
-			if cur = c.Cursor(); cur != nil {
-				cur.Position.Y += titleRows
-			}
-		}
-		return b.String(), cur
-	}
 	b.WriteString("\n" + strings.Repeat(" ", a.w)) // the blank row under the title
 	var cur *tea.Cursor
 	place := func(name string, p kit.Pane, x, y, w, h int) string {
