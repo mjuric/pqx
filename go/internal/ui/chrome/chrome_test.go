@@ -428,3 +428,28 @@ func TestStatusNoRowBeforeTheFirstRead(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// A sort keeps the count and its time (Python's _sort_by): none for the
+// whole file sorted, the filter's for a filtered view sorted.
+func TestASortKeepsTheCountTime(t *testing.T) {
+	c, env, clk := setup(demo())
+	st := env.State
+	st.View = data.View{OrderBy: []data.Sort{{Column: "mag"}}}
+	c.Update(kit.ViewChangedMsg{})
+	c.Update(kit.TotalMsg{})
+	if got := plain(c.StatusLine(150)); strings.Contains(got, " s  ·") {
+		t.Errorf("whole file sorted: %q", got)
+	}
+	st.View, st.Total = data.View{Where: "mag < 19"}, -1
+	c.Update(kit.ViewChangedMsg{})
+	clk.t = clk.t.Add(1500 * time.Millisecond)
+	st.Total = 1234
+	c.Update(kit.TotalMsg{})
+	clk.t = clk.t.Add(3 * time.Second)
+	st.View = data.View{Where: "mag < 19", OrderBy: []data.Sort{{Column: "mag", Desc: true}}}
+	c.Update(kit.ViewChangedMsg{})
+	c.Update(kit.TotalMsg{}) // (a read finding the end: not a new count)
+	if got := plain(c.StatusLine(150)); !strings.Contains(got, "sorted mag ↓  ·  1.50 s") {
+		t.Errorf("filter sorted: %q", got)
+	}
+}
