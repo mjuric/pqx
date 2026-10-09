@@ -43,6 +43,10 @@ type Palette struct {
 	Background, Surface, Panel, Foreground string
 	Primary, Secondary, Accent             string
 	Warning, Error, Success                string
+	// Scrollbar and ScrollbarBackground are Textual's $scrollbar (the
+	// thumb) and $scrollbar-background (the track), which it derives from
+	// the palette.
+	Scrollbar, ScrollbarBackground string
 }
 
 // Palettes are the named themes, from Textual 8's theme.py.
@@ -51,26 +55,31 @@ var Palettes = map[string]Palette{
 		Background: "#1A1B26", Surface: "#24283B", Panel: "#414868", Foreground: "#a9b1d6",
 		Primary: "#BB9AF7", Secondary: "#7AA2F7", Accent: "#FF9E64",
 		Warning: "#E0AF68", Error: "#F7768E", Success: "#9ECE6A",
+		Scrollbar: "#4F4270", ScrollbarBackground: "#070817",
 	},
 	"dracula": {
 		Background: "#282A36", Surface: "#2B2E3B", Panel: "#313442", Foreground: "#F8F8F2",
 		Primary: "#BD93F9", Secondary: "#6272A4", Accent: "#FF79C6",
 		Warning: "#FFB86C", Error: "#FF5555", Success: "#50FA7B",
+		Scrollbar: "#5A4A79", ScrollbarBackground: "#181A25",
 	},
 	"catppuccin-mocha": {
 		Background: "#181825", Surface: "#313244", Panel: "#45475a", Foreground: "#cdd6f4",
 		Primary: "#F5C2E7", Secondary: "#cba6f7", Accent: "#fab387",
 		Warning: "#FAE3B0", Error: "#F28FAD", Success: "#ABE9B3",
+		Scrollbar: "#644E69", ScrollbarBackground: "#040216",
 	},
 	"nord": {
 		Background: "#2E3440", Surface: "#3B4252", Panel: "#434C5E", Foreground: "#D8DEE9",
 		Primary: "#88C0D0", Secondary: "#81A1C1", Accent: "#B48EAD",
 		Warning: "#EBCB8B", Error: "#BF616A", Success: "#A3BE8C",
+		Scrollbar: "#48626F", ScrollbarBackground: "#1E242F",
 	},
 	"gruvbox": {
 		Background: "#282828", Surface: "#3c3836", Panel: "#504945", Foreground: "#fbf1c7",
 		Primary: "#85A598", Secondary: "#A89A85", Accent: "#fabd2f",
 		Warning: "#fe8019", Error: "#fb4934", Success: "#b8bb26",
+		Scrollbar: "#43504B", ScrollbarBackground: "#181818",
 	},
 }
 
@@ -161,7 +170,9 @@ func New(accent, dim, border, name string) (*Theme, error) {
 
 // Style is the styled.Style for a role (kit.Look): "accent", "dim",
 // "border", "border-focus", "error", "warning", "success", "header",
-// "cursor" (reverse video) or "selection".
+// "cursor" (reverse video), "selection" or "scrollbar" (Fg the thumb, Bg
+// the track: the unfocused border colour on the terminal's background, as
+// pqx's own theme sets them, or a named theme's Textual scrollbar colours).
 func (t *Theme) Style(role string) styled.Style {
 	switch role {
 	case "accent":
@@ -186,6 +197,12 @@ func (t *Theme) Style(role string) styled.Style {
 		return styled.Style{Bold: true}
 	case "cursor", "selection":
 		return styled.Style{Reverse: true}
+	case "scrollbar":
+		if t.named {
+			p := Palettes[t.Name]
+			return styled.Style{Fg: styled.Color(p.Scrollbar), Bg: styled.Color(p.ScrollbarBackground)}
+		}
+		return styled.Style{Fg: "border"}
 	}
 	return styled.Style{}
 }

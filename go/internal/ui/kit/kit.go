@@ -56,7 +56,8 @@ type Look interface {
 	Render(t styled.Text) string
 	// Style is the style for a role: "accent", "dim", "border",
 	// "border-focus", "error", "warning", "success", "header", "cursor"
-	// (reverse video), "selection".
+	// (reverse video), "selection", "scrollbar" (Fg the thumb, Bg the
+	// track).
 	Style(role string) styled.Style
 	DarkBG() bool
 }

@@ -307,3 +307,33 @@ func TestPaint(t *testing.T) {
 		t.Errorf("two lines: %q", got)
 	}
 }
+
+// The scrollbar role: pqx's own theme's (the border colour on the
+// terminal's background), or a named theme's Textual $scrollbar and
+// $scrollbar-background (textual 8.2.8's ColorSystem.generate).
+func TestScrollbarRole(t *testing.T) {
+	plain, _ := New("blue", "faint", "", "")
+	if s := plain.Style("scrollbar"); s.Fg != "border" || s.Bg != "" {
+		t.Fatalf("plain %+v", s)
+	}
+	tn, _ := New("blue", "faint", "", "tokyo-night")
+	if s := tn.Style("scrollbar"); s.Fg != "#4F4270" || s.Bg != "#070817" {
+		t.Fatalf("tokyo-night %+v", s)
+	}
+	for _, n := range Names {
+		if p := Palettes[n]; p.Scrollbar == "" || p.ScrollbarBackground == "" {
+			t.Errorf("%s has no scrollbar colours", n)
+		}
+	}
+}
+
+// Paint keeps a 256-colour cube grey that Render already reduced (59,
+// #5f5f5f), rather than reducing it again to the grey ramp (240).
+func TestPaintKeepsReducedColours(t *testing.T) {
+	th, _ := New("blue", "faint", "", "tokyo-night")
+	th.SetProfile(colorprofile.ANSI256)
+	out := th.Paint(th.Render(styled.New("x", th.Style("scrollbar"))), 1)
+	if !strings.Contains(out, "38;5;59") || strings.Contains(out, "38;5;240") {
+		t.Fatalf("%q", out)
+	}
+}
