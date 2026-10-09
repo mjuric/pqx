@@ -796,3 +796,26 @@ func TestMapHeaderNamesItsEntries(t *testing.T) {
 		t.Errorf("header %q", sub)
 	}
 }
+
+// s pressed again before the first press's view is applied cycles on from
+// the sort it asked for, and the views arrive in order.
+func TestQuickSortPresses(t *testing.T) {
+	for _, c := range []struct {
+		presses int
+		want    []data.Sort
+	}{
+		{2, []data.Sort{{Column: "c002", Desc: true}}},
+		{3, nil},
+		{4, []data.Sort{{Column: "c002"}}},
+	} {
+		h := newHarness(t, newFake(1000, 5), 120, 30)
+		h.press("right", "right")
+		for i := 0; i < c.presses; i++ {
+			h.send(kp("s")) // (no settling in between)
+		}
+		h.settle()
+		if got := h.env.State.View.OrderBy; len(got) != len(c.want) || (len(got) > 0 && got[0] != c.want[0]) {
+			t.Errorf("%d presses: order %+v, want %+v", c.presses, got, c.want)
+		}
+	}
+}
