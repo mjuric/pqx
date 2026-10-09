@@ -9,7 +9,7 @@ threads: 1
 steps:
   - keys: "3"
     wait: 'Profiled diaSourceId'
-  - check: stats
-    expect: 'sampled'
+  # a random sample: the numbers differ between runs, so only the label is checked
+    expect: '! Profiled diaSourceId, sampled'
   - keys: m
     toast: 'Sampling off'
