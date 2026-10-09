@@ -41,3 +41,7 @@ func unusedDir(dir string) (*os.File, bool) {
 	}
 	return f, true
 }
+
+// writable reports whether the process may write to the existing file at
+// path (a variable so tests, which run as root, can stand in for it).
+var writable = func(path string) bool { return syscall.Access(path, 2 /* W_OK */) == nil }

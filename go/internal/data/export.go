@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/duckdb/duckdb-go/v2"
 )
@@ -175,10 +174,6 @@ func finishExport(tmp, out string) error {
 	}
 	return safeErr(os.Rename(tmp, out))
 }
-
-// writable reports whether the process may write to the existing file at
-// path (a variable so tests, which run as root, can stand in for it).
-var writable = func(path string) bool { return syscall.Access(path, 2 /* W_OK */) == nil }
 
 // exportPath is path expanded and absolute, unless it is the file being
 // explored: the same path, or (when it exists) the same file.

@@ -176,8 +176,13 @@ jobs:
       - name: auditwheel
         if: matrix.container
         run: |
-          auditwheel show dist/*.whl | tee audit.txt
-          grep -q '"${{ matrix.plat }}"' audit.txt || { echo "::error::not consistent with ${{ matrix.plat }}"; exit 1; }
+          auditwheel show dist/*.whl 2>&1 | tee audit.txt
+          # auditwheel names the most compatible tag the wheel meets; it must be
+          # manylinux_2_28 or older, with no ISA extensions beyond the baseline
+          glibc=$(grep -o '"manylinux_2_[0-9]*_' audit.txt | head -1 | tr -dc 0-9 | cut -c2-)
+          if [ -z "$glibc" ] || [ "$glibc" -gt 28 ] || grep -qi 'unsupported ISA\|instruction set' audit.txt; then
+            echo "::error::the wheel doesn't meet ${{ matrix.plat }}"; exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
