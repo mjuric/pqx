@@ -4,8 +4,8 @@ import "testing"
 
 func TestPanicHook(t *testing.T) {
 	called := false
-	PanicHook = func() { called = true }
-	defer func() { PanicHook = nil }()
+	SetPanicHook(func() { called = true })
+	defer SetPanicHook(nil)
 	func() {
 		defer func() {
 			if r := recover(); r != "boom" {
