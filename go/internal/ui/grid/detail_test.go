@@ -410,7 +410,7 @@ func TestDetailEquals(t *testing.T) {
 		t.Fatalf("record %d after the first =", h.record())
 	}
 	h.press("=")
-	if want := fmt.Sprintf("(band = '%s') and detector = %d", band, det); st.View.Where != want || h.record() != 15_000 {
+	if want := fmt.Sprintf("band = '%s' and detector = %d", band, det); st.View.Where != want || h.record() != 15_000 {
 		t.Fatalf("%q, want %q; record %d", st.View.Where, want, h.record())
 	}
 	if !p.Focused() || p.Selected() != "detector" || !strings.Contains(keysOf(p), "= match") {

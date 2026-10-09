@@ -36,7 +36,10 @@ type viewData struct {
 	vals    map[string]map[int64]any     // column -> view row -> value (or failedCell)
 	text    map[string]map[int64]*cellTx // column -> view row -> formatted cell
 	colW    map[string]int               // column text widths, grown as cells are drawn
-	labelW  int                          // row-label width, grown likewise
+	labelW  int                          // row-label width before rows are read
+	pageOff int64                        // the window row labels are sized for (labelWidth)
+	lwKey   [3]int64                     // labelWidth's last answer, for (window, end, rows read)
+	lwVal   int
 
 	confirmed bool // a read of this view has succeeded
 
@@ -565,7 +568,6 @@ func (g *Grid) store(start int64, n int, w data.Window) {
 			fr = r
 		}
 		d.fileRow[r] = fr
-		d.labelW = max(d.labelW, len(commas(g.labelOf(r))))
 	}
 	for name, vals := range w.Cols {
 		for i, v := range vals {

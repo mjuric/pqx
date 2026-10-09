@@ -202,8 +202,65 @@ func (g *Grid) right() int { return max(edgeCells, g.w-edgeCells) }
 
 // labelSlot is the row labels' slot.
 func (g *Grid) labelSlot() slot {
-	lw := g.v.labelW
+	lw := g.labelWidth()
 	return slot{col: -1, x: edgeCells, w: lw, sw: lw + 2*pad}
+}
+
+// pageRows is the number of rows in a window of Python pqx's grid (its
+// GridTable.window): its row labels are as wide as the widest label in the
+// window, so the grid sizes its row labels for the same rows.
+func (g *Grid) pageRows() int64 {
+	return int64(max(150, min(1000, 40_000/max(1, len(g.ds.Columns())))))
+}
+
+// followPage moves the window the row labels are sized for when the cursor
+// leaves it, as Python pqx loads a new window centred on the row it seeks
+// to (_seek_to).
+func (g *Grid) followPage() {
+	d, w := g.v, g.pageRows()
+	if g.curRow >= d.pageOff && g.curRow < d.pageOff+w {
+		return
+	}
+	off := max(0, g.curRow-w/2)
+	if d.total >= 0 {
+		off = max(0, min(off, d.total-w))
+	}
+	d.pageOff = off
+}
+
+// labelWidth is the row labels' width: the widest label in the window
+// (positions, or file rows where the view has them; labels of rows not
+// read yet are left out).
+func (g *Grid) labelWidth() int { return g.labelWidthOf(g.v) }
+
+func (g *Grid) labelWidthOf(d *viewData) int {
+	end := d.pageOff + g.pageRows()
+	if lim := d.limit(); lim >= 0 {
+		end = min(end, lim)
+	} else {
+		end = min(end, max(d.known, d.hope))
+	}
+	if end <= d.pageOff {
+		return max(1, d.labelW)
+	}
+	if d.view.Plain() || d.view.IsSQL() {
+		return len(commas(end - 1)) // labels are positions (file rows in the plain view)
+	}
+	key := [3]int64{d.pageOff, end, int64(len(d.fileRow))}
+	if d.lwKey == key && d.lwVal > 0 {
+		return d.lwVal
+	}
+	w := 1
+	for r, fr := range d.fileRow {
+		if r >= d.pageOff && r < end {
+			if fr < 0 {
+				fr = r // (a view without file rows: positions)
+			}
+			w = max(w, len(commas(fr)))
+		}
+	}
+	d.lwKey, d.lwVal = key, w
+	return w
 }
 
 // layout places the pinned columns, then the scrollable ones from g.left
@@ -338,6 +395,7 @@ func (g *Grid) keepCursorInView(fn func()) {
 func (g *Grid) clampCursor() {
 	g.curRow = max(0, min(g.curRow, g.v.lastRow()))
 	g.curCol = max(0, min(g.curCol, len(g.cols)-1))
+	g.followPage()
 }
 
 // scrollToCursor moves the view so the cursor's cell is on screen. A

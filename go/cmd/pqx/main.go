@@ -7,9 +7,11 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"strings"
 	"syscall"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/fmtx"
@@ -70,7 +72,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if errors.As(err, &pe) {
 			err = pe.Err
 		}
-		fmt.Fprintf(stderr, "pqx: cannot open %s: %s\n", path, fmtx.Sanitize(err.Error(), false))
+		msg := fmtx.Sanitize(err.Error(), false)
+		msg = strings.TrimPrefix(msg, path+": ") // the data layer names the file too
+		fmt.Fprintf(stderr, "pqx: cannot open %s: %s\n", path, msg)
 		return 1
 	}
 	switch {
@@ -81,6 +85,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	ds, err := data.Open(o.Path, data.Options{Threads: o.Threads})
 	if err != nil {
+		if m := notParquet(o.Path); m != "" {
+			err = errors.New(m) // say what Python pqx (PyArrow) says
+		}
 		return cantOpen(err)
 	}
 	defer ds.Close()
@@ -117,7 +124,35 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Stats:  stats.New(env),
 		Plot:   plot.New(env),
 	}
-	return runApp(app.New(env, parts), stderr)
+	return runApp(app.New(env, parts), look, stderr)
+}
+
+// notParquet is PyArrow's error for a file that can't be Parquet (too
+// small for a footer, or without the magic bytes at its end), or "".
+func notParquet(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		return ""
+	}
+	if st.Size() == 0 {
+		return "Parquet file size is 0 bytes"
+	}
+	if st.Size() < 8 {
+		return fmt.Sprintf("Parquet file size is %d bytes, smaller than the minimum file footer (8 bytes)", st.Size())
+	}
+	tail := make([]byte, 4)
+	if _, err := f.ReadAt(tail, st.Size()-4); err != nil {
+		return ""
+	}
+	if string(tail) != "PAR1" && string(tail) != "PARE" {
+		return "Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file."
+	}
+	return ""
 }
 
 // maxThreads is the most DuckDB threads --threads may ask for.
@@ -132,11 +167,15 @@ const (
 
 // runApp runs the app on the terminal, through the input filter and the
 // output wrapper, and puts the terminal back however it ends.
-func runApp(m tea.Model, stderr io.Writer) (code int) {
+func runApp(m tea.Model, look *theme.Theme, stderr io.Writer) (code int) {
 	s, err := term.Open()
 	if err != nil {
 		fmt.Fprintf(stderr, "pqx: %v\n", err)
 		return 1
+	}
+	if look != nil && s.Output() != nil {
+		// colours reduced for the terminal as Python pqx (Rich) reduces them
+		look.SetProfile(colorprofile.Detect(s.Output(), os.Environ()))
 	}
 	defer s.Close()
 	data.SetPanicHook(term.RestoreTerminal)

@@ -374,8 +374,8 @@ func TestClippedColumn(t *testing.T) {
 	c := g.cols[last.col]
 	tx, _ := g.cellText(last.col, g.top)
 	full := " " + tx.plain + strings.Repeat(" ", g.colWidth(c.Name)-tx.w+pad)
-	if c.right { // a cut number is left blank
-		full = strings.Repeat(" ", last.sw)
+	if c.right { // cropped as Python does, numbers too (parity decision 1)
+		full = strings.Repeat(" ", pad+g.colWidth(c.Name)-tx.w) + tx.plain + " "
 	}
 	line := h.grid()[headerRows]
 	got := ansi.Cut(line, last.x, last.x+last.sw)
@@ -643,32 +643,34 @@ func TestWiderGridFillsTheSpace(t *testing.T) {
 	}
 }
 
-// A number cut by the right edge isn't drawn (it would read as another
-// number); its header still names the column.
-func TestClippedNumbersAreBlank(t *testing.T) {
-	ds := openFixture(t, "demo")
-	for w := 60; w < 160; w++ {
-		h := newHarness(t, ds, w, 20)
-		g := h.g
-		h.grid()
-		slots := g.layout()
-		last := slots[len(slots)-1]
-		if !last.clipped || !g.cols[last.col].right || last.sw < 3 {
-			continue
-		}
-		gl := h.grid()
-		for i, l := range gl[headerRows:] {
-			if cut := ansi.Cut(l, last.x, last.x+last.sw); strings.TrimSpace(cut) != "" {
-				t.Errorf("width %d, row %d: clipped number drawn as %q", w, i, cut)
-			}
-		}
-		name := ansi.Cut(gl[0], last.x, last.x+last.sw)
-		if strings.TrimSpace(name) == "" {
-			t.Errorf("width %d: the clipped column's header is blank", w)
-		}
-		return
+// Row labels are as wide as the widest label of Python pqx's window around
+// the cursor: 1,000 rows of a 16-column file from the top, its last 1,000
+// at the end, and back.
+func TestRowLabelsSizedForPythonsWindow(t *testing.T) {
+	h := newHarness(t, newFake(20_000, 16), 150, 42)
+	g := h.g
+	if w := g.pageRows(); w != 1000 {
+		t.Fatalf("window %d rows", w)
 	}
-	t.Skip("no width clips a numeric column")
+	if lw := g.labelWidth(); lw != len("999") {
+		t.Errorf("first screen: labels %d wide", lw)
+	}
+	h.press("ctrl+end")
+	if lw := g.labelWidth(); lw != len("19,999") || g.v.pageOff != 19_000 {
+		t.Errorf("at the end: labels %d wide, window at %d", lw, g.v.pageOff)
+	}
+	h.press("ctrl+home")
+	if lw := g.labelWidth(); lw != len("999") {
+		t.Errorf("back at the top: labels %d wide", lw)
+	}
+	h.send(kit.GotoMsg{Row: 5000})
+	h.settle()
+	if lw := g.labelWidth(); g.v.pageOff != 4500 || lw != len("5,499") {
+		t.Errorf("after g 5000: window at %d, labels %d wide", g.v.pageOff, lw)
+	}
+	if gl := h.grid(); !strings.HasPrefix(gl[headerRows+5], "  5,000 ") && !strings.Contains(gl[headerRows], " 4,9") {
+		t.Logf("%q", gl[headerRows])
+	}
 }
 
 // The by-position fallback of readColumns refuses rows that moved.

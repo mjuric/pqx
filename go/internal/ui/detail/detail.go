@@ -66,6 +66,8 @@ type Grid interface {
 	// FieldKey runs the grid's own action for k (=, y, F, <, >) on column
 	// name of the record under the cursor.
 	FieldKey(name string, k tea.KeyPressMsg) tea.Cmd
+	// CursorColumn is the column of the grid's cursor ("" if none).
+	CursorColumn() string
 }
 
 // state of an entry's value.
@@ -430,15 +432,27 @@ func (p *Pane) setEntries(es []entry) {
 // if the selection moves, and reports whether it moved; a column the pane
 // doesn't show leaves it put.
 func (p *Pane) follow() bool {
-	for i := range p.entries {
-		if p.entries[i].name == p.st.Current {
-			return p.selectEntry(i)
+	// the current column; one the grid doesn't show (hidden, picked in
+	// Schema) leaves the grid on its column, and the pane with it (Python
+	// selects the grid's cursor column)
+	for _, name := range []string{p.st.Current, p.gridColumn()} {
+		for i := range p.entries {
+			if name != "" && p.entries[i].name == name {
+				return p.selectEntry(i)
+			}
 		}
 	}
 	if p.sel < 0 && len(p.entries) > 0 {
 		return p.selectEntry(0)
 	}
 	return false
+}
+
+func (p *Pane) gridColumn() string {
+	if p.grid == nil {
+		return ""
+	}
+	return p.grid.CursorColumn()
 }
 
 // selectEntry selects entry i, scrolling it into view if the selection

@@ -254,10 +254,12 @@ func (d *Dropdown) View(w, h int) string {
 	edge := func(s string) string { return look.Render(styled.New(s, bs)) }
 	iw := max(1, w-4) // border and padding
 	var top styled.Text
-	top.Append("┌─ ", bs)
+	top.Append("┌─", bs)
+	top.Append(" ", styled.Style{}) // plain spaces around the title, as Textual draws them
 	title := ansi.Truncate(d.Title(), max(1, w-6), "…")
 	top.Append(title, look.Style("dim"))
-	top.Append(" "+strings.Repeat("─", max(0, w-5-ansi.StringWidth(title)))+"┐", bs)
+	top.Append(" ", styled.Style{})
+	top.Append(strings.Repeat("─", max(0, w-5-ansi.StringWidth(title)))+"┐", bs)
 	lines := []string{look.Render(top)}
 	row := func(s string) { lines = append(lines, edge("│")+" "+cursorlist.Fit(s, iw)+" "+edge("│")) }
 	if d.searchable {

@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mjuric/pqx/go/internal/styled"
@@ -101,7 +102,8 @@ type Theme struct {
 	DimMode    string // one of DimModes
 
 	named   bool
-	fg, bg  rgb // a named theme's foreground and background
+	profile colorprofile.Profile // the terminal's; TrueColor (or Unknown) leaves colours as they are
+	fg, bg  rgb                  // a named theme's foreground and background
 	primary color.Color
 	border  color.Color
 
@@ -153,22 +155,7 @@ func New(accent, dim, border, name string) (*Theme, error) {
 		t.primary = prim.color()
 		t.border = blend(t.bg, prim, borderAlpha).color()
 	}
-	t.Base = t.Lip(styled.Style{})
-	t.Accent = t.Lip(styled.Style{Fg: "accent"})
-	t.Dim = t.Lip(styled.Style{Dim: true})
-	t.Border = t.Base.BorderForeground(t.border)
-	t.FocusBorder = t.Base.BorderForeground(t.primary)
-	if t.named {
-		t.Border = t.Border.BorderBackground(t.bg.color())
-		t.FocusBorder = t.FocusBorder.BorderBackground(t.bg.color())
-	}
-	t.Prompt = t.Base.Foreground(t.primary)
-	t.Error = t.Lip(styled.Style{Fg: "red"})
-	t.Warning = t.Lip(styled.Style{Fg: "yellow"})
-	t.Success = t.Lip(styled.Style{Fg: "green"})
-	t.Cursor = t.Lip(styled.Style{Reverse: true})
-	t.Header = t.Lip(styled.Style{Bold: true})
-	t.Selection = t.Lip(styled.Style{Reverse: true})
+	t.build()
 	return t, nil
 }
 
@@ -208,6 +195,26 @@ func (t *Theme) Style(role string) styled.Style {
 // pqx's theme does (dark=True).
 func (t *Theme) DarkBG() bool { return true }
 
+// build makes the role styles.
+func (t *Theme) build() {
+	t.Base = t.Lip(styled.Style{})
+	t.Accent = t.Lip(styled.Style{Fg: "accent"})
+	t.Dim = t.Lip(styled.Style{Dim: true})
+	t.Border = t.Base.BorderForeground(t.out(t.border))
+	t.FocusBorder = t.Base.BorderForeground(t.out(t.primary))
+	if t.named {
+		t.Border = t.Border.BorderBackground(t.out(t.bg.color()))
+		t.FocusBorder = t.FocusBorder.BorderBackground(t.out(t.bg.color()))
+	}
+	t.Prompt = t.Base.Foreground(t.out(t.primary))
+	t.Error = t.Lip(styled.Style{Fg: "red"})
+	t.Warning = t.Lip(styled.Style{Fg: "yellow"})
+	t.Success = t.Lip(styled.Style{Fg: "green"})
+	t.Cursor = t.Lip(styled.Style{Reverse: true})
+	t.Header = t.Lip(styled.Style{Bold: true})
+	t.Selection = t.Lip(styled.Style{Reverse: true})
+}
+
 // Named reports whether a named theme (fixed palette) is in use.
 func (t *Theme) Named() bool { return t.named }
 
@@ -217,7 +224,7 @@ func (t *Theme) Foreground() color.Color {
 	if !t.named {
 		return nil
 	}
-	return t.fg.color()
+	return t.out(t.fg.color())
 }
 
 // Background: see Foreground.
@@ -225,15 +232,15 @@ func (t *Theme) Background() color.Color {
 	if !t.named {
 		return nil
 	}
-	return t.bg.color()
+	return t.out(t.bg.color())
 }
 
 // Primary is the focus colour: focused borders, dialog borders, the filter
 // prompt. Without a named theme it is the accent.
-func (t *Theme) Primary() color.Color { return t.primary }
+func (t *Theme) Primary() color.Color { return t.out(t.primary) }
 
 // BorderColor is the colour of unfocused borders.
-func (t *Theme) BorderColor() color.Color { return t.border }
+func (t *Theme) BorderColor() color.Color { return t.out(t.border) }
 
 // ParseBorder parses a --border colour as Textual parsed Python pqx's
 // border variable: an ANSI name in lower case with or without the "ansi_"
@@ -303,10 +310,10 @@ func (t *Theme) Lip(s styled.Style) lipgloss.Style {
 		fg, bg = fgc.color(), bgc.color()
 	}
 	if fg != nil {
-		st = st.Foreground(fg)
+		st = st.Foreground(t.out(fg))
 	}
 	if bg != nil {
-		st = st.Background(bg)
+		st = st.Background(t.out(bg))
 	}
 	return st.Bold(s.Bold).Faint(s.Dim).Italic(s.Italic).Reverse(s.Reverse).Underline(s.Underline)
 }
