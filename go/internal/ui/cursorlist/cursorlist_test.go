@@ -77,3 +77,45 @@ func TestHighlightBeforeDrawn(t *testing.T) {
 		t.Fatalf("view %q", v)
 	}
 }
+
+// Items wrap as OptionList wraps its prompts (Rich's word wrap, long words
+// folded): the Stats list's "midpointMjdTai_flag_degraded  bool" puts bool
+// on the next line.
+func TestItemsWrap(t *testing.T) {
+	for _, c := range []struct {
+		text  string
+		lines []string
+	}{
+		{"midpointMjdTai_flag_degraded  bool", []string{"midpointMjdTai_flag_degraded", "bool"}},
+		{"a_very_long_column_name_that_needs_two_lines_or_more_x  f64", []string{"a_very_long_column_name_that_nee", "ds_two_lines_or_more_x  f64"}},
+		{"id                  i64", []string{"id                  i64"}},
+	} {
+		var got []string
+		for _, l := range Wrap(styled.New(c.text, styled.Style{}), 32) {
+			got = append(got, l.Plain)
+		}
+		if strings.Join(got, "|") != strings.Join(c.lines, "|") {
+			t.Errorf("Wrap(%q) = %q, want %q", c.text, got, c.lines)
+		}
+	}
+	// styles follow the text onto the next line
+	tx := styled.Text{Plain: "ab cd"}
+	tx.Spans = []styled.Span{{Start: 3, End: 5, Style: styled.Style{Bold: true}}}
+	if ls := Wrap(tx, 3); len(ls) != 2 || ls[1].Plain != "cd" || ls[1].Spans[0].Start != 0 || ls[1].Spans[0].End != 2 {
+		t.Errorf("styled wrap %+v", ls)
+	}
+	// a list of wrapped items: lines, highlight, At, scrolling
+	var l List
+	l.Width = 6
+	l.SetItems([]Item{{ID: "a", Text: styled.New("a", styled.Style{})}, {ID: "long", Text: styled.New("long long", styled.Style{})}, {ID: "c", Text: styled.New("c", styled.Style{})}})
+	if got := l.View(6, 4, plain); got != "a     \nlong  \nlong  \nc     " { // ("long " loses its space)
+		t.Fatalf("view %q", got)
+	}
+	if l.At(1) != 1 || l.At(2) != 1 || l.At(3) != 2 {
+		t.Errorf("At %d %d %d", l.At(1), l.At(2), l.At(3))
+	}
+	l.Highlight(1)
+	if got := l.View(6, 2, plain); got != "[long▄\n[long▄" { // (both lines reversed; the brackets take cells)
+		t.Errorf("highlighted wrapped item %q", got)
+	}
+}
