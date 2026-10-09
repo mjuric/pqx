@@ -5,6 +5,10 @@ covers:
   - "README Big files: Jumps anywhere."
 fixture: slow
 sizes: [[120, 40]]
+python_bug:
+  - checks: [row-1.5M, first]
+    region: keybar
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
 steps:
   - keys: g
     wait: 'Go to row[\s\S]*enter apply'

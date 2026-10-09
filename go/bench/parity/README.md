@@ -90,8 +90,9 @@ The full suite (80 scenarios, most at 2 sizes, 2 apps) takes about 15 minutes wi
 | CHANGED | listed, but fails differently: another status, or checkpoints not listed |
 | XPASS | listed in `expected_failures.yaml` but passes: remove it from the list |
 | SKIP | `same_version` scenario, and the two apps report different versions |
+| PYBUG | passes once a known Python bug's region is left out (see below) |
 
-The exit status is 0 when every result is PASS, XFAIL or SKIP.
+The exit status is 0 when every result is PASS, XFAIL, SKIP or PYBUG.
 
 A text difference is shown as the reference's line, the other app's line, and a line
 of `^` under the characters that differ:
@@ -286,6 +287,31 @@ rm /scratch/dir/wide300.parquet /scratch/dir/rg2000.parquet   # ~1 GB
 and wide300 and rg2000, written into DIR if missing; it prints a table of medians
 against the targets and against the Go prototype's numbers (+20% is a regression).
 `esc.sh` and `ptytime.py` are the prototype's scripts, kept for comparison.
+
+## Known Python bugs (PYBUG)
+
+A scenario can mark a region of some checkpoints as a known Python pqx bug, so that a
+correct Go screen isn't reported as a difference:
+
+```yaml
+python_bug:
+  - checks: [row-1234, half, last]   # these checkpoints
+    region: keybar                   # the last screen line
+    sizes: [[120, 40]]               # optional: only at these sizes
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
+```
+
+The region is left out of the text, style and colour comparison at those checkpoints.
+A scenario that passes only because of that is reported as PYBUG (not a failure), with
+the note; everything else on those screens is still compared.
+
+| scenario | checkpoints | bug |
+|---|---|---|
+| goto-row, goto-suffix | after each jump | the key bar keeps the filter box's keys after the go-to dialog closes |
+| format-F, formats-saved, detail-format | after the format dialog closes | the same, after the format dialog |
+| dialog-no-shift | after | the same, after the go-to and format dialogs |
+| export-csv, export-parquet, export-json | done | the same, after the export dialog |
+| columns-picker | applied, cancelled | the same, after the column picker |
 
 ## Python behaviour the scenarios work around
 

@@ -5,6 +5,10 @@ covers:
   - "README Column formats: pqx remembers your formats by column name, for every file, in ~/.config/pqx/formats.yaml"
 fixture: demo
 sizes: [[120, 40]]
+python_bug:
+  - checks: [set]
+    region: keybar
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
 steps:
   - keys: right right
   - keys: "<"

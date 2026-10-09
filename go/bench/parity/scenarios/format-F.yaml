@@ -5,6 +5,10 @@ covers:
   - "README Column formats: F takes a Python format spec (.2f, .3e, ,d, .1%); an empty entry goes back to automatic."
   - "help: **F** | set the cursor column's format: a Python spec (.2f, .3e, ,d) or a number of digits; empty resets it"
 fixture: demo
+python_bug:
+  - checks: [sci, percent, reset]
+    region: keybar
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
 steps:
   - keys: right right
   - keys: F

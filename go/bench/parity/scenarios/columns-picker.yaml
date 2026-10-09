@@ -5,6 +5,10 @@ covers:
   - "README Keys: c · - · p | choose columns · hide this column · pin columns"
   - "help: **c** | choose visible columns"
 fixture: demo
+python_bug:
+  - checks: [applied, cancelled]
+    region: keybar
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
 steps:
   - keys: c
     wait: 'Visible columns[\s\S]*enter apply'

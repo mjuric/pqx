@@ -4,6 +4,10 @@ covers:
   - "README Export: to Parquet, CSV or JSON"
   - "help: **e** | export the current view (filter + sort) to Parquet / CSV / JSON"
 fixture: demo
+python_bug:
+  - checks: [done]
+    region: keybar
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
 steps:
   - keys: /
     wait: 'enter apply'

@@ -4,6 +4,10 @@ description: |
 covers:
   - "native-port.md: Dialogs don't shift the screen behind them (PR #25)."
 fixture: demo
+python_bug:
+  - checks: [after]
+    region: keybar
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
 steps:
   - keys: pgdn down down right right right
     wait_gone: 'row 0\b'

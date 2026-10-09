@@ -320,6 +320,26 @@ def describe_file(path):
 STYLE_NAMES = ("fg", "bg", "bold", "dim", "reverse", "underline", "italic")
 
 
+def python_bug_for(sc, name, size):
+    """The scenario's `python_bug` entry that covers checkpoint `name` at `size`, if any."""
+    for pb in sc.get("python_bug") or []:
+        if name in pb.get("checks", []) and (not pb.get("sizes") or list(size) in [list(z) for z in pb["sizes"]]):
+            return pb
+    return None
+
+
+def mask_region(c, region):
+    """A capture with a screen region blanked out: `keybar` is the last line."""
+    if region != "keybar":
+        raise ValueError(f"unknown python_bug region {region!r}")
+    c = dict(c)
+    c["lines"] = c["lines"][:-1] + [""]
+    c["styles"] = c["styles"][:-1] + [[(None,) * 7] * len(c["styles"][-1])]
+    if c.get("plain"):
+        c["plain"] = c["plain"][:-1] + ["1" * len(c["plain"][-1])]
+    return c
+
+
 def plain_spaces(buf, rows, cols):
     """Per screen row, "1" for each cell that is a space without reverse, underline or
     strikethrough (its foreground colour can't be seen), else "0"."""
@@ -350,6 +370,13 @@ def selftest():
         ("letter fg counts", [x], [d0], [("red", "default", False, False)], 1, 0),
     ]
     bad = 0
+    a_, b_ = cap([x, x], [d0, d0]), cap([x, x], [d0, d0])
+    a_["lines"], b_["lines"] = ["grid", "enter apply"], ["grid", "/ filter"]
+    a_["styles"], b_["styles"] = a_["styles"] * 2, b_["styles"] * 2
+    masked = compare_check(mask_region(a_, "keybar"), mask_region(b_, "keybar"))
+    ok = not masked["text"] and compare_check(a_, b_)["text"]
+    print(f"{'ok  ' if ok else 'FAIL'} python_bug keybar: the last line is left out, only there")
+    bad += not ok
     for name, chars, sa, sb, want_c, want_s in cases:
         d = compare_check(cap(chars, sa), cap(chars, sb))
         ok = (d["colour"], d["style"]) == (want_c, want_s)
@@ -604,6 +631,7 @@ def report(scen, results, labels, out, xfail, a, versions, elapsed):
             ndiff = nstyle = ncolour = 0
             failing = []  # the checkpoints that differ (or that the compared app never reached)
             what = {}  # checkpoint: what differs first, in a few words
+            pybugs = []  # checkpoints where a known Python bug's region differed (and was ignored)
             for name in ca:
                 if name not in cb:
                     lines.append(f"  [{name}] missing from {lb}")
@@ -611,7 +639,16 @@ def report(scen, results, labels, out, xfail, a, versions, elapsed):
                     failing.append(name)
                     what[name] = f"{lb} never reached it"
                     continue
-                d = compare_check(ca[name], cb[name])
+                pyb = python_bug_for(sc, name, size)
+                if pyb:  # a known Python pqx bug in this region: compare without it, but say so
+                    full = compare_check(ca[name], cb[name])
+                    d = compare_check(*(mask_region(c, pyb["region"]) for c in (ca[name], cb[name])))
+                    if full["text"] or full["style"] or full["colour"]:
+                        if not (full["text"] == d["text"] and full["style"] == d["style"]
+                                and full["colour"] == d["colour"]):
+                            pybugs.append(f"{name}: {pyb['region']} ignored ({pyb.get('note', '')})")
+                else:
+                    d = compare_check(ca[name], cb[name])
                 ndiff += bool(d["text"]) + bool(d["clipboard"])
                 nstyle += d["style"]
                 ncolour += d["colour"]
@@ -646,6 +683,9 @@ def report(scen, results, labels, out, xfail, a, versions, elapsed):
                     status = "style"
                 elif ncolour and not a.lenient_colours:
                     status = "colour"
+            if status == "pass" and pybugs:
+                status = "pybug"  # passes once the known Python bug's region is left out
+                lines = [f"  known Python bug: {p}" for p in pybugs] + lines
             if sc.get("same_version") and len(set(versions.values())) > 1:
                 status = "skip"  # what fits depends on the version's length
                 lines = ["  skipped: the two apps report different versions"] + lines
@@ -655,7 +695,7 @@ def report(scen, results, labels, out, xfail, a, versions, elapsed):
                 if isinstance(entry, str):  # a scenario-level reason: any failure is expected
                     entry = {"reason": entry}
                 xf = entry.get("reason", "")
-                if status in ("pass", "skip"):
+                if status in ("pass", "skip", "pybug"):
                     final = "xpass" if status == "pass" else status
                 else:
                     new = sorted(set(failing) - set(entry.get("checks", failing)))
@@ -697,7 +737,7 @@ def report(scen, results, labels, out, xfail, a, versions, elapsed):
     write_screens_json(os.path.join(out, "screens.json"), results)
     if a.write_xfail:
         write_xfail(a.xfail, summary, xfail)
-    bad = sum(v for k, v in counts.items() if k not in ("pass", "xfail", "skip"))
+    bad = sum(v for k, v in counts.items() if k not in ("pass", "xfail", "skip", "pybug"))
     print(f"\n{la} vs {lb}: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
           + f"\nreport: {rep}\nsummary: {os.path.join(out, 'summary.json')}", file=sys.stderr)
     return 1 if bad else 0
@@ -708,7 +748,7 @@ def write_xfail(path, summary, old):
     checkpoints and a reason (kept from the old file when there is one)."""
     entries = {}
     for key, s in summary["scenarios"].items():
-        if s["raw_status"] in ("pass", "skip"):
+        if s["raw_status"] in ("pass", "skip", "pybug"):
             continue
         prev = old.get(key, old.get(key.split("@")[0]))
         why = prev.get("reason") if isinstance(prev, dict) else prev

@@ -4,6 +4,10 @@ covers:
   - "README Keys: g | go to a row: 1234, 1.5M, 50%, -1"
   - "help: **g** | go to row — 1234, 1.5M, 50%, -1"
 fixture: demo
+python_bug:
+  - checks: [row-1234, half, last]
+    region: keybar
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
 steps:
   - keys: g
     wait: 'Go to row[\s\S]*enter apply'   # the key bar can follow late

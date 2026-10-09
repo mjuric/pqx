@@ -4,6 +4,10 @@ description: |
 covers:
   - "README Keys: d · Esc | row detail panel (= y i F < > work there too, on the selected field)"
 fixture: demo
+python_bug:
+  - checks: [set]
+    region: keybar
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
 steps:
   - keys: d
     wait: "file row"
