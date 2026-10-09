@@ -320,17 +320,16 @@ def describe_file(path):
 STYLE_NAMES = ("fg", "bg", "bold", "dim", "reverse", "underline", "italic")
 
 
+#: a bottom border carrying the column readout
+READOUT_LINE = re.compile(r"^ └.*columns \d+–\d+ of \d+")
 #: the grid's status line (pqx's symbols: ✓ done, * running, ! warning, ✗ error)
 STATUS_LINE = re.compile(r"^ │ [✓*!✗] ")
 
 
-def python_bug_for(sc, name, size, key="python_bug"):
-    """The scenario's `python_bug` (or `intended`) entry that covers checkpoint `name` at
-    `size`, if any."""
-    for pb in sc.get(key) or []:
-        if name in pb.get("checks", []) and (not pb.get("sizes") or list(size) in [list(z) for z in pb["sizes"]]):
-            return pb
-    return None
+def python_bugs_for(sc, name, size, key="python_bug"):
+    """The scenario's `python_bug` (or `intended`) entries that cover checkpoint `name` at `size`."""
+    return [pb for pb in sc.get(key) or []
+            if name in pb.get("checks", []) and (not pb.get("sizes") or list(size) in [list(z) for z in pb["sizes"]])]
 
 
 def rule_applies(pb, ref, other, key):
@@ -349,7 +348,7 @@ def python_bug_applies(pb, ref, other):
         return None
     if pb.get("region") == "keybar":
         r, o = ref["lines"][-1], other["lines"][-1]
-    elif pb.get("region") in ("screen", "status", "pane"):
+    elif pb.get("region") in ("screen", "status", "pane", "readout"):
         r, o = "\n".join(ref["lines"]), "\n".join(other["lines"])
     else:
         return None
@@ -372,6 +371,12 @@ def mask_region(c, region):
         c["styles"] = [st[:x] + [(None,) * 7] * (len(st) - x) for st in c["styles"]]
         if c.get("plain"):
             c["plain"] = [p[:x] + "1" * (len(p) - x) for p in c["plain"]]
+        return c
+    if region == "readout":  # the bottom border with the column readout ("columns 1–8 of 16")
+        c = dict(c)
+        idx = [i for i, ln in enumerate(c["lines"]) if READOUT_LINE.search(ln)]
+        c["lines"] = [("" if i in idx else ln) for i, ln in enumerate(c["lines"])]
+        c["styles"] = [([(None,) * 7] * len(st) if i in idx else st) for i, st in enumerate(c["styles"])]
         return c
     if region == "status":  # the grid's status line: "│ ✓ 20,000 rows  ·  row 0", "│ * Counting rows"
         c = dict(c)
@@ -713,21 +718,21 @@ def report(scen, results, labels, out, xfail, a, versions, elapsed):
                     failing.append(name)
                     what[name] = f"{lb} never reached it"
                     continue
-                pyb = python_bug_applies(python_bug_for(sc, name, size), ca[name], cb[name])
-                kind = "known Python bug"
-                if not pyb:  # an intended difference, listed in the scenario
-                    pyb = rule_applies(python_bug_for(sc, name, size, "intended"), ca[name], cb[name],
-                                       "other_shows")
-                    kind = "intended"
-                if pyb:  # the known Python bug shows, and the other app is right there: leave it out
+                # the known Python bugs and intended differences that apply here: each one's
+                # region is left out, if the reference shows it and the other app is right
+                rules = [(r, "known Python bug") for r in python_bugs_for(sc, name, size)
+                         if python_bug_applies(r, ca[name], cb[name])]
+                rules += [(r, "intended") for r in python_bugs_for(sc, name, size, "intended")
+                          if rule_applies(r, ca[name], cb[name], "other_shows")]
+                ma, mb = ca[name], cb[name]
+                for r, _ in rules:
+                    ma, mb = mask_region(ma, r["region"]), mask_region(mb, r["region"])
+                d = compare_check(ma, mb)
+                if rules:
                     full = compare_check(ca[name], cb[name])
-                    d = compare_check(*(mask_region(c, pyb["region"]) for c in (ca[name], cb[name])))
-                    if full["text"] or full["style"] or full["colour"]:
-                        if not (full["text"] == d["text"] and full["style"] == d["style"]
-                                and full["colour"] == d["colour"]):
-                            pybugs.append((kind, f"{name}: {pyb['region']} ignored ({pyb.get('note', '')})"))
-                else:
-                    d = compare_check(ca[name], cb[name])
+                    if (full["text"], full["style"], full["colour"]) != (d["text"], d["style"], d["colour"]):
+                        for r, kind in rules:
+                            pybugs.append((kind, f"{name}: {r['region']} ignored ({r.get('note', '')})"))
                 ndiff += bool(d["text"]) + bool(d["clipboard"])
                 nstyle += d["style"]
                 ncolour += d["colour"]

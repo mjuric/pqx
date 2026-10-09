@@ -302,7 +302,7 @@ correct Go screen isn't reported as a difference:
 ```yaml
 python_bug:
   - checks: [row-1234, half, last]   # these checkpoints
-    region: keybar                   # the last screen line
+    region: keybar                   # the last screen line (or readout: the bottom border's column readout)
     ref_shows: 'enter apply   esc back'      # the bug, as the reference shows it
     correct: '^\s*/ filter   x clear filter'   # what the compared app must show there (after any margin)
     sizes: [[120, 40]]               # optional: only at these sizes
@@ -323,6 +323,7 @@ failure), with the note; everything else on those screens is still compared.
 | dialog-no-shift | after | the same, after the go-to and format dialogs |
 | export-csv, export-parquet, export-json | done | the same, after the export dialog |
 | columns-picker | applied, cancelled | the same, after the column picker |
+| detail-format @200x50 | fewer, more, dialog, set | the column readout isn't redrawn after a format change (`region: readout`) |
 
 ## Intended differences (INTENDED)
 
