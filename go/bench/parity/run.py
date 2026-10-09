@@ -430,7 +430,7 @@ def describe_diff(d, la, lb):
         j = next((k for k in range(max(len(x), len(y))) if x[k:k + 1] != y[k:k + 1]), 0)
         lo = max(0, j - 12)
         more = f" (+{len(d['text']) - 1} more lines)" if len(d["text"]) > 1 else ""
-        return f"line {i}: {la} {x[lo:lo + 40].strip()!r} vs {lb} {y[lo:lo + 40].strip()!r}{more}"
+        return f"line {i}, column {j}: {la} {x[lo:lo + 40]!r} vs {lb} {y[lo:lo + 40]!r}{more}"
     if d["clipboard"]:
         return f"clipboard {d['clipboard'][0]!r} vs {d['clipboard'][1]!r}"
     for kind in ("style", "colour"):
