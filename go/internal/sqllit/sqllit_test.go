@@ -165,7 +165,13 @@ func TestAnd(t *testing.T) {
 	defer db.Close()
 	for _, c := range [][3]string{
 		{"", "b = 1", "b = 1"},
-		{"  a = 1 ", "b = 1", "(a = 1) and b = 1"},
+		{"  a = 1 ", "b = 1", "a = 1 and b = 1"},
+		{"band = 'i' and (b = 1 or c = 2)", "b = 1", "band = 'i' and (b = 1 or c = 2) and b = 1"},
+		{"band = 'a or b' and \"--\" = 1", "b = 1", "band = 'a or b' and \"--\" = 1 and b = 1"},
+		{"band = 'r' AND band <> 'orb'", "b = 1", "band = 'r' AND band <> 'orb' and b = 1"},
+		{"b = 2 /* x */", "c = 3", "(b = 2 /* x */) and c = 3"},
+		{"b = 1\tOR\tc = 2", "c = 3", "(b = 1\tOR\tc = 2) and c = 3"},
+		{"band = 'r'||'x'", "b = 2", "band = 'r'||'x' and b = 2"},
 		{"a = 1 OR c = 2", "b = 1", "(a = 1 OR c = 2) and b = 1"},
 		{"band = 'r' or(band = 'g')", "b = 1", "(band = 'r' or(band = 'g')) and b = 1"},
 		{"(band = 'r')or(band = 'g')", "b = 1", "((band = 'r')or(band = 'g')) and b = 1"},
