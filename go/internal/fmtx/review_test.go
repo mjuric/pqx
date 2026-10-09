@@ -264,3 +264,20 @@ func TestShortTypeSanitizesTheTimeZone(t *testing.T) {
 		t.Errorf("ShortType(dict) = %q", s)
 	}
 }
+
+// DegToHMS's products are rounded before the next subtraction, as in
+// Python: had arm64's fused multiply-subtract been used (math.FMA here),
+// 0.5° would read 00h02m-0.000s. The text never has a negative field.
+func TestHMSIsRobustToFusedArithmetic(t *testing.T) {
+	if fused := math.FMA(0.5/15, 60, -2) * 60; fused >= 0 {
+		t.Errorf("fused seconds %g: the test no longer shows the hazard", fused)
+	}
+	eq(t, "0.5", DegToHMS(0.5), "00h02m00.000s")
+	rng := rand.New(rand.NewPCG(5, 6))
+	for range 100_000 {
+		v := rng.Float64() * 360
+		if s := DegToHMS(v); strings.Contains(s, "-") {
+			t.Fatalf("DegToHMS(%v) = %q", v, s)
+		}
+	}
+}

@@ -44,12 +44,12 @@ func mjdMicros(mjd float64) (int64, bool) {
 	}
 	us := int64(ip) * 86_400_000_000
 	if fp != 0 {
-		ip2, left := math.Modf(86_400_000_000 * fp)
+		ip2, left := math.Modf(float64(86_400_000_000 * fp))
 		us += int64(ip2)
 		whole := math.Round(left)
 		if math.Abs(whole-left) == 0.5 {
 			odd := float64(us & 1)
-			whole = 2*math.Round((left+odd)*0.5) - odd
+			whole = float64(2*math.Round(float64((left+odd)*0.5))) - odd
 		}
 		us += int64(whole)
 	}
@@ -75,9 +75,12 @@ func degToHMS(deg float64) string {
 		return ""
 	}
 	hh := int(h)
-	m := (h - float64(hh)) * 60
+	// float64(…) rounds each product, as Python does: on arm64 Go would
+	// otherwise fuse a product into the next subtraction (FMSUB) and
+	// change the last bits (once making the seconds a tiny negative).
+	m := float64((h - float64(hh)) * 60)
 	mm := int(m)
-	ss := (m - float64(mm)) * 60
+	ss := max(float64((m-float64(mm))*60), 0)
 	if ss >= 59.9995 {
 		ss, mm = 0, mm+1
 	}
@@ -180,7 +183,7 @@ func derived(name string, k Kind, v data.Value, unit string) string {
 		}
 	case KindFlux:
 		if f > 0 && !strings.Contains(low, "err") {
-			return pyFloatString(-2.5*math.Log10(f)+31.4, 'f', 3, false, false, false) + " AB mag (if nJy)"
+			return pyFloatString(float64(-2.5*math.Log10(f))+31.4, 'f', 3, false, false, false) + " AB mag (if nJy)"
 		}
 	}
 	return ""

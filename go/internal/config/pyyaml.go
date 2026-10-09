@@ -594,7 +594,7 @@ func yamlFloat(s string) (any, error) {
 			if !ok {
 				return nil, bad
 			}
-			x += d * base
+			x += float64(d * base) // (rounded, not fused into the sum)
 			base *= 60
 		}
 		return sign * x, nil

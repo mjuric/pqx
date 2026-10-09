@@ -136,7 +136,11 @@ func TestSymlinkModeAndBadValues(t *testing.T) {
 
 func TestDanglingSymlinkIsFollowed(t *testing.T) {
 	configHome(t)
-	real := filepath.Join(t.TempDir(), "dotfiles", "formats.yaml")
+	tmp, err := filepath.EvalSymlinks(t.TempDir()) // (macOS: /var is /private/var)
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(tmp, "dotfiles", "formats.yaml")
 	p := Path()
 	os.MkdirAll(filepath.Dir(p), 0o755)
 	os.Symlink(real, p)
