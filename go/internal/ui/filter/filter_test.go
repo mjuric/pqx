@@ -105,6 +105,8 @@ func (r *rig) run(cmd tea.Cmd) {
 	case kit.SetViewMsg:
 		r.msgs = append(r.msgs, m)
 		r.send(m)
+	case startCount: // (the root broadcasts it back)
+		r.send(m)
 	default:
 		if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice && v.Type().ConvertibleTo(cmdSlice) {
 			for _, c := range v.Convert(cmdSlice).Interface().([]tea.Cmd) {

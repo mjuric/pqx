@@ -1,10 +1,12 @@
 package grid
 
 import (
+	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/mjuric/pqx/go/internal/cells"
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/fmtx"
 	"github.com/mjuric/pqx/go/internal/styled"
+	"strings"
 )
 
 // cellTx is a formatted cell: its text (sanitized), width, style and
@@ -125,7 +127,7 @@ func (g *Grid) header(c column) (string, string) {
 		}
 	}
 	// (a type names the fields of a struct: text from the file)
-	sub := fmtx.Sanitize(fmtx.ShortType(c.Arrow), false)
+	sub := fmtx.Sanitize(g.typeName(c), false)
 	if c.Unit != "" {
 		sub += "·" + fmtx.Sanitize(c.Unit, false)
 	}
@@ -133,6 +135,17 @@ func (g *Grid) header(c column) (string, string) {
 		sub += "·" + fmtx.Sanitize(o, false)
 	}
 	return name, sub
+}
+
+// typeName is a column's short type for its header. A top-level map is
+// named as PyArrow names it from a Parquet file: its entries field takes the
+// column's name ("map<string, int64 ('mp')>", as the Schema tab shows it).
+func (g *Grid) typeName(c column) string {
+	s := fmtx.ShortType(c.Arrow)
+	if m, ok := c.Arrow.(*arrow.MapType); ok && m.ElemField().Name == "entries" && strings.HasSuffix(s, ">") && !g.v.view.IsSQL() {
+		s = s[:len(s)-1] + " ('" + c.Name + "')>"
+	}
+	return s
 }
 
 // fitValues widens column name for vals, a window just read, formatting as

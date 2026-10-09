@@ -458,7 +458,7 @@ func TestAFailedPageForgetsTheKeptRecord(t *testing.T) {
 	ds.failPlain = false
 	h.send(kit.GotoMsg{Row: 5000})
 	h.settle()
-	if h.g.curRow != 5000 || h.screenRow() != h.g.bodyH()/2 {
+	if h.g.curRow != 5000 || h.screenRow() != h.g.bodyH()-1 { // (a new window: the row at the bottom, as Python)
 		t.Errorf("goto: row %d, screen row %d", h.g.curRow, h.screenRow())
 	}
 }

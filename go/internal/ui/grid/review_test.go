@@ -299,8 +299,8 @@ func TestNoEmptyRowsAtTheBottom(t *testing.T) {
 	h.send(kit.GotoMsg{Row: 997})
 	h.settle()
 	g := h.g
-	if g.top != 1000-int64(g.bodyH()) {
-		t.Errorf("top %d, want %d", g.top, 1000-int64(g.bodyH()))
+	if g.top != 997-int64(g.bodyH())+1 { // (in the window: scrolled just enough, as Python)
+		t.Errorf("top %d, want %d", g.top, 997-int64(g.bodyH())+1)
 	}
 	gl := h.grid()
 	if strings.TrimSpace(gl[len(gl)-1]) == "" {
@@ -759,5 +759,40 @@ func TestColumnChosenElsewhereGoesToTheLeftEdge(t *testing.T) {
 	h.settle()
 	if _, last, _, _ := g.colWindow(); last != g.curCol {
 		t.Errorf("from the details pane: last shown %d, cursor %d", last, g.curCol)
+	}
+}
+
+// g places the row as Python's _seek_to does: a row in the window the grid
+// holds is scrolled to as little as shows it; another loads a window
+// around it, shown from its top and scrolled just enough (the row on the
+// last screen row), or where it is in that window's first screen.
+func TestGotoPlacesTheRowAsPython(t *testing.T) {
+	h := newHarness(t, newFake(2_000_000, 16), 120, 40) // window 1,000 rows
+	g := h.g
+	n := int64(g.bodyH())
+	for _, c := range []struct{ row, top int64 }{
+		{1234, 1234 - n + 1},     // a new window: at the bottom
+		{1240, 1234 - n + 1 + 6}, // in it, below the screen: scrolled 6
+		{1000, 1000},             // in it, above: at the top
+		{1_499_986, 1_499_986 - n + 1},
+		{5, 0}, // a window from the top: where it is
+	} {
+		h.send(kit.GotoMsg{Row: c.row})
+		h.settle()
+		if g.curRow != c.row || g.top != c.top {
+			t.Errorf("g %d: row %d, top %d, want top %d", c.row, g.curRow, g.top, c.top)
+		}
+	}
+}
+
+// A top-level map's header names its entries after the column, as PyArrow
+// does reading a Parquet file (and the Schema tab shows).
+func TestMapHeaderNamesItsEntries(t *testing.T) {
+	ds := newFake(10, 2)
+	ds.cols = append(ds.cols, data.Column{Name: "mp", Arrow: arrow.MapOf(arrow.BinaryTypes.String, arrow.PrimitiveTypes.Int64)})
+	h := newHarness(t, ds, 120, 30)
+	g := h.g
+	if _, sub := g.header(g.cols[g.byName["mp"]]); sub != "map<string, int64 ('mp')>" {
+		t.Errorf("header %q", sub)
 	}
 }

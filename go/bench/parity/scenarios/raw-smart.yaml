@@ -9,6 +9,11 @@ intended:
     ref_shows: '2\.6714136765804142e-05'   # Python prints the float32 widened to a double
     other_shows: '2\.6714137e-05'          # the shortest float32 form
     note: "raw float32 in its shortest form (go-port.md: intended differences)"
+  - checks: [smart]
+    region: screen
+    ref_shows: 'dec {16,}raErr'          # Python: the columns keep the width raw mode gave them
+    other_shows: 'dec {6,15}raErr'       # Go: narrower, as raw float32 needed less room
+    note: "follows from the shortest float32 in raw mode: columns never shrink, and Go's raw columns were narrower"
 steps:
   - keys: f
   - check: raw
