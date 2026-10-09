@@ -8,6 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/mjuric/pqx/go/internal/sqllit"
 	"github.com/mjuric/pqx/go/internal/styled"
 )
 
@@ -130,7 +131,7 @@ func FuzzWrap(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, s string, width int) {
 		width = 1 + (width%40+40)%40
-		if !utf8.ValidString(s) || strings.ContainsAny(s, "\n\r") || hasControls(s) || strayJoiner(s) {
+		if !utf8.ValidString(s) || strings.ContainsAny(s, "\n\r") || sqllit.HasControls(s) || strayJoiner(s) {
 			return
 		}
 		lines := wrapText(styled.Text{Plain: s}, width)

@@ -405,11 +405,13 @@ func TestDetailEquals(t *testing.T) {
 	for p.Selected() != "detector" {
 		h.press("down")
 	}
-	// (the record under the cursor: keeping 15,000 in the new view is WP11's)
 	det := h.g.Record().Values["detector"]
+	if h.record() != 15_000 {
+		t.Fatalf("record %d after the first =", h.record())
+	}
 	h.press("=")
-	if want := fmt.Sprintf("band = '%s' and detector = %d", band, det); st.View.Where != want {
-		t.Fatalf("%q, want %q", st.View.Where, want)
+	if want := fmt.Sprintf("(band = '%s') and detector = %d", band, det); st.View.Where != want || h.record() != 15_000 {
+		t.Fatalf("%q, want %q; record %d", st.View.Where, want, h.record())
 	}
 	if !p.Focused() || p.Selected() != "detector" || !strings.Contains(keysOf(p), "= match") {
 		t.Fatal("focus")

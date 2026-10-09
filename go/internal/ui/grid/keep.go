@@ -300,9 +300,9 @@ func (g *Grid) replay(queue []queued) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// QueueKey makes a cell key (= y i F < >) pressed elsewhere (the details
-// pane) wait for the record on its way, to act on column then; false if no
-// record is on its way, and the key should act now.
+// QueueKey implements kit.RecordSource: a cell key (= y i F < >) pressed
+// elsewhere (the details pane) waits for the record on its way, to act on
+// column then; false if no record is on its way, and the key should act now.
 func (g *Grid) QueueKey(k tea.KeyPressMsg, column string) bool {
 	if g.kept == nil {
 		return false
@@ -314,14 +314,14 @@ func (g *Grid) QueueKey(k tea.KeyPressMsg, column string) bool {
 // pendingRecord is the record on its way, while one is looked for after a
 // view change: Pending, its file row, and the values it had in the view it
 // came from (the details pane shows "finding record… · file row N"). Row
-// is -1: its place in the view isn't known yet. The grid's Record (WP12)
-// returns this while ok.
+// is the cursor's, where it waits (its place in the view isn't known yet).
+// Record returns this while ok.
 func (g *Grid) pendingRecord() (kit.Record, bool) {
 	k := g.kept
 	if k == nil {
 		return kit.Record{}, false
 	}
-	rec := kit.Record{Row: -1, FileRow: k.fileRow, Values: map[string]data.Value{}, Pending: true}
+	rec := kit.Record{Row: g.curRow, FileRow: k.fileRow, Values: map[string]data.Value{}, Pending: true}
 	for _, c := range g.all {
 		if v, ok := k.values[c.Name]; ok {
 			rec.Values[c.Name] = v

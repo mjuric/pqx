@@ -98,6 +98,7 @@ func newHarness(t testing.TB, ds data.Dataset, w, h int, o ...hopts) *harness {
 		env.Dialogs = fakeDialogs{hs}
 	}
 	hs.g = New(env)
+	env.Grid = hs.g // (as cmd/pqx wires it)
 	hs.f = filter.New(env)
 	hs.app = app.New(env, app.Parts{Grid: hs.g, Filter: hs.f})
 	hs.g.Focus()

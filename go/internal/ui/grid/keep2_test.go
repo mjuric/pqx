@@ -383,3 +383,34 @@ func TestWhileSeekingOtherReadsWait(t *testing.T) {
 		t.Errorf("record %d kept %+v", h.record(), g.kept)
 	}
 }
+
+// Ctrl+X in the filter box, or x from another tab, while a record is looked
+// up keeps that record, not the row the cursor waits on.
+func TestClearingDuringALookupKeepsTheRecordOnItsWay(t *testing.T) {
+	for _, from := range []string{"box", "stats"} {
+		ds := hookFixture(t, "demo")
+		ds.holdFind = true
+		h := newHarness(t, ds, 150, 42)
+		h.send(kit.GotoMsg{Row: 15_000})
+		h.settle()
+		h.g.curCol = h.g.byName["band"]
+		h.exec(h.g.moved())
+		h.settle()
+		h.send(kp("="))
+		h.waitFor("the lookup", func() bool { return ds.nFinds() == 1 && h.g.v.loaded(0) && h.env.State.View.Where != "" })
+		h.settle()
+		if from == "box" {
+			h.press("/", "ctrl+x")
+		} else {
+			h.press("3", "x")
+		}
+		ds.mu.Lock()
+		ds.holdFind = false
+		ds.mu.Unlock()
+		ds.release(0)
+		h.settle()
+		if !h.env.State.View.Plain() || h.g.curRow != 15_000 {
+			t.Errorf("%s: view %+v row %d, want 15000", from, h.env.State.View, h.g.curRow)
+		}
+	}
+}

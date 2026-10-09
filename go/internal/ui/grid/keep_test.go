@@ -373,7 +373,7 @@ func TestARecordFoundLaterGetsItsScreenRow(t *testing.T) {
 		t.Fatalf("while looking: row %d leftmost %q", h.g.curRow, h.leftmost())
 	}
 	rec, ok := h.g.pendingRecord()
-	if !ok || rec.FileRow != 15_000 || rec.Values["band"] != band[15_000] || rec.Row != -1 {
+	if !ok || rec.FileRow != 15_000 || rec.Values["band"] != band[15_000] || rec.Row != 0 || h.g.Record().FileRow != 15_000 {
 		t.Errorf("pending record %+v", rec)
 	}
 	ds.release(0)

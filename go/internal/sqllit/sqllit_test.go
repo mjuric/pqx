@@ -142,7 +142,7 @@ func TestEqualsLiterals(t *testing.T) {
 			t.Errorf("Equals(%#v) = %q, %v; want %q", c.v, got, ok, c.want)
 		}
 	}
-	for _, v := range []data.Value{[]byte("x"), data.List{}, data.Struct{}, data.TimeOfDay(5), data.UUID{},
+	for _, v := range []data.Value{[]byte("x"), data.List{}, data.Struct{}, data.TimeOfDay(5),
 		data.Decimal{Unscaled: big.NewInt(1), Precision: 50}} {
 		if got, ok := Equals("x", v); ok {
 			t.Errorf("Equals(%#v) = %q: should be refused", v, got)
@@ -251,6 +251,49 @@ func TestIsControl(t *testing.T) {
 	for f, want := range map[float64]string{1e-05: "1e-05", 0.0001: "0.0001", 123456789012345.0: "123456789012345.0", 1234567890123456.0: "1234567890123456.0"} {
 		if got := pyRepr(f); got != want {
 			t.Errorf("pyRepr(%v) = %q, want %q", f, got, want)
+		}
+	}
+}
+
+// The conditions "=" builds (WP12's pane cases) are SQL DuckDB runs,
+// matching the value: the infinities, a UUID, controls (C0 and C1) in a
+// value and a name, a keyword and a name with a space.
+func TestConditionsRunInDuckDB(t *testing.T) {
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE t AS SELECT 'inf'::DOUBLE AS pinf, '-inf'::DOUBLE AS ninf, 'inf'::FLOAT AS f32inf,
+		'nan'::DOUBLE AS nan, 0.1::FLOAT AS f, '01234567-89ab-cdef-0123-456789abcdef'::UUID AS u,
+		'a' || chr(27) || '[31m' || chr(155) || 'b' AS s, 1 AS "bell` + "\x07" + `", TIMESTAMPTZ '2026-01-02 03:04:05.678901+00' AS ts,
+		DATE '2026-01-01' AS "day", true AS flag, NULL::INT AS n, 's' AS "select", 2 AS "weird name"`); err != nil {
+		t.Fatal(err)
+	}
+	uuid := data.UUID{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef}
+	cases := map[string]data.Value{"pinf": math.Inf(1), "ninf": math.Inf(-1), "f32inf": float32(math.Inf(1)),
+		"nan": math.NaN(), "f": float32(0.1), "u": uuid, "s": "a\x1b[31m\u009bb", "bell\x07": int64(1),
+		"ts":  data.Timestamp{T: time.Date(2026, 1, 2, 3, 4, 5, 678901000, time.UTC), Zoned: true, Unit: time.Microsecond},
+		"day": data.Date(20454), "flag": true, "n": nil, "select": "s", "weird name": int64(2)}
+	for name, v := range cases {
+		cond, ok := Equals(name, v)
+		if !ok || HasControls(cond) {
+			t.Fatalf("%s: %q", name, cond)
+		}
+		var n int
+		if err := db.QueryRow("SELECT count(*) FROM t WHERE " + cond).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("%s: %q: %d rows, %v", name, cond, n, err)
+		}
+	}
+	for name, want := range map[string]string{
+		"u":          "u = '01234567-89ab-cdef-0123-456789abcdef'",
+		"bell\x07":   "COLUMNS(c -> c = ('bell' || chr(7))) = 1",
+		"day":        `"day" = DATE '2026-01-01'`,
+		"weird name": `"weird name" = 2`,
+		"select":     `"select" = 's'`,
+	} {
+		if got, _ := Equals(name, cases[name]); got != want {
+			t.Errorf("%s: %q, want %q", name, got, want)
 		}
 	}
 }

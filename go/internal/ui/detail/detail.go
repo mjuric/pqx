@@ -63,12 +63,9 @@ type Grid interface {
 	// to read. The caller runs the reads under the tag "detail" right
 	// away; the grid leaves those cells to it.
 	DetailRead() (view kit.View, fileRows [][]int64, cols [][]string, ok bool)
-	// FieldKey runs the grid's own action for k (y, F, <, >) on column
+	// FieldKey runs the grid's own action for k (=, y, F, <, >) on column
 	// name of the record under the cursor.
 	FieldKey(name string, k tea.KeyPressMsg) tea.Cmd
-	// FieldValue calls fn with the value of column name of the record
-	// under the cursor, reading it first if need be.
-	FieldValue(name string, fn func(v data.Value) tea.Cmd) tea.Cmd
 }
 
 // state of an entry's value.
@@ -218,7 +215,7 @@ type fetched struct {
 // which the record may have more values.
 func gridReads(tag string) bool {
 	switch tag {
-	case "page", "cols", "locate", "around":
+	case "page", "cols", "locate":
 		return true
 	}
 	return strings.HasPrefix(tag, "cell:")
@@ -653,16 +650,22 @@ func (p *Pane) onKey(k tea.KeyPressMsg) tea.Cmd {
 		return kit.Send(kit.FocusMsg{Pane: "grid"})
 	case "d":
 		return kit.Send(kit.ToggleDetailMsg{})
-	case "=":
-		return p.equals()
-	case "i":
-		if name := p.Selected(); name != "" {
+	case "=", "i", "y", "F", "<", ">":
+		name := p.Selected()
+		if name == "" || p.grid == nil {
+			return nil
+		}
+		// a record on its way (Pending): the key waits to act on it
+		// (Python's _queue_for_keep)
+		if p.rec.Pending && p.grid.QueueKey(k, name) {
+			return nil
+		}
+		if s == "i" {
 			return kit.Send(kit.ColumnStatsMsg{Column: name})
 		}
-	case "y", "F", "<", ">":
-		if name := p.Selected(); name != "" && p.grid != nil {
-			return p.grid.FieldKey(name, k)
-		}
+		// the grid's own action on that column of the record: "=" builds
+		// the filter there (internal/sqllit), adding to a view on its way
+		return p.grid.FieldKey(name, k)
 	case "x", "ctrl+x":
 		// the app's clear-filter key: the filter part empties its box
 		// (typed text too) and the view; focus goes to the grid (also when
@@ -713,47 +716,6 @@ func (p *Pane) onClick(m tea.Mouse) tea.Cmd {
 		return p.moveTo(i)
 	}
 	return nil
-}
-
-// equals is "=" on the selected field: the view narrows to the records
-// with its value, keeping this one (Python's _filter_value via
-// action_detail_key).
-func (p *Pane) equals() tea.Cmd {
-	name := p.Selected()
-	if name == "" {
-		return nil
-	}
-	if p.st.View.IsSQL() {
-		return kit.Send(kit.NotifyMsg{Severity: kit.Warning, Text: "= filtering works on the table, not on SQL results"})
-	}
-	rec := p.rec
-	if _, bad := rec.Failed[name]; bad {
-		return kit.Send(kit.NotifyMsg{Severity: kit.Error, Text: fmtx.Sanitize(name, false) + " couldn't be loaded for these rows",
-			Timeout: 4 * time.Second})
-	}
-	view, keep := p.st.View, rec.FileRow
-	if v, ok := rec.Values[name]; ok {
-		return p.filterOn(name, v, view, keep)
-	}
-	if rec.Pending || p.grid == nil {
-		return kit.Send(kit.NotifyMsg{Severity: kit.Warning, Text: "= not applied: the value isn't loaded yet", Timeout: 3 * time.Second})
-	}
-	// not loaded: the grid reads it, then the filter is made for the view
-	// and record of now
-	return p.grid.FieldValue(name, func(v data.Value) tea.Cmd { return p.filterOn(name, v, view, keep) })
-}
-
-func (p *Pane) filterOn(name string, v data.Value, view data.View, keep int64) tea.Cmd {
-	sqlName := name
-	if c, ok := p.st.Column(name); ok && c.SQLName != "" {
-		sqlName = c.SQLName
-	}
-	cond := condition(sqlName, v)
-	if cond == "" {
-		return kit.Send(kit.NotifyMsg{Severity: kit.Warning, Text: "Can't filter on this value type"})
-	}
-	nv := data.View{Where: combine(view.Where, cond), OrderBy: view.OrderBy}
-	return kit.Send(kit.SetViewMsg{View: nv, KeepFileRow: keep})
 }
 
 // fetch starts the background read of the cells the rows near the screen

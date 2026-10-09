@@ -7,6 +7,7 @@
 package sqllit
 
 import (
+	"encoding/hex"
 	"math"
 	"math/big"
 	"regexp"
@@ -94,15 +95,16 @@ func ColumnRef(name string) string {
 // Equals is the condition "=" adds for value v of the column DuckDB names
 // sqlName (Python pqx's _filter_value): col = v, or IS NULL, isnan() for
 // NaN, typed literals for times and dates. ok is false for a value it can't
-// match (binary, nested, times of day, durations, UUIDs: Python's "Can't
-// filter on this value type").
+// match (binary, nested, times of day, durations: Python's "Can't filter
+// on this value type").
 //
 // Unlike Python pqx, doubles of 16 or 17 digits match (see doubleLiteral),
 // decimals of up to 38 digits match exactly (Python refuses decimals;
 // DuckDB reads wider ones as doubles), a timestamp with
 // nanoseconds is a TIMESTAMP_NS literal (Python's TIMESTAMP literal drops
-// them and matches nothing), and infinities are written 'inf'::DOUBLE
-// (Python writes inf, which DuckDB takes for a column name).
+// them and matches nothing), infinities are written 'inf'::DOUBLE (Python
+// writes inf, which DuckDB takes for a column name), and a UUID matches by
+// its text (Python refuses it).
 func Equals(sqlName string, v data.Value) (cond string, ok bool) {
 	q := ColumnRef(sqlName)
 	switch v := v.(type) {
@@ -138,6 +140,9 @@ func Equals(sqlName string, v data.Value) (cond string, ok bool) {
 		return q + " = DATE '" + v.Time().Format("2006-01-02") + "'", true
 	case string:
 		return q + " = " + TextLiteral(v), true
+	case data.UUID:
+		h := hex.EncodeToString(v[:])
+		return q + " = '" + h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:] + "'", true
 	}
 	return "", false
 }
