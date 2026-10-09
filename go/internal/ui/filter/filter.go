@@ -55,6 +55,7 @@ type Filter struct {
 	pending *kit.SetViewMsg // the view being checked ("validate")
 	counts  map[string]int64
 	w       int // the input's width
+	y       int // the row the root draws it on (kit.Placed)
 }
 
 // New makes the filter bar; opts.Where, if set, is applied at the first
@@ -93,6 +94,12 @@ func (f *Filter) Value() string { return f.in.Value() }
 
 // Err is the inline error, "" if none.
 func (f *Filter) Err() string { return f.err }
+
+// Place implements kit.Placed.
+func (f *Filter) Place(_, y int) { f.y = y }
+
+// Pos is the row the bar was drawn on last.
+func (f *Filter) Pos() int { return f.y }
 
 // Focus implements kit.Focusable.
 func (f *Filter) Focus() tea.Cmd {

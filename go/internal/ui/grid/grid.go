@@ -27,14 +27,18 @@ import (
 const Part = "grid"
 
 // Layout of the root (internal/ui/app), to know the grid's size before it
-// is first drawn: the title bar, the filter box (3 rows) and the key bar
-// above and below the tab panel; the panel's border (2 rows) and the
-// status line inside it; 2 cells of border and padding on each side; the
-// details pane's width.
+// is first drawn: a one-column margin each side; the title bar and a blank
+// row, the filter box (3 rows) and the key bar around the tab panel; the
+// panel's border (2 rows), a blank row and the status line inside it; 2
+// cells of border and padding each side of the panel; the details pane and
+// the column between it and the grid.
 const (
-	chromeRows = 1 + 3 + 1 + 2 + 1
+	margin     = 1
+	aboveRows  = 2 + 3
+	keyRows    = 1
+	panelRows  = 2 + 1 + 1
 	sideCells  = 4
-	detailW    = 53
+	detailW    = 53 + 1
 )
 
 const (
@@ -76,6 +80,7 @@ type Grid struct {
 
 	focused bool
 	w, h    int // the size drawn last (or estimated from the terminal's)
+	x, y    int // where the root draws it (kit.Placed)
 
 	all    []column       // the view's columns (State.Columns)
 	cols   []column       // those shown: all minus State.Hidden
@@ -201,6 +206,9 @@ func (g *Grid) hasRowIDs(v data.View) bool {
 // Title implements kit.Framed: the root shows the tab strip there.
 func (g *Grid) Title() styled.Text { return styled.Text{} }
 
+// Place implements kit.Placed.
+func (g *Grid) Place(x, y int) { g.x, g.y = x, y }
+
 // Focus implements kit.Focusable.
 func (g *Grid) Focus() tea.Cmd { g.focused = true; return nil }
 
@@ -224,12 +232,12 @@ func (g *Grid) sized() bool { return g.w > 2*edgeCells && g.h > headerRows }
 // estimate sets the size from the terminal's, as the root lays it out,
 // until the grid is drawn.
 func (g *Grid) estimate(w, h int) {
-	gw := w
+	gw := max(1, w-2*margin)
 	if g.st.DetailOpen {
-		gw = max(10, w-detailW)
+		gw = max(10, gw-detailW)
 	}
 	g.w = max(1, gw-sideCells)
-	g.h = max(1, max(3, h-1-3-1)-3)
+	g.h = max(1, max(3, h-aboveRows-keyRows)-panelRows)
 }
 
 // Update implements kit.Pane.

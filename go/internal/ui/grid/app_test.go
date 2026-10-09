@@ -92,7 +92,7 @@ func TestSortCycle(t *testing.T) {
 	}
 	// a click on a header sorts by its column
 	s := g.layout()[1]
-	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: 2 + s.x + 1, Y: 5})
+	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: g.x + s.x + 1, Y: g.y})
 	h.settle()
 	if ob := h.env.State.View.OrderBy; len(ob) != 1 || ob[0].Column != "name" {
 		t.Errorf("header click: order %+v", ob)
@@ -183,14 +183,14 @@ func TestHiddenColumnHints(t *testing.T) {
 	if hdr := h.grid()[0]; !strings.HasPrefix(hdr, "‹") || strings.HasSuffix(hdr, "›") {
 		t.Errorf("markers after End: %q", hdr)
 	}
-	// a click on a marker pages that way (the pane starts at x=2, y=5)
-	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: 2, Y: 8})
+	// a click on a marker pages that way
+	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: g.x, Y: g.y + 3})
 	h.settle()
 	if _, _, _, hr := g.colWindow(); hr == 0 {
 		t.Error("a click on ‹ didn't page left")
 	}
 	before := g.left
-	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: 2 + g.w - 1, Y: 8})
+	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: g.x + g.w - 1, Y: g.y + 3})
 	h.settle()
 	if g.left <= before {
 		t.Errorf("a click on › didn't page right: left %d (was %d)", g.left, before)
@@ -420,14 +420,14 @@ func TestDetailToggle(t *testing.T) {
 	if !h.env.State.DetailOpen {
 		t.Fatal("d didn't open the details pane")
 	}
-	if h.g.w != 120-detailW-sideCells {
+	if h.g.w != 120-2*margin-detailW-sideCells {
 		t.Errorf("grid width with the pane: %d", h.g.w)
 	}
 	h.press("enter")
 	if h.env.State.DetailOpen {
 		t.Error("enter didn't close it")
 	}
-	if h.g.w != 120-sideCells {
+	if h.g.w != 120-2*margin-sideCells {
 		t.Errorf("grid width without the pane: %d", h.g.w)
 	}
 }

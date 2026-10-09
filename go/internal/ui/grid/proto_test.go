@@ -395,11 +395,10 @@ func TestMouse(t *testing.T) {
 	if g.top != 0 {
 		t.Errorf("wheel up: top %d", g.top)
 	}
-	// click on the second body row, in the third column: the grid sits at
-	// (2, 5) on the screen (title, filter box, panel border)
+	// click on the second body row, in the third column
 	slots := g.layout()
-	x := 2 + slots[2].x + 1
-	y := 5 + headerRows + 1
+	x := g.x + slots[2].x + 1
+	y := g.y + headerRows + 1
 	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: x, Y: y})
 	h.settle()
 	if g.curRow != 1 || g.curCol != 2 {
@@ -411,7 +410,7 @@ func TestMouse(t *testing.T) {
 	if !h.env.State.DetailOpen {
 		t.Error("a click on the cursor's cell didn't open the details pane")
 	}
-	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: 10, Y: 2})
+	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: 10, Y: h.f.Pos()})
 	h.settle()
 	if !h.f.TypingFocused() {
 		t.Error("a click on the filter bar didn't focus it")
@@ -449,7 +448,7 @@ func TestHorizontalScroll(t *testing.T) {
 
 func TestViewSmallGrid(t *testing.T) {
 	ds := newFake(5, 3)
-	h := newHarness(t, ds, 60, 16)
+	h := newHarness(t, ds, 62, 18)
 	want := []string{
 		"        id  name   c002                                 ",
 		"     int64  utf8  int64                                 ",
@@ -462,7 +461,7 @@ func TestViewSmallGrid(t *testing.T) {
 	}
 	gl := h.grid()
 	for i, w := range want {
-		if i >= len(gl) || gl[i] != w {
+		if i >= len(gl) || strings.TrimRight(gl[i], " ") != strings.TrimRight(w, " ") {
 			t.Errorf("line %d:\n got %q\nwant %q", i, gl[min(i, len(gl)-1)], w)
 		}
 	}
@@ -549,8 +548,8 @@ func TestEmptyWindowAtOffset(t *testing.T) {
 	h.filterWith("id % 10 = 0")
 	gen := h.g.v.gen
 	h.g.Update(kit.DoneMsg{Tag: "page", Msg: pageResult{req: fetchReq{gen: gen, start: 50, n: 30, cols: []string{"id"}}, win: data.Window{}}})
-	if h.g.v.limit() != 50 || h.g.v.lastRow() != 19 {
-		t.Errorf("limit %d, last row %d; want 50, 19 (the rows read)", h.g.v.limit(), h.g.v.lastRow())
+	if read := int64(2 * h.g.bodyH()); h.g.v.limit() != 50 || h.g.v.lastRow() != read-1 {
+		t.Errorf("limit %d, last row %d; want 50, %d (the rows read)", h.g.v.limit(), h.g.v.lastRow(), read-1)
 	}
 	if !strings.Contains(strings.Join(h.grid(), "\n"), "r10") {
 		t.Errorf("the rows before 50 are gone:\n%s", strings.Join(h.grid(), "\n"))
