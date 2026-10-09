@@ -150,7 +150,7 @@ func TestStatusCounts(t *testing.T) {
 	st.View = data.View{SQL: "select 1 from t"}
 	st.Total = 6
 	c.Update(kit.ViewChangedMsg{})
-	if got := plain(c.StatusLine(150)); got != "✓ 6 rows  ·  SQL result  ·  row 1,234" {
+	if got := plain(c.StatusLine(150)); got != "✓ 6 rows  ·  SQL result  ·  0.00 s  ·  row 1,234" {
 		t.Fatalf("%q", got)
 	}
 	// nothing matches
@@ -321,7 +321,12 @@ func TestKeyBarDetailFits80(t *testing.T) {
 		!strings.Contains(line, "esc close") {
 		t.Fatalf("%q", line)
 	}
-	if got := plain(c.KeyBar(20, detail)); ansi.StringWidth(got) > 20 || !strings.HasSuffix(got, "…") {
+	// what doesn't fit goes by whole words (Python's key bar wraps and shows
+	// its first line)
+	if got := plain(c.KeyBar(20, detail)); got != " ↑↓ column   =" { // (the key is a word too)
+		t.Fatalf("%q", got)
+	}
+	if got := plain(c.KeyBar(21, detail)); got != " ↑↓ column   = match" {
 		t.Fatalf("%q", got)
 	}
 }
@@ -346,16 +351,17 @@ func TestToasts(t *testing.T) {
 	if cur.Y+len(cl) != 29 || old.Y+len(ol) != cur.Y-1 {
 		t.Fatalf("rows: old %d+%d new %d+%d", old.Y, len(ol), cur.Y, len(cl))
 	}
-	// 50 wide (half the screen), at the right
+	// 48 wide (half the screen less its padding and a scroll bar's gutter),
+	// its right edge 4 cells from the screen's (Textual's ToastRack)
 	for _, l := range append(ol, cl...) {
-		if ansi.StringWidth(l) != 50 {
+		if ansi.StringWidth(l) != 48 {
 			t.Fatalf("width %d: %q", ansi.StringWidth(l), l)
 		}
 	}
-	if cur.X != 100-2-50 || !strings.Contains(cl[1], "✗ Query failed") || !strings.Contains(ol[2], "→ /tmp/x.parquet") {
+	if cur.X != 100-3-48 || !strings.Contains(cl[1], "✗ Query failed") || !strings.Contains(ol[2], "→ /tmp/x.parquet") {
 		t.Fatalf("%d\n%s\n%s", cur.X, strings.Join(ol, "\n"), strings.Join(cl, "\n"))
 	}
-	if len(cl) != 5 { // border, title, two lines of text, border
+	if len(cl) != 6 { // border, title, three lines of text, border
 		t.Fatalf("%q", cl)
 	}
 	// the error's border is red (ANSI colour 1)
@@ -399,5 +405,15 @@ func TestCommas(t *testing.T) {
 		if got := Commas(n); got != want {
 			t.Errorf("%d: %q", n, got)
 		}
+	}
+}
+
+// Toast text wraps as Rich wraps it: a word that doesn't fit goes to the
+// next line, one longer than a line is folded, leading spaces stay.
+func TestToastWrap(t *testing.T) {
+	got := wrap("✓ Wrote 23 rows\n→ /a/very/long/path/name.csv\n    ^", 12)
+	want := []string{"✓ Wrote 23", "rows", "→", "/a/very/long", "/path/name.c", "sv", "    ^"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("%q", got)
 	}
 }

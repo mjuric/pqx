@@ -181,13 +181,17 @@ func TestGoto(t *testing.T) {
 	if v := view(d, 150, 42); !strings.Contains(v, "Go to row") || !strings.Contains(v, "1234 · 1.5M · 50% · -1 (last)   of 20,000") {
 		t.Fatalf("%s", v)
 	}
+	// the input draws its own block cursor (reverse video), as Textual's does
+	if raw := d.View(d.Size(150, 42)); !strings.Contains(raw, "7;2mr") {
+		t.Fatalf("no cursor on the placeholder: %q", raw)
+	}
 	typeText(d, "12345")
+	if v := view(d, 150, 42); !strings.Contains(v, "│  12345 ") {
+		t.Fatalf("%s", v)
+	}
 	ms := press(d, "enter")
 	if !closed(ms) || len(ms) != 2 || ms[1] != (kit.GotoMsg{Row: 12_345}) {
 		t.Fatalf("%v", ms)
-	}
-	if c := d.(kit.Cursored).Cursor(); c == nil || c.Position.Y != 5 {
-		t.Fatalf("cursor %+v", c)
 	}
 
 	d = f.Goto(20_000)
@@ -227,18 +231,17 @@ func TestFormat(t *testing.T) {
 	d := f.Format(demoCols[1], fmtx.Override{Digits: 4, Set: true}, 123.456)
 	checkBox(t, d, 150, 42)
 	v := view(d, 150, 42)
-	if !strings.Contains(v, "Format of ra") || !strings.Contains(v, "│ 4 ") || !strings.Contains(v, "empty = automatic") {
+	if !strings.Contains(v, "Format of ra") || !strings.Contains(v, "│  4 ") || !strings.Contains(v, "empty = automatic") {
 		t.Fatalf("%s", v)
 	}
-	d.Update(keyMsg("backspace"))
-	typeText(d, ".2e")
+	typeText(d, ".2e") // (the prefilled text is selected: typing replaces it)
 	ms := press(d, "enter")
 	if !closed(ms) || ms[1] != (kit.FormatSetMsg{Column: "ra", Override: fmtx.ParseOverride(".2e")}) {
 		t.Fatalf("%v", ms)
 	}
 	// a spec prefilled; emptied resets to automatic
 	d = f.Format(demoCols[1], fmtx.Override{Spec: ".3e", Set: true}, 1.0)
-	if v := view(d, 150, 42); !strings.Contains(v, "│ .3e ") {
+	if v := view(d, 150, 42); !strings.Contains(v, "│  .3e ") {
 		t.Fatalf("%s", v)
 	}
 	d.Update(keyMsg("ctrl+u"))
@@ -347,9 +350,10 @@ func TestColumns(t *testing.T) {
 	if !reflect.DeepEqual(ms[1], kit.ColumnsPickedMsg{Visible: []string{"[/]", "diaSourceId", "ra", "band"}}) {
 		t.Fatalf("%v", ms)
 	}
-	// landing on the current column; a click toggles the entry under it
+	// the list starts at its top (Python's does, whatever the current
+	// column); a click toggles the entry under it
 	d = f.Columns(cols, nil, "band")
-	press(d, "tab", "space") // band
+	press(d, "tab", "down", "down", "down", "space") // band
 	view(d, 150, 42)
 	cd := d.(*columnsDialog)
 	d.Update(tea.MouseClickMsg{X: 10, Y: cd.listY, Button: tea.MouseLeft}) // [/]
@@ -383,7 +387,8 @@ func TestExport(t *testing.T) {
 		t.Fatalf("default path %q", got)
 	}
 	// CSV: the extension follows
-	press(d, "tab", "down")
+	// (arrows move the radio set's highlight, Enter or space picks)
+	press(d, "tab", "down", "space")
 	if got := d.(*exportDialog).path.Value(); got != filepath.Join(dir, "demo.subset.csv") {
 		t.Fatalf("%q", got)
 	}
@@ -404,7 +409,7 @@ func TestExport(t *testing.T) {
 	}
 	// it exists now: refused unless Overwrite is ticked
 	d = f.Export()
-	press(d, "tab", "down", "tab", "space") // CSV, all columns
+	press(d, "tab", "down", "space", "tab", "space") // CSV, all columns
 	ms = press(d, "shift+tab", "shift+tab", "enter")
 	if n, ok := notice(ms); closed(ms) || !ok || n.Severity != kit.Warning ||
 		n.Text != filepath.Join(dir, "demo.subset.csv")+" exists — tick 'Overwrite' to replace it" {
@@ -464,9 +469,13 @@ func TestExportSummaryShowsMarkupAsText(t *testing.T) {
 	name := "[bold]mk[/] [@click=app.quit]x[/]"
 	f, env, _ := setup(t, "/x/e.parquet", []data.Column{{Name: name}, {Name: "s\x1bx"}})
 	env.State.View = data.View{Where: `"` + name + `" = '[/]'`, OrderBy: []data.Sort{{Column: name}}}
+	// (one line, cropped as Python's Label is: the name is cut)
 	v := flat(view(f.Export(), 150, 42))
-	if !strings.Contains(v, "sorted by "+name) || !strings.Contains(v, "'[/]'") {
+	if !strings.Contains(v, `where "`+name+`" = '[/]' · sorted by [bold]mk[/]`) {
 		t.Fatalf("%s", v)
+	}
+	if d := f.Export().(*exportDialog); !strings.Contains(d.summary, "sorted by "+name) {
+		t.Fatalf("%q", d.summary)
 	}
 	env.State.View = data.View{SQL: "select 1"}
 	env.State.Total = -1
@@ -499,7 +508,7 @@ func TestHelp(t *testing.T) {
 	}
 	all := strings.Join(lines, "\n")
 	for _, want := range []string{"pqx — Parquet explorer", "Filtering and queries", "• a SQL WHERE expression — price > 100",
-		"key", "action", "go to row — 1234, 1.5M, 50%, -1"} {
+		"│ key       │ action"} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("no %q in\n%s", want, all)
 		}
@@ -527,7 +536,10 @@ func TestMarkdownTable(t *testing.T) {
 	for _, l := range lines {
 		got = append(got, l.Plain)
 	}
-	want := []string{"key  action", "────────────────────────", "g    go to a row far", "     away in the file"}
+	// the first column shrinks to its longest word, the second takes the rest
+	want := []string{"  ┌─────┬────────────┐", "  │ key │ action     │", "  ├─────┼────────────┤",
+		"  │ g   │ go to a    │", "  │     │ row far    │", "  │     │ away in    │", "  │     │ the file   │",
+		"  └─────┴────────────┘", ""}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("%q", got)
 	}
@@ -561,6 +573,9 @@ func TestDialogsDoNotShiftTheScreen(t *testing.T) {
 			t.Fatalf("%s: %d lines, was %d", name, len(after), len(before))
 		}
 		for i := range before {
+			if i == len(before)-1 {
+				continue // the key bar: the dialog's input's keys (Python's too)
+			}
 			if i < y || i >= y+dh {
 				if after[i] != before[i] {
 					t.Fatalf("%s: line %d moved:\n%q\n%q", name, i, before[i], after[i])
@@ -594,4 +609,56 @@ func (fill) View(w, h int) string {
 		l[i] = strings.Repeat(".:", w/2+1)[:w]
 	}
 	return strings.Join(l, "\n")
+}
+
+// The key bar under a dialog: the filter box's keys while a text input has
+// focus (Python's key bar takes any focused Input for the filter's), else
+// none of the dialog's own (the screen's stay).
+func TestDialogKeys(t *testing.T) {
+	f, _, _ := setup(t, "/x/demo.parquet", demoCols)
+	if k := f.Goto(10).Keys(); len(k) == 0 || k[0] != (kit.KeyHint{Key: "enter", Help: "apply"}) {
+		t.Fatalf("goto %v", k)
+	}
+	if k := f.Format(demoCols[1], fmtx.Override{}, 1.5).Keys(); len(k) == 0 {
+		t.Fatal("format: no keys")
+	}
+	if f.Help().Keys() != nil {
+		t.Fatal("help has keys")
+	}
+	for _, d := range []kit.Dialog{f.Columns(demoCols, nil, ""), f.Export()} {
+		if len(d.Keys()) == 0 {
+			t.Fatalf("%T: no keys on the input", d)
+		}
+		press(d, "tab")
+		if d.Keys() != nil {
+			t.Fatalf("%T: keys off the input", d)
+		}
+	}
+}
+
+// The input selects its text when it gains focus: typing replaces it, an
+// arrow keeps it (Textual's select_on_focus).
+func TestFieldSelectOnFocus(t *testing.T) {
+	in := newField("abc", "")
+	in.focus()
+	typeInto := func(s string) {
+		for _, r := range s {
+			in.update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		}
+	}
+	typeInto("x")
+	if in.Value() != "x" {
+		t.Fatalf("%q", in.Value())
+	}
+	in = newField("abc", "")
+	in.focus()
+	in.update(keyMsg("left"))
+	typeInto("x")
+	if in.Value() != "xabc" {
+		t.Fatalf("%q", in.Value())
+	}
+	in.update(keyMsg("ctrl+u"))
+	if in.Value() != "abc" {
+		t.Fatalf("ctrl+u: %q", in.Value())
+	}
 }

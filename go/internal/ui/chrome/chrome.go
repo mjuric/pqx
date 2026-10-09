@@ -80,7 +80,9 @@ func (c *Chrome) Update(msg tea.Msg) tea.Cmd {
 			c.status = kit.StatusMsg{}
 		}
 		c.viewAt = c.now()
-		c.haveSecs = false
+		// a count already known (the filter keeps them) took no time; its
+		// TotalMsg can also arrive before this message
+		c.countSecs, c.haveSecs = 0, c.env.State.Total >= 0
 		c.hidden = ""
 	case kit.TotalMsg:
 		if c.env.State.Total >= 0 && !c.viewAt.IsZero() {
@@ -245,13 +247,13 @@ func (c *Chrome) statusText() styled.Text {
 	if st.Raw {
 		bits = append(bits, "raw values")
 	}
-	if tot > 0 {
+	if tot != 0 { // (rows shown, the count known or not: Python's grid.row_count)
 		bits = append(bits, "row "+Commas(st.Row))
 	}
 	if len(bits) > 0 {
 		t.Append(sep+strings.Join(bits, sep), d)
 	}
-	if c.hidden != "" && tot > 0 {
+	if c.hidden != "" && tot != 0 {
 		t.Append("   !", look.Style("warning"))
 		t.Append(" "+fmtx.Sanitize(c.hidden, false)+" is hidden", styled.Style{Bold: true})
 		t.Append(" · c to show", d)
@@ -275,7 +277,7 @@ var globals = []kit.KeyHint{{Key: "1-5", Help: "tabs"}, {Key: "?", Help: "help"}
 
 // KeyBar implements kit.Chrome: the focused part's hints, then any of the
 // global ones ("1-5 tabs", "? help", "q quit") not among them, one cell in
-// from each side and cut with an ellipsis. A part lists the global keys
+// from each side; what doesn't fit is left out by whole words. A part lists the global keys
 // itself to place them as Python's KEYS does ("/ filter   x clear filter
 // 1-5 tabs   ? help   q quit   s sort …"). Contexts with an "esc" hint (the
 // filter, the details pane, a drop-down) get no globals added: Python's
@@ -304,7 +306,46 @@ func (c *Chrome) KeyBar(w int, hints []kit.KeyHint) string {
 		t.Append(h.Key, styled.Style{Bold: true})
 		t.Append(" "+h.Help, d)
 	}
-	return " " + c.cut(t, w-2)
+	return " " + c.look().Render(headRunes(t, firstLine(t.Plain, max(0, w-2))))
+}
+
+// headRunes is t's first n runes (cells: the key bar's text is all one
+// cell wide), with their styles.
+func headRunes(t styled.Text, n int) styled.Text {
+	r := []rune(t.Plain)
+	if n >= len(r) {
+		return t
+	}
+	h := styled.Text{Plain: string(r[:n]), Style: t.Style}
+	for _, sp := range t.Spans {
+		if sp.Start < n {
+			sp.End = min(sp.End, n)
+			h.Spans = append(h.Spans, sp)
+		}
+	}
+	return h
+}
+
+// firstLine is how many runes of s the first line of s word-wrapped to w
+// cells holds, trailing spaces left out: Python's key bar wraps (and shows
+// only its first line) rather than cutting. A word longer than the line is
+// folded.
+func firstLine(s string, w int) int {
+	rs := []rune(s)
+	pos, lastEnd := 0, 0 // (runes and cells alike: one cell each)
+	for i, r := range rs {
+		if pos+1 > w {
+			if lastEnd == 0 {
+				return pos
+			}
+			return lastEnd
+		}
+		pos++
+		if r != ' ' && (i+1 == len(rs) || rs[i+1] == ' ') {
+			lastEnd = pos
+		}
+	}
+	return lastEnd
 }
 
 // Commas is n with thousands separators (Python's f"{n:,}").

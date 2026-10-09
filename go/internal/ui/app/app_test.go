@@ -461,3 +461,29 @@ func BenchmarkDialogKeystroke(b *testing.B) {
 		a.View()
 	}
 }
+
+// keyless is a dialog with no key-bar hints of its own.
+type keyless struct{ dialog }
+
+func (keyless) Keys() []kit.KeyHint { return nil }
+
+// Under a dialog the key bar shows the dialog's hints, or the focused
+// part's when it has none; and it follows the dialog while the screen
+// behind it is reused.
+func TestKeyBarUnderDialog(t *testing.T) {
+	a, _ := setup(t)
+	last := func() string { s := screen(a); return s[len(s)-1] }
+	if !strings.Contains(last(), "grid keys") {
+		t.Fatalf("%q", last())
+	}
+	d := &dialog{pane{name: "zed"}}
+	run(a, kit.OpenDialogMsg{Dialog: d})
+	if l := last(); !strings.Contains(l, "zed keys") {
+		t.Fatalf("%q", l)
+	}
+	run(a, kit.CloseDialogMsg{})
+	run(a, kit.OpenDialogMsg{Dialog: &keyless{dialog{pane{name: "k"}}}})
+	if l := last(); !strings.Contains(l, "grid keys") {
+		t.Fatalf("%q", l)
+	}
+}
