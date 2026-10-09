@@ -38,19 +38,21 @@ type viewData struct {
 
 	confirmed bool // a read of this view has succeeded
 
-	noticed map[string]bool // columns whose failure was reported (once per view)
+	noticed    map[string]bool // columns whose failure was reported (once per view)
+	failedCols map[string]bool // columns that couldn't be read: not read again in this view
 }
 
 func (g *Grid) newViewData(v data.View) *viewData {
 	g.gen++
 	d := &viewData{
 		gen: g.gen, view: v, ids: g.hasRowIDs(v), total: -1, upper: -1,
-		fileRow: map[int64]int64{},
-		vals:    map[string]map[int64]any{},
-		text:    map[string]map[int64]*cellTx{},
-		colW:    map[string]int{},
-		noticed: map[string]bool{},
-		labelW:  1,
+		fileRow:    map[int64]int64{},
+		vals:       map[string]map[int64]any{},
+		text:       map[string]map[int64]*cellTx{},
+		colW:       map[string]int{},
+		noticed:    map[string]bool{},
+		labelW:     1,
+		failedCols: map[string]bool{},
 	}
 	return d
 }
@@ -333,7 +335,7 @@ func (g *Grid) nearNames(screens int) []string {
 }
 
 // missingNames are the names among names with a cell not read yet in a row
-// read in [a, b).
+// read in [a, b), leaving out the cells the details pane's read is bringing.
 func (g *Grid) missingNames(names []string, a, b int64) []string {
 	d := g.v
 	var out []string
@@ -343,7 +345,7 @@ func (g *Grid) missingNames(names []string, a, b int64) []string {
 			if !d.loaded(r) {
 				continue
 			}
-			if _, ok := col[r]; !ok {
+			if _, ok := col[r]; !ok && !g.coming(name, r) {
 				out = append(out, name)
 				break
 			}
@@ -473,13 +475,8 @@ func (g *Grid) onCols(r colsResult) tea.Cmd {
 // markFailed marks the columns failed for req's rows where they are still
 // missing.
 func (g *Grid) markFailed(req colsReq, failed map[string]error) {
-	d := g.v
 	for name := range failed {
-		for _, row := range req.rows {
-			if _, ok := d.cell(name, row); !ok && d.loaded(row) {
-				d.set(name, row, failedCell{})
-			}
-		}
+		g.failColumn(name)
 	}
 }
 
@@ -560,6 +557,9 @@ func (g *Grid) store(start int64, n int, w data.Window) {
 		g.fitValues(name, vals)
 	}
 	for name := range w.Failed {
+		d.failedCols[name] = true
+	}
+	for name := range d.failedCols {
 		for i := 0; i < w.Len; i++ {
 			if _, ok := d.cell(name, start+int64(i)); !ok {
 				d.set(name, start+int64(i), failedCell{})

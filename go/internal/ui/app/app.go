@@ -212,6 +212,11 @@ func (a *App) onKey(k tea.KeyPressMsg) tea.Cmd {
 		case "esc":
 			return a.escape(k)
 		case "tab", "shift+tab":
+			if a.focus == "detail" {
+				// the details pane hands focus back to the grid (Python's
+				// DetailList binds Tab to detail_to_grid)
+				return a.setFocus("grid")
+			}
 			d := 1
 			if s == "shift+tab" {
 				d = -1
