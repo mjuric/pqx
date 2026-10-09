@@ -302,7 +302,7 @@ correct Go screen isn't reported as a difference:
 ```yaml
 python_bug:
   - checks: [row-1234, half, last]   # these checkpoints
-    region: keybar                   # the last screen line
+    region: keybar                   # the last screen line (or readout: the bottom border's column readout)
     ref_shows: 'enter apply   esc back'      # the bug, as the reference shows it
     correct: '^\s*/ filter   x clear filter'   # what the compared app must show there (after any margin)
     sizes: [[120, 40]]               # optional: only at these sizes
@@ -323,6 +323,7 @@ failure), with the note; everything else on those screens is still compared.
 | dialog-no-shift | after | the same, after the go-to and format dialogs |
 | export-csv, export-parquet, export-json | done | the same, after the export dialog |
 | columns-picker | applied, cancelled | the same, after the column picker |
+| detail-format @200x50 | fewer, more, dialog, set | the column readout isn't redrawn after a format change (`region: readout`) |
 
 ## Intended differences (INTENDED)
 
@@ -332,7 +333,7 @@ Differences go-port.md lists as intended are marked the same way, with `intended
 ```yaml
 intended:
   - checks: [open]
-    region: screen                       # or keybar
+    region: screen                       # or keybar, status, pane (the details pane)
     ref_shows: 'wide +1e\+46'           # what the reference shows
     other_shows: 'wide +10{20}'          # what the compared app shows instead
     note: "exact wide decimals (go-port.md: Progress)"
@@ -340,7 +341,7 @@ intended:
 
 The region is left out only when both patterns match; the result is INTENDED (not a
 failure). `region: screen` leaves out the whole checkpoint, so its patterns must pin the
-difference down. In use: detail-wrap (exact 47-digit decimal), raw-smart's `raw`
+difference down. In use: detail-wrap and types-grid's `detail-null-row` (`region: pane`) (exact 47-digit decimal), raw-smart's `raw`
 (shortest float32) and `smart` (columns never shrink, so they keep raw mode's widths), cli-bad-theme (D2's usage error), filter-unbalanced's
 `two-statements` (Go pqx's own message; it must still come as a notification: the step
 waits for either app's), esc-cancel-count's status line after Esc (`region: status`, the

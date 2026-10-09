@@ -16,6 +16,7 @@ steps:
   - keys: "= down"
     gap: 0
     wait: '› band = '
+    timeout: 60   # (2M rows: under load the lookup takes a while)
     expect: ['row \d+ · file row 55', '↑↓ column']
   # the ↓ sent during the lookup must have moved the panel's field from band to psfFlux:
   # Tab back to the grid (on that column) and i shows its statistics
@@ -23,6 +24,7 @@ steps:
     wait: '/ filter'
   - keys: i
     wait: 'Profiled psfFlux'
+    timeout: 60
   # where the grid scrolls to after the queued keys varies in Python pqx; Data and Home
   # make the checkpoint repeatable
   - keys: "1"

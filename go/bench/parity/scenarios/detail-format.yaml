@@ -5,6 +5,12 @@ covers:
   - "README Keys: d · Esc | row detail panel (= y i F < > work there too, on the selected field)"
 fixture: demo
 python_bug:
+  - checks: [fewer, more, dialog, set]
+    sizes: [[200, 50]]
+    region: readout
+    ref_shows: 'columns 1–11 of 16'      # stale: Python doesn't redraw it after a format change
+    correct: 'columns 1–10 of 16'        # recomputed for the narrower column
+    note: "Python pqx doesn't redraw the column readout after a format change (_set_format never calls _render_hscroll)"
   - checks: [set]
     region: keybar
     ref_shows: 'enter apply   esc back'   # Python shows the filter box's keys
