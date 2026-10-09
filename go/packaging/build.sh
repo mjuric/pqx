@@ -13,8 +13,9 @@
 # build on a newer system needs that system's glibc.
 # macOS: MACOSX_DEPLOYMENT_TARGET defaults to 13.0, the oldest macOS Go 1.27 runs on
 # (DuckDB's prebuilt libraries target 11.0).
-# Windows: needs the MinGW-w64 UCRT gcc (MSYS2's mingw-w64-ucrt-x86_64-gcc) on PATH,
-# the toolchain DuckDB's prebuilt Windows libraries are built with.
+# Windows: needs MinGW-w64 gcc 14.2 for UCRT (MinGW-Builds posix-seh-ucrt) on PATH,
+# the toolchain DuckDB's prebuilt Windows libraries are built with; MSYS2's newer
+# gcc doesn't link them, nor does an MSVCRT MinGW.
 set -euo pipefail
 
 if [ $# -ne 2 ]; then
