@@ -1,6 +1,7 @@
 package detail
 
 import (
+	"encoding/hex"
 	"math"
 	"regexp"
 	"strconv"
@@ -36,16 +37,11 @@ func condition(sqlName string, v data.Value) string {
 	case uint64:
 		return q + " = " + strconv.FormatUint(x, 10)
 	case float64:
-		if math.IsNaN(x) {
-			return "isnan(" + q + ")"
-		}
-		return q + " = " + pyRepr(x)
+		return floatCond(q, x)
 	case float32:
-		// Python sees a float32 as the double it is
-		if math.IsNaN(float64(x)) {
-			return "isnan(" + q + ")"
-		}
-		return q + " = " + pyRepr(float64(x))
+		return floatCond(q, float64(x)) // (Python sees a float32 as the double it is)
+	case data.UUID:
+		return q + " = '" + uuidText(x) + "'"
 	case data.Timestamp:
 		if x.Zoned {
 			return q + " = TIMESTAMPTZ '" + isoformat(x.T, true) + "'"
@@ -57,6 +53,27 @@ func condition(sqlName string, v data.Value) string {
 		return q + " = " + sqlTextLiteral(x)
 	}
 	return ""
+}
+
+// floatCond matches a float: NaN with isnan (NaN = NaN is false), the
+// infinities as DOUBLE literals (Python pqx writes "x = ∞", which DuckDB
+// refuses), others as Python's repr.
+func floatCond(q string, f float64) string {
+	switch {
+	case math.IsNaN(f):
+		return "isnan(" + q + ")"
+	case math.IsInf(f, 1):
+		return q + " = 'inf'::DOUBLE"
+	case math.IsInf(f, -1):
+		return q + " = '-inf'::DOUBLE"
+	}
+	return q + " = " + pyRepr(f)
+}
+
+// uuidText is a UUID's canonical text.
+func uuidText(u data.UUID) string {
+	h := hex.EncodeToString(u[:])
+	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
 }
 
 // pyRepr is Python's repr of a float.

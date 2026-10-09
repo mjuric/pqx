@@ -55,24 +55,38 @@ const (
 type Grid interface {
 	kit.RecordSource
 	// DetailRead names what the background read is to bring: the view
-	// (with its generation), the file rows of the rows read near the
-	// screen and the columns some of them lack. ok is false if there is
-	// nothing to read. The caller runs the read under the tag "detail"
-	// right away; the grid leaves those cells to it.
-	DetailRead() (view kit.View, fileRows []int64, cols []string, ok bool)
-	// FieldKey runs the grid's own action for k (y, F, <, >, x, ctrl+x)
-	// on column name of the record under the cursor.
+	// (with its generation) and reads of file rows × columns, the cells
+	// the rows read near the screen lack. ok is false if there is nothing
+	// to read. The caller runs the reads under the tag "detail" right
+	// away; the grid leaves those cells to it.
+	DetailRead() (view kit.View, fileRows [][]int64, cols [][]string, ok bool)
+	// FieldKey runs the grid's own action for k (y, F, <, >) on column
+	// name of the record under the cursor.
 	FieldKey(name string, k tea.KeyPressMsg) tea.Cmd
 	// FieldValue calls fn with the value of column name of the record
 	// under the cursor, reading it first if need be.
 	FieldValue(name string, fn func(v data.Value) tea.Cmd) tea.Cmd
 }
 
-// entry is one column of the record.
+// state of an entry's value.
+const (
+	loaded = iota
+	loading
+	failed
+)
+
+// entry is one column of the record. Its text and height are worked out
+// when needed: a record change costs what is on screen, not every column
+// (Python's _LazyEntry).
 type entry struct {
-	name  string      // the column's name, as in the file
-	label string      // the name as shown (sanitized)
-	value styled.Text // value, unit, derived reading
+	name  string // the column's name, as in the file
+	label string // the name as shown (sanitized)
+	col   data.Column
+	state int
+	v     data.Value
+
+	text *styled.Text // value, unit, derived reading, once made
+	h    int          // lines at the pane's content width; 0 until measured
 }
 
 // Pane is the details pane. It implements kit.Pane, kit.Framed and
@@ -86,18 +100,19 @@ type Pane struct {
 	entries []entry
 	nameW   int
 	sel     int // the selected entry, -1 for none
-	top     int // the first line shown
 	title   styled.Text
 	rec     kit.Record
 
-	// the layout of the entries at the content width layW: each one's
-	// first line and height; total lines
-	layW   int
-	starts []int
-	hts    []int
-	total  int
-	bar    bool // a scrollbar shows (the content is a column narrower)
-	w, h   int  // the size drawn last
+	// the scroll position: the entry on the first line shown, and how many
+	// of its lines are above it
+	ti, to int
+
+	cw   int  // the content width entries are measured at; -1: not laid out
+	bar  bool // a scrollbar shows (the content is a column narrower)
+	w, h int  // the size drawn last
+
+	kinds map[string]fmtx.Kind // by column (fmtx.KindFor is slow)
+	units map[string]string    // the file's units by column (Python's ds._by_name)
 
 	seq  int    // debounce generation of the background read
 	last string // what the last background read asked for (readKey)
@@ -105,9 +120,15 @@ type Pane struct {
 
 // New makes the details pane over env; its grid is env.Grid.
 func New(env *kit.Env) *Pane {
-	p := &Pane{env: env, st: env.State, sel: -1, h: 20, w: 49}
+	p := &Pane{env: env, st: env.State, sel: -1, h: 20, w: 49, cw: -1, kinds: map[string]fmtx.Kind{},
+		units: map[string]string{}}
 	if g, ok := env.Grid.(Grid); ok {
 		p.grid = g
+	}
+	for _, c := range env.DS.Columns() {
+		if _, ok := p.units[c.Name]; !ok {
+			p.units[c.Name] = c.Unit
+		}
 	}
 	p.title = p.dim("no rows")
 	return p
@@ -157,16 +178,23 @@ func (p *Pane) Names() []string {
 // Value is the text shown for column name (lines joined by "\n"), and
 // whether there is an entry for it.
 func (p *Pane) Value(name string) (string, bool) {
-	for _, e := range p.entries {
-		if e.name == name {
-			return e.value.Plain, true
+	for i := range p.entries {
+		if p.entries[i].name == name {
+			return p.textOf(i).Plain, true
 		}
 	}
 	return "", false
 }
 
-// Top is the first line shown (the scroll position).
-func (p *Pane) Top() int { return p.top }
+// Top is the first line shown (the scroll position), measuring the
+// entries above it (for tests).
+func (p *Pane) Top() int {
+	n := p.to
+	for i := 0; i < p.ti; i++ {
+		n += p.height(i)
+	}
+	return n
+}
 
 type fetchTick struct {
 	p   *Pane
@@ -177,10 +205,21 @@ type fetchTick struct {
 type fetched struct {
 	p        *Pane
 	view     kit.View
-	fileRows []int64
-	cols     []string
-	w        data.Window
-	err      error
+	fileRows [][]int64
+	cols     [][]string
+	ws       []data.Window
+	err      error // a read that failed: its columns and those after it
+	failedAt int
+}
+
+// gridReads reports whether a task tag is one of the grid's reads, after
+// which the record may have more values.
+func gridReads(tag string) bool {
+	switch tag {
+	case "page", "cols", "locate", "around":
+		return true
+	}
+	return strings.HasPrefix(tag, "cell:")
 }
 
 // Update implements kit.Pane.
@@ -205,9 +244,16 @@ func (p *Pane) Update(msg tea.Msg) tea.Cmd {
 		return p.fetch()
 	case kit.DoneMsg:
 		if r, ok := msg.Msg.(fetched); ok && r.p == p {
+			if errors.Is(r.err, context.Canceled) {
+				p.last = "" // stopped: read again on the next move
+				return nil
+			}
 			return tea.Batch(p.onFetched(r), p.refresh())
 		}
-		return p.refresh() // the grid's reads have landed
+		if gridReads(msg.Tag) {
+			return p.refresh()
+		}
+		return nil
 	case kit.ColumnChangedMsg:
 		if msg.From != Part {
 			p.follow()
@@ -215,6 +261,7 @@ func (p *Pane) Update(msg tea.Msg) tea.Cmd {
 		return nil
 	case kit.ViewChangedMsg:
 		p.env.Tasks.Cancel("detail") // for a view that is gone
+		p.kinds = map[string]fmtx.Kind{}
 		return p.refresh()
 	case kit.CancelledMsg:
 		p.last = "" // Esc stopped the read: the next move reads again
@@ -246,8 +293,13 @@ func (p *Pane) refresh() tea.Cmd {
 	default:
 		p.title = p.dim("row " + commas(rec.Row))
 	}
+	// a selection in view stays in view, whatever the new values' heights
+	shown := p.sel >= 0 && p.inView(p.sel)
 	p.setEntries(p.build(rec))
-	p.follow()
+	if !p.follow() && shown {
+		p.scrollTo(p.sel)
+	}
+	p.clamp()
 	if len(rec.Missing) > 0 && !rec.Pending && p.grid != nil {
 		p.seq++
 		seq := p.seq
@@ -256,35 +308,33 @@ func (p *Pane) refresh() tea.Cmd {
 	return nil
 }
 
-// build makes the entries for the columns shown, in order.
+// build makes the entries for the columns shown, in order; their texts are
+// made when drawn.
 func (p *Pane) build(rec kit.Record) []entry {
-	dim := p.env.Look.Style("dim")
-	missing := map[string]bool{}
+	missing := make(map[string]bool, len(rec.Missing))
 	for _, n := range rec.Missing {
 		missing[n] = true
 	}
-	units := map[string]string{}
-	for _, c := range p.env.DS.Columns() { // the file's units (Python's ds._by_name)
-		if _, ok := units[c.Name]; !ok {
-			units[c.Name] = c.Unit
-		}
-	}
 	cols := p.shown()
-	out := make([]entry, 0, len(cols))
-	for _, c := range cols {
-		e := entry{name: c.Name, label: fmtx.Sanitize(c.Name, false)}
-		v, have := rec.Values[c.Name]
-		_, failed := rec.Failed[c.Name]
-		switch {
-		case failed:
-			e.value = styled.New(cells.FailedMark, styled.Style{Fg: "red"})
-			e.value.Append(" couldn't load", dim)
-		case !have || missing[c.Name]:
-			e.value = styled.New(cells.Placeholder, dim)
-		default:
-			e.value = p.valueText(c, units[c.Name], v)
+	out := make([]entry, len(cols))
+	for i, c := range cols {
+		e := &out[i]
+		e.name, e.col = c.Name, c
+		if i < len(p.entries) && p.entries[i].name == c.Name {
+			e.label = p.entries[i].label
+		} else {
+			e.label = fmtx.Sanitize(c.Name, false)
 		}
-		out = append(out, e)
+		v, have := rec.Values[c.Name]
+		_, bad := rec.Failed[c.Name]
+		switch {
+		case bad:
+			e.state = failed
+		case !have || missing[c.Name]:
+			e.state = loading
+		default:
+			e.v = v
+		}
 	}
 	return out
 }
@@ -292,7 +342,7 @@ func (p *Pane) build(rec kit.Record) []entry {
 // shown are the view's columns the grid shows (all of them if every one
 // is hidden, as the grid does).
 func (p *Pane) shown() []data.Column {
-	var out []data.Column
+	out := make([]data.Column, 0, len(p.st.Columns))
 	for _, c := range p.st.Columns {
 		if !p.st.Hidden[c.Name] {
 			out = append(out, c)
@@ -304,11 +354,37 @@ func (p *Pane) shown() []data.Column {
 	return out
 }
 
+// textOf is entry i's text, made the first time it is needed.
+func (p *Pane) textOf(i int) *styled.Text {
+	e := &p.entries[i]
+	if e.text != nil {
+		return e.text
+	}
+	dim := p.env.Look.Style("dim")
+	var t styled.Text
+	switch e.state {
+	case failed:
+		t = styled.New(cells.FailedMark, styled.Style{Fg: "red"})
+		t.Append(" couldn't load", dim)
+	case loading:
+		t = styled.New(cells.Placeholder, dim)
+	default:
+		t = p.valueText(e.col, e.v)
+	}
+	e.text = &t
+	return e.text
+}
+
 // valueText is a value as the pane shows it: in full, its unit after it
 // and a derived reading below it, dim.
-func (p *Pane) valueText(c data.Column, unit string, v data.Value) styled.Text {
+func (p *Pane) valueText(c data.Column, v data.Value) styled.Text {
 	dim := p.env.Look.Style("dim")
-	kind := fmtx.KindFor(c.Name, c.Arrow, c.Unit)
+	kind, ok := p.kinds[c.Name]
+	if !ok {
+		kind = fmtx.KindFor(c.Name, c.Arrow, c.Unit)
+		p.kinds[c.Name] = kind
+	}
+	unit := p.units[c.Name]
 	full := fmtx.Format(v, kind, fmtx.Opts{Raw: true})
 	if n := utf8.RuneCountInString(full); n > cutAt {
 		full = string([]rune(full)[:cutAt]) + "… (" + commas(int64(n)) + " chars; y copies it all)"
@@ -336,41 +412,45 @@ func (p *Pane) setEntries(es []entry) {
 	for i := 0; same && i < len(es); i++ {
 		same = es[i].name == p.entries[i].name
 	}
-	p.entries = es
-	nw := 0
-	for _, e := range es {
-		nw = max(nw, utf8.RuneCountInString(e.name))
-	}
-	p.nameW = min(nameMax, nw)
-	p.layW = -1
+	nw := p.nameW
 	if !same {
-		p.sel, p.top = -1, 0
+		nw = 0
+		for _, e := range es {
+			nw = max(nw, utf8.RuneCountInString(e.name))
+		}
+		nw = min(nameMax, nw)
+	}
+	p.entries, p.nameW = es, nw
+	p.cw = -1
+	if !same {
+		p.sel, p.ti, p.to = -1, 0, 0
 	}
 }
 
 // follow selects the current column (the grid's), scrolling it into view
-// if the selection moves; a column the pane doesn't show leaves it put.
-func (p *Pane) follow() {
-	for i, e := range p.entries {
-		if e.name == p.st.Current {
-			p.selectEntry(i)
-			return
+// if the selection moves, and reports whether it moved; a column the pane
+// doesn't show leaves it put.
+func (p *Pane) follow() bool {
+	for i := range p.entries {
+		if p.entries[i].name == p.st.Current {
+			return p.selectEntry(i)
 		}
 	}
 	if p.sel < 0 && len(p.entries) > 0 {
-		p.selectEntry(0)
+		return p.selectEntry(0)
 	}
+	return false
 }
 
 // selectEntry selects entry i, scrolling it into view if the selection
-// changes.
-func (p *Pane) selectEntry(i int) {
+// changes, and reports whether it did.
+func (p *Pane) selectEntry(i int) bool {
 	if i == p.sel || i < 0 || i >= len(p.entries) {
-		return
+		return false
 	}
 	p.sel = i
-	p.layout(p.w)
 	p.scrollTo(i)
+	return true
 }
 
 // moveTo is the user's move to entry i: the grid follows (Python's
@@ -380,7 +460,6 @@ func (p *Pane) moveTo(i int) tea.Cmd {
 		return nil
 	}
 	i = max(0, min(len(p.entries)-1, i))
-	p.layout(p.w)
 	p.sel = i
 	p.scrollTo(i)
 	name := p.entries[i].name
@@ -391,19 +470,37 @@ func (p *Pane) moveTo(i int) tea.Cmd {
 	return kit.Send(kit.ColumnChangedMsg{From: Part})
 }
 
-// layout measures the entries for a pane w wide: with a scrollbar if they
-// don't fit its height, a column narrower.
-func (p *Pane) layout(w int) {
-	if w == p.layW+btoi(p.bar) && p.layW >= 0 {
+// layout decides the content width for a pane w × h: a column narrower,
+// for the scrollbar, if the entries don't fit its height (surely so if
+// there are more entries than lines; otherwise they are measured).
+func (p *Pane) layout() {
+	w := max(1, p.w)
+	if p.cw >= 0 && p.cw+btoi(p.bar) == w {
 		return
 	}
 	p.bar = false
-	p.measure(w)
-	if p.total > p.h && w > 1 {
-		p.bar = true
-		p.measure(w - 1)
+	p.setWidth(w)
+	if w > 1 {
+		if len(p.entries) > p.h {
+			p.bar = true
+		} else {
+			total := 0
+			for i := range p.entries {
+				total += p.height(i)
+			}
+			p.bar = total > p.h
+		}
+		if p.bar {
+			p.setWidth(w - 1)
+		}
 	}
-	p.top = max(0, min(p.top, p.total-p.h))
+}
+
+func (p *Pane) setWidth(cw int) {
+	p.cw = cw
+	for i := range p.entries {
+		p.entries[i].h = 0
+	}
 }
 
 func btoi(b bool) int {
@@ -413,48 +510,120 @@ func btoi(b bool) int {
 	return 0
 }
 
-func (p *Pane) measure(cw int) {
-	p.layW = cw
-	p.starts = make([]int, len(p.entries))
-	p.hts = make([]int, len(p.entries))
-	line := 0
-	for i, e := range p.entries {
-		p.starts[i] = line
-		p.hts[i] = entryHeight(e.value, p.nameW, cw)
-		line += p.hts[i]
+// height is entry i's lines, measured the first time it is needed.
+func (p *Pane) height(i int) int {
+	p.layout()
+	e := &p.entries[i]
+	if e.h == 0 {
+		e.h = entryHeight(*p.textOf(i), p.nameW, p.cw)
 	}
-	p.total = line
+	return e.h
 }
 
-// scrollTo scrolls entry i into view (OptionList.scroll_to_highlight).
+// inView reports whether entry i is wholly on screen.
+func (p *Pane) inView(i int) bool {
+	if i < p.ti || (i == p.ti && p.to > 0) || i >= len(p.entries) {
+		return false
+	}
+	lines := -p.to
+	for k := p.ti; k <= i; k++ {
+		lines += p.height(k)
+		if lines > p.h {
+			return false
+		}
+	}
+	return true
+}
+
+// scrollTo scrolls entry i into view, at the top if it is above the
+// screen or taller than it, else at the bottom
+// (OptionList.scroll_to_highlight).
 func (p *Pane) scrollTo(i int) {
-	if i < 0 || i >= len(p.starts) {
+	if i < 0 || i >= len(p.entries) || p.inView(i) {
 		return
 	}
-	a, b := p.starts[i], p.starts[i]+p.hts[i]
-	if b > p.top+p.h {
-		p.top = b - p.h
+	if i < p.ti || (i == p.ti && p.to > 0) || p.height(i) >= p.h {
+		p.ti, p.to = i, 0
+		p.clamp()
+		return
 	}
-	if a < p.top {
-		p.top = a
+	// its last line on the screen's last line
+	k, lines := i, p.height(i)
+	for k > 0 && lines+p.height(k-1) <= p.h {
+		k--
+		lines += p.height(k)
 	}
-	p.top = max(0, min(p.top, p.total-p.h))
+	if lines < p.h && k > 0 {
+		p.ti, p.to = k-1, p.height(k-1)-(p.h-lines)
+	} else {
+		p.ti, p.to = k, 0
+	}
+}
+
+// clamp keeps the scroll position on the entries, with no blank lines
+// below the last one unless they all fit.
+func (p *Pane) clamp() {
+	n := len(p.entries)
+	if n == 0 {
+		p.ti, p.to = 0, 0
+		return
+	}
+	p.ti = max(0, min(p.ti, n-1))
+	p.to = max(0, min(p.to, p.height(p.ti)-1))
+	lines := -p.to
+	for k := p.ti; k < n && lines < p.h; k++ {
+		lines += p.height(k)
+	}
+	if lines >= p.h {
+		return
+	}
+	// the end shows: scroll back so it is on the last line
+	for p.to > 0 && lines < p.h {
+		p.to--
+		lines++
+	}
+	for p.ti > 0 && lines < p.h {
+		p.ti--
+		hk := p.height(p.ti)
+		if lines+hk <= p.h {
+			lines += hk
+			continue
+		}
+		p.to = hk - (p.h - lines)
+		return
+	}
 }
 
 // scroll scrolls d lines without moving the selection (the wheel).
 func (p *Pane) scroll(d int) {
-	p.layout(p.w)
-	p.top = max(0, min(p.top+d, p.total-p.h))
+	if len(p.entries) == 0 {
+		return
+	}
+	p.to += d
+	for p.to < 0 && p.ti > 0 {
+		p.ti--
+		p.to += p.height(p.ti)
+	}
+	for p.ti < len(p.entries)-1 && p.to >= p.height(p.ti) {
+		p.to -= p.height(p.ti)
+		p.ti++
+	}
+	p.clamp()
 }
 
 // lineAt is the entry on line y of the pane as drawn, -1 if none.
 func (p *Pane) lineAt(y int) int {
-	l := p.top + y
-	if y < 0 || y >= p.h || l >= p.total {
+	if y < 0 || y >= p.h {
 		return -1
 	}
-	i := sort.Search(len(p.starts), func(i int) bool { return p.starts[i] > l }) - 1
-	return i
+	l := p.to + y
+	for i := p.ti; i < len(p.entries); i++ {
+		if l < p.height(i) {
+			return i
+		}
+		l -= p.height(i)
+	}
+	return -1
 }
 
 func (p *Pane) onKey(k tea.KeyPressMsg) tea.Cmd {
@@ -468,8 +637,10 @@ func (p *Pane) onKey(k tea.KeyPressMsg) tea.Cmd {
 		return p.moveTo(0)
 	case "end":
 		return p.moveTo(len(p.entries) - 1)
-	case "pgup", "pgdown":
-		return p.page(map[string]int{"pgup": -1, "pgdown": 1}[s])
+	case "pgup":
+		return p.page(-1)
+	case "pgdown":
+		return p.page(1)
 	case "enter", "tab":
 		// back to the grid, on the selected column (the grid is on it)
 		return kit.Send(kit.FocusMsg{Pane: "grid"})
@@ -486,36 +657,53 @@ func (p *Pane) onKey(k tea.KeyPressMsg) tea.Cmd {
 			return p.grid.FieldKey(name, k)
 		}
 	case "x", "ctrl+x":
-		// the app's clear-filter key, which hands focus to the grid
-		if p.grid != nil && !p.st.View.Plain() {
-			return tea.Batch(p.grid.FieldKey(p.Selected(), k), kit.Send(kit.FocusMsg{Pane: "grid"}))
+		// the app's clear-filter key (the filter part empties its box,
+		// typed text too); a view cleared hands focus to the grid
+		msg := kit.Send(kit.SetViewMsg{View: data.View{}, KeepFileRow: p.rec.FileRow})
+		if p.st.View.Plain() {
+			return msg
 		}
+		return tea.Batch(msg, kit.Send(kit.FocusMsg{Pane: "grid"}))
 	}
 	return nil
 }
 
-// page moves the selection a page of lines (OptionList._move_page).
+// page moves the selection a page of lines (OptionList._move_page): to the
+// entry on the line a screen's height from the selection's first line.
 func (p *Pane) page(d int) tea.Cmd {
-	if len(p.entries) == 0 {
+	n := len(p.entries)
+	if n == 0 {
 		return nil
 	}
 	if p.sel < 0 {
 		if d < 0 {
 			return p.moveTo(0)
 		}
-		return p.moveTo(len(p.entries) - 1)
+		return p.moveTo(n - 1)
 	}
-	p.layout(p.w)
-	y := max(0, min(p.total-1, p.starts[p.sel]+d*p.h))
-	i := sort.Search(len(p.starts), func(i int) bool { return p.starts[i] > y }) - 1
-	return p.moveTo(i)
+	k, off := p.sel, p.h
+	if d > 0 {
+		for k < n-1 && off >= p.height(k) {
+			off -= p.height(k)
+			k++
+		}
+	} else {
+		for off > 0 && k > 0 {
+			k--
+			off -= p.height(k)
+		}
+	}
+	return p.moveTo(k)
 }
 
 func (p *Pane) onClick(m tea.Mouse) tea.Cmd {
-	if m.Button != tea.MouseLeft || (p.bar && m.X >= p.w-1) {
+	if m.Button != tea.MouseLeft {
 		return nil
 	}
-	p.layout(p.w)
+	p.layout()
+	if p.bar && m.X >= p.cw {
+		return nil // the scrollbar
+	}
 	if i := p.lineAt(m.Y); i >= 0 {
 		return p.moveTo(i)
 	}
@@ -563,9 +751,8 @@ func (p *Pane) filterOn(name string, v data.Value, view data.View, keep int64) t
 	return kit.Send(kit.SetViewMsg{View: nv, KeepFileRow: keep})
 }
 
-// fetch starts the background read of the columns the record lacks (with
-// the rest of the rows read near the screen: Python's
-// _fetch_detail_columns, once per page), unless one is running.
+// fetch starts the background read of the cells the rows near the screen
+// lack (Python's _fetch_detail_columns, once per page), unless one runs.
 func (p *Pane) fetch() tea.Cmd {
 	if !p.st.DetailOpen || p.grid == nil || p.env.Tasks.Running("detail") {
 		return nil
@@ -583,37 +770,53 @@ func (p *Pane) fetch() tea.Cmd {
 	p.last = key
 	ds := p.env.DS
 	return p.env.Tasks.Run("detail", "loading columns", false, func(ctx context.Context) tea.Msg {
-		w, err := ds.FetchColumns(ctx, fileRows, cols)
-		if ctx.Err() != nil {
-			err = ctx.Err()
+		r := fetched{p: p, view: view, fileRows: fileRows, cols: cols, failedAt: -1}
+		for i := range fileRows {
+			w, err := ds.FetchColumns(ctx, fileRows[i], cols[i])
+			if ctx.Err() != nil {
+				err = ctx.Err()
+			}
+			if err != nil {
+				r.err, r.failedAt = err, i
+				break
+			}
+			r.ws = append(r.ws, w)
 		}
-		return fetched{p: p, view: view, fileRows: fileRows, cols: cols, w: w, err: err}
+		return r
 	})
 }
 
-// onFetched merges the read into the grid's cache; columns that couldn't
-// be read are marked so there (✗, not read again) and said once.
+// onFetched merges the reads into the grid's cache; columns that couldn't
+// be read are marked so there (✗, not read again in this view) and said.
 func (p *Pane) onFetched(r fetched) tea.Cmd {
-	if errors.Is(r.err, context.Canceled) {
-		p.last = "" // read again on the next move
-		return nil
-	}
-	w := r.w
-	if r.err != nil {
-		w = data.Window{FileRows: r.fileRows, Len: len(r.fileRows), Failed: map[string]error{}}
-		for _, c := range r.cols {
-			w.Failed[c] = r.err
+	failedCols := map[string]error{}
+	for i, w := range r.ws {
+		if w.FileRows == nil {
+			w.FileRows = r.fileRows[i]
+		}
+		p.env.Grid.Merge(r.view, w)
+		for n, err := range w.Failed {
+			failedCols[n] = err
 		}
 	}
-	if w.FileRows == nil {
-		w.FileRows = r.fileRows
+	if r.err != nil {
+		// the read that failed: all its columns; those after it are read
+		// again later
+		w := data.Window{FileRows: r.fileRows[r.failedAt], Len: len(r.fileRows[r.failedAt]), Failed: map[string]error{}}
+		for _, c := range r.cols[r.failedAt] {
+			w.Failed[c] = r.err
+			failedCols[c] = r.err
+		}
+		p.env.Grid.Merge(r.view, w)
+		if r.failedAt < len(r.cols)-1 {
+			p.last = ""
+		}
 	}
-	p.env.Grid.Merge(r.view, w)
-	if len(w.Failed) == 0 {
+	if len(failedCols) == 0 {
 		return nil
 	}
-	names := make([]string, 0, len(w.Failed))
-	for n := range w.Failed {
+	names := make([]string, 0, len(failedCols))
+	for n := range failedCols {
 		names = append(names, n)
 	}
 	sort.Strings(names)
@@ -621,7 +824,7 @@ func (p *Pane) onFetched(r fetched) tea.Cmd {
 	if len(names) == 1 {
 		s = ""
 	}
-	why := w.Failed[names[0]].Error()
+	why := failedCols[names[0]].Error()
 	if i := strings.IndexByte(why, '\n'); i >= 0 {
 		why = why[:i]
 	}
@@ -633,41 +836,47 @@ func (p *Pane) onFetched(r fetched) tea.Cmd {
 }
 
 // readKey identifies a background read.
-func readKey(v kit.View, fileRows []int64, cols []string) string {
+func readKey(v kit.View, fileRows [][]int64, cols [][]string) string {
 	var b strings.Builder
 	b.WriteString(strconv.Itoa(v.Gen))
-	for _, r := range fileRows {
-		b.WriteString(",")
-		b.WriteString(strconv.FormatInt(r, 10))
+	for i := range fileRows {
+		b.WriteString(";")
+		for _, r := range fileRows[i] {
+			b.WriteString(strconv.FormatInt(r, 10))
+			b.WriteString(",")
+		}
+		b.WriteString("|")
+		b.WriteString(strings.Join(cols[i], "\x00"))
 	}
-	b.WriteString("|")
-	b.WriteString(strings.Join(cols, "\x00"))
 	return b.String()
 }
 
-// View implements kit.Pane.
+// View implements kit.Pane: the entries on screen are laid out, the
+// others not.
 func (p *Pane) View(w, h int) string {
+	w, h = max(1, w), max(0, h)
 	if w != p.w || h != p.h {
 		p.w, p.h = w, h
-		p.layW = -1
+		p.cw = -1
 	}
-	p.layout(w)
-	cw := p.layW
+	p.layout()
+	p.clamp()
+	cw := p.cw
 	look := p.env.Look
 	lines := make([]string, 0, h)
 	var bar []styled.Text
 	if p.bar {
-		bar = scrollbar(h, p.total, p.top, look.Style("border"))
+		bar = p.scrollbar(look.Style("border"))
 	}
-	i := p.lineAt(0)
+	i, skip := p.ti, p.to
 	for y := 0; y < h; {
-		if i < 0 || i >= len(p.entries) {
+		if i >= len(p.entries) {
 			for ; y < h; y++ {
 				lines = append(lines, p.withBar(strings.Repeat(" ", cw), bar, y))
 			}
 			break
 		}
-		e := p.entries[i]
+		e := &p.entries[i]
 		nameSt := styled.Style{Bold: true}
 		whole := false
 		if i == p.sel {
@@ -677,11 +886,7 @@ func (p *Pane) View(w, h int) string {
 				nameSt.Reverse = true
 			}
 		}
-		el := entryLines(e.label, e.value, p.nameW, cw, nameSt, whole)
-		skip := 0
-		if y == 0 {
-			skip = p.top - p.starts[i]
-		}
+		el := entryLines(e.label, *p.textOf(i), p.nameW, cw, nameSt, whole)
 		for _, l := range el[min(skip, len(el)):] {
 			if y >= h {
 				break
@@ -689,9 +894,27 @@ func (p *Pane) View(w, h int) string {
 			lines = append(lines, p.withBar(fit(look.Render(l), cw), bar, y))
 			y++
 		}
+		skip = 0
 		i++
 	}
 	return strings.Join(lines, "\n")
+}
+
+// scrollbar is the scrollbar for the scroll position, the lines of entries
+// not measured yet counted as one each.
+func (p *Pane) scrollbar(st styled.Style) []styled.Text {
+	total, top := 0, p.to
+	for i := range p.entries {
+		hi := p.entries[i].h
+		if hi == 0 {
+			hi = 1
+		}
+		total += hi
+		if i < p.ti {
+			top += hi
+		}
+	}
+	return scrollbar(p.h, total, top, st)
 }
 
 func (p *Pane) withBar(line string, bar []styled.Text, y int) string {
@@ -705,9 +928,10 @@ func (p *Pane) withBar(line string, bar []styled.Text, y int) string {
 func fit(s string, w int) string {
 	n := ansi.StringWidth(s)
 	if n > w {
-		return ansi.Truncate(s, w, "")
+		s = ansi.Truncate(s, w, "")
+		n = ansi.StringWidth(s) // short of w if a wide character was at the edge
 	}
-	return s + strings.Repeat(" ", w-n)
+	return s + strings.Repeat(" ", max(0, w-n))
 }
 
 // commas is n with thousands separators.

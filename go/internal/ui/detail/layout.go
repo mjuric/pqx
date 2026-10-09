@@ -18,26 +18,53 @@ import (
 // a word wider than the column is folded, and whitespace past the end of a
 // line is dropped.
 
-// runeWidth is a character's cells (Rich's cell_len).
-func runeWidth(r rune) int {
-	if r < 0x80 {
-		if r < 0x20 || r == 0x7F {
-			return 0
-		}
-		return 1
-	}
-	var b [utf8.UTFMax]byte
-	n := utf8.EncodeRune(b[:], r)
-	return cells.Width(string(b[:n]))
-}
+// cellLen is the cells of s, a line without tabs (Rich's cell_len).
+func cellLen(s string) int { return cells.Width(s) }
 
-// cellLen is the cells of s.
-func cellLen(s string) int {
-	n := 0
-	for _, r := range s {
-		n += runeWidth(r)
+// span is one of Rich's graphemes: runes [a, b) taking w cells.
+type span struct{ a, b, w int }
+
+// graphemes splits rs as Rich's split_graphemes does: a zero-width
+// character goes with the one before it, a zero-width joiner with the
+// characters on both sides, and a variation selector 16 widens the
+// character before it if that turns it wide.
+func graphemes(rs []rune) []span {
+	out := make([]span, 0, len(rs))
+	var last rune
+	haveLast := false
+	for i := 0; i < len(rs); {
+		r := rs[i]
+		if r == 0x200D || r == 0xFE0F {
+			if len(out) == 0 {
+				out = append(out, span{i, i + 1, 0})
+				i++
+				continue
+			}
+			sp := &out[len(out)-1]
+			if r == 0x200D {
+				i += 2
+				i = min(i, len(rs))
+			} else {
+				i++
+				if haveLast && cellLen(string(last)+"\ufe0f") > cellLen(string(last)) {
+					sp.w++
+				}
+				haveLast = false
+			}
+			sp.b = i
+			continue
+		}
+		if w := cellLen(string(r)); w > 0 {
+			last, haveLast = r, true
+			out = append(out, span{i, i + 1, w})
+		} else if len(out) > 0 {
+			out[len(out)-1].b = i + 1
+		} else {
+			out = append(out, span{i, i + 1, 0})
+		}
+		i++
 	}
-	return n
+	return out
 }
 
 // words splits s as Rich's re_word (\s*\S+\s*) does: each word with the
@@ -64,20 +91,20 @@ func words(rs []rune) [][2]int {
 	return out
 }
 
-// chopCells cuts rs into pieces of at most width cells (Rich's chop_cells),
-// returning the pieces' lengths in runes.
+// chopCells cuts rs into pieces of at most width cells at grapheme
+// boundaries (Rich's chop_cells), returning the pieces' lengths in runes.
+// A grapheme wider than width makes an empty piece before it, as in Rich.
 func chopCells(rs []rune, width int) []int {
 	var out []int
 	size, start := 0, 0
-	for i, r := range rs {
-		w := runeWidth(r)
-		if size+w > width { // (an empty piece if r is wider than width, as Rich)
-			out = append(out, i-start)
-			start, size = i, 0
+	for _, g := range graphemes(rs) {
+		if size+g.w > width {
+			out = append(out, g.a-start)
+			start, size = g.a, 0
 		}
-		size += w
+		size += g.w
 	}
-	if size > 0 || start < len(rs) {
+	if size > 0 {
 		out = append(out, len(rs)-start)
 	}
 	return out
@@ -137,6 +164,14 @@ func wrapText(t styled.Text, width int) []styled.Text {
 	return out
 }
 
+// lineHeight is how many lines wrapText makes of one line.
+func lineHeight(line styled.Text, width int) int {
+	if !strings.ContainsRune(line.Plain, '\t') && cellLen(line.Plain) <= width {
+		return 1
+	}
+	return len(wrapText(line, width))
+}
+
 // expandTabs turns the tabs of a line into spaces up to the next multiple
 // of 8 cells (Rich's Text.expand_tabs: a tab takes at least one space).
 func expandTabs(t styled.Text) styled.Text {
@@ -146,22 +181,22 @@ func expandTabs(t styled.Text) styled.Text {
 	rs := []rune(t.Plain)
 	at := make([]int, len(rs)+1) // new rune offset of each old one
 	var b strings.Builder
-	pos, n := 0, 0
+	pos, n, part := 0, 0, 0
 	for i, r := range rs {
 		at[i] = n
 		if r == '\t' {
-			k := 8 - (pos+1)%8
-			if k == 8 {
-				k = 0
+			pos += cellLen(string(rs[part:i])) + 1
+			part = i + 1
+			k := 1
+			if rem := pos % 8; rem != 0 {
+				k += 8 - rem
+				pos += 8 - rem
 			}
-			k++
 			b.WriteString(strings.Repeat(" ", k))
-			pos += k
 			n += k
 			continue
 		}
 		b.WriteRune(r)
-		pos += runeWidth(r)
 		n++
 	}
 	at[len(rs)] = n
@@ -206,19 +241,23 @@ func fitLine(t styled.Text, width int) styled.Text {
 	return t
 }
 
-// setCellSize cuts t to width cells, padding with a space where a wide
-// character would straddle the edge (Rich's set_cell_size).
+// setCellSize cuts t to width cells at a grapheme boundary, a space taking
+// the place of a wide character the edge would split (Rich's
+// set_cell_size), and pads it to width.
 func setCellSize(t styled.Text, width int) styled.Text {
+	if width <= 0 {
+		return slice(t, 0, 0)
+	}
 	rs := []rune(t.Plain)
-	w, i := 0, 0
-	for ; i < len(rs); i++ {
-		rw := runeWidth(rs[i])
-		if w+rw > width {
+	w, end := 0, len(rs)
+	for _, g := range graphemes(rs) {
+		if w+g.w > width {
+			end = g.a
 			break
 		}
-		w += rw
+		w += g.w
 	}
-	t = slice(t, 0, i)
+	t = slice(t, 0, end)
 	if w < width {
 		t.Plain += strings.Repeat(" ", width-w)
 	}
@@ -267,7 +306,11 @@ func entryHeight(value styled.Text, nw, width int) int {
 	if !strings.ContainsAny(value.Plain, "\n\t") && cellLen(value.Plain) <= vw {
 		return 1
 	}
-	return len(wrapText(value, vw))
+	n := 0
+	for _, l := range value.Lines() {
+		n += lineHeight(l, vw)
+	}
+	return n
 }
 
 // Textual's vertical scrollbar glyphs (ScrollBarRender.VERTICAL_BARS).

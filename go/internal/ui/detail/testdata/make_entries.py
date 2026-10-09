@@ -14,7 +14,11 @@ from rich.text import Text
 from pqx.widgets import EntryGrid, _LazyEntry
 
 rnd = random.Random(5)
-chars = "abcxyz0123456789.-e+ 日本é\t"
+plain = list("abcxyz0123456789.-e+ 日本é\t")
+emoji = ["a", "b", "c", "x", "y", "z", "0", "1", "5", "9", ".", "-", "e", "+", " ", "日", "本", "é", "\t", "❤️", "👍🏽", "👨\u200d👩\u200d👧", "e\u0301", "\u200b"]
+
+
+chars = plain
 
 
 def rand(n):
@@ -23,7 +27,8 @@ def rand(n):
 
 cases = []
 console = Console(width=200, color_system=None, legacy_windows=False)
-while len(cases) < 400:
+while len(cases) < 600:
+    chars = plain if len(cases) < 300 else emoji  # then emoji: VS16, skin tones, ZWJ, combining, zero width
     width, nw = rnd.randint(4, 70), rnd.randint(1, 23)
     if width - nw - 2 < 1:
         continue
@@ -46,4 +51,26 @@ while len(cases) < 400:
 here = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(here, "entries.json"), "w") as f:
     json.dump(cases, f, ensure_ascii=False, indent=0)
+    f.write("\n")
+
+# scrollbar.json: Textual's vertical scrollbar (ScrollBarRender.render_bar) for
+# random sizes and positions: each row's glyph and whether it is reversed.
+from textual.scrollbar import ScrollBarRender  # noqa: E402
+from rich.color import Color  # noqa: E402
+
+bars = []
+for _ in range(150):
+    size = rnd.randint(1, 40)
+    virtual = size + rnd.randint(1, 400)
+    position = rnd.randint(0, virtual - size)
+    segs = list(ScrollBarRender.render_bar(size=size, virtual_size=virtual, window_size=size, position=position,
+                                           back_color=Color.parse("black"), bar_color=Color.parse("red")).segments)
+    rows = []
+    for s in segs:
+        if s.text == "\n" or not s.text:
+            continue
+        rows.append([s.text, bool(s.style and s.style.reverse), bool(s.style and s.style.color is not None)])
+    bars.append({"size": size, "total": virtual, "top": position, "rows": rows})
+with open(os.path.join(here, "scrollbar.json"), "w") as f:
+    json.dump(bars, f, ensure_ascii=False)
     f.write("\n")

@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/mjuric/pqx/go/internal/styled"
 )
@@ -74,28 +76,98 @@ func TestEntryStyles(t *testing.T) {
 	}
 }
 
-// Textual's scrollbar: a thumb proportional to the view, at the top and at
-// the bottom of the range.
-func TestScrollbar(t *testing.T) {
+// Textual's scrollbar (testdata/scrollbar.json, from ScrollBarRender.render_bar):
+// the same glyph, reverse video and bar colour on every row.
+func TestScrollbarMatchesTextual(t *testing.T) {
+	b, err := os.ReadFile("testdata/scrollbar.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		Size, Total, Top int
+		Rows             [][3]any
+	}
+	if err := json.Unmarshal(b, &cases); err != nil {
+		t.Fatal(err)
+	}
 	bar := styled.Style{Fg: "border"}
-	plain := func(ts []styled.Text) string {
-		var b strings.Builder
-		for _, x := range ts {
-			if x.Style.Reverse && x.Plain == " " {
-				b.WriteString("█")
-			} else {
-				b.WriteString(x.Plain)
+	for i, c := range cases {
+		got := scrollbar(c.Size, c.Total, c.Top, bar)
+		for y, r := range c.Rows {
+			g := got[y]
+			if g.Plain != r[0].(string) || g.Style.Reverse != r[1].(bool) || (g.Style.Fg == "border") != r[2].(bool) {
+				t.Fatalf("case %d (%d rows, %d lines from %d) row %d: %q %+v, want %v", i, c.Size, c.Total, c.Top, y, g.Plain, g.Style, r)
 			}
 		}
-		return b.String()
 	}
-	if s := plain(scrollbar(10, 10, 0, bar)); s != strings.Repeat(" ", 10) {
-		t.Fatalf("no scrolling: %q", s)
+	if s := scrollbar(10, 10, 0, bar); s[0].Plain != " " || s[0].Style.Reverse {
+		t.Fatal("a bar with nothing to scroll")
 	}
-	if s := plain(scrollbar(10, 40, 0, bar)); !strings.HasPrefix(s, "██") || strings.Count(s, "█") > 3 {
-		t.Fatalf("top: %q", s)
+}
+
+// A value exactly as wide as the value column takes one line.
+func TestExactFit(t *testing.T) {
+	v := styled.Text{Plain: strings.Repeat("x", 24)}
+	if h := entryHeight(v, 22, 48); h != 1 {
+		t.Fatal(h)
 	}
-	if s := plain(scrollbar(10, 40, 30, bar)); !strings.HasSuffix(strings.TrimRight(s, " "), "█") || s[0] != ' ' {
-		t.Fatalf("bottom: %q", s)
+	if h := entryHeight(styled.Text{Plain: strings.Repeat("x", 25)}, 22, 48); h != 2 {
+		t.Fatal(h)
 	}
+	if h := entryHeight(styled.Text{Plain: strings.Repeat("❤️", 12)}, 22, 48); h != 1 {
+		t.Fatal(h)
+	}
+	if h := entryHeight(styled.Text{Plain: strings.Repeat("❤️", 30)}, 22, 48); h != 3 {
+		t.Fatal(h)
+	}
+}
+
+// Wrapping keeps every character, in order, and makes lines of exactly the
+// width asked for.
+func FuzzWrap(f *testing.F) {
+	for _, s := range []string{"❤️❤️❤️ 👍🏽 a", "👨\u200d👩\u200d👧 x\u200by", "日本 e\u0301 \tz", "  a  b  ", "a\ufe0f\u200db"} {
+		f.Add(s, 5)
+	}
+	f.Fuzz(func(t *testing.T, s string, width int) {
+		width = 1 + (width%40+40)%40
+		if !utf8.ValidString(s) || strings.ContainsAny(s, "\n\r") || hasControls(s) || strayJoiner(s) {
+			return
+		}
+		lines := wrapText(styled.Text{Plain: s}, width)
+		var all strings.Builder
+		for _, l := range lines {
+			if w := cellLen(l.Plain); w != width && !(width == 1 && w == 0) {
+				t.Fatalf("%q at %d: line %q is %d wide", s, width, l.Plain, w)
+			}
+			all.WriteString(l.Plain)
+		}
+		squash := func(x string) string {
+			return strings.Map(func(r rune) rune {
+				if unicode.IsSpace(r) {
+					return -1
+				}
+				return r
+			}, x)
+		}
+		// (a grapheme wider than the line is cut: only then may text go)
+		if got, want := squash(all.String()), squash(expandTabs(styled.Text{Plain: s}).Plain); got != want && width > 2 {
+			t.Fatalf("%q at %d: %q", s, width, all.String())
+		}
+	})
+}
+
+// strayJoiner reports a zero-width joiner or variation selector without a
+// character to join to: Rich's widths for those are nonsense (a joiner takes
+// the space after it along), and so are the Go port's.
+func strayJoiner(s string) bool {
+	rs := []rune(s)
+	for i, r := range rs {
+		if r != 0x200D && r != 0xFE0F {
+			continue
+		}
+		if i == 0 || unicode.IsSpace(rs[i-1]) || (r == 0x200D && (i == len(rs)-1 || unicode.IsSpace(rs[i+1]))) {
+			return true
+		}
+	}
+	return false
 }

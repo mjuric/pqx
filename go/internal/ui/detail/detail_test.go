@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"regexp"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/fmtx"
+	"github.com/mjuric/pqx/go/internal/styled"
 	"github.com/mjuric/pqx/go/internal/ui/app"
 	"github.com/mjuric/pqx/go/internal/ui/kit"
 	"github.com/mjuric/pqx/go/internal/ui/uitest"
@@ -47,7 +49,7 @@ type fakeGrid struct {
 	rec    kit.Record
 	merged []data.Window
 	views  []kit.View
-	read   func() (kit.View, []int64, []string, bool)
+	read   func() (kit.View, [][]int64, [][]string, bool)
 	keys   []string // "column key" of FieldKey calls
 	value  data.Value
 	values []string // columns FieldValue was asked for
@@ -58,7 +60,7 @@ func (g *fakeGrid) Merge(v kit.View, w data.Window) {
 	g.views = append(g.views, v)
 	g.merged = append(g.merged, w)
 }
-func (g *fakeGrid) DetailRead() (kit.View, []int64, []string, bool) {
+func (g *fakeGrid) DetailRead() (kit.View, [][]int64, [][]string, bool) {
 	if g.read == nil {
 		return kit.View{}, nil, nil, false
 	}
@@ -257,18 +259,18 @@ func TestFitsFullPrecisionNumbers(t *testing.T) {
 	}
 	r := newRig(t, cols, kit.Record{Row: 0, FileRow: 0, Values: vals}, 49, 40)
 	r.p.View(49, 40)
-	if !r.p.bar || r.p.layW != 48 || r.p.nameW != 22 {
-		t.Fatalf("bar %v width %d name width %d", r.p.bar, r.p.layW, r.p.nameW)
+	if !r.p.bar || r.p.cw != 48 || r.p.nameW != 22 {
+		t.Fatalf("bar %v width %d name width %d", r.p.bar, r.p.cw, r.p.nameW)
 	}
 	for i, e := range r.p.entries {
 		switch e.name {
 		case "ra", "tiny", "id_min", "diaSourceId":
-			first := strings.Split(e.value.Plain, "\n")[0]
+			first := strings.Split(r.p.textOf(i).Plain, "\n")[0]
 			if utf8.RuneCountInString(first) > 24 {
 				t.Fatalf("%s: %q", e.name, first)
 			}
-			if r.p.hts[i] != strings.Count(e.value.Plain, "\n")+1 {
-				t.Fatalf("%s takes %d lines: %q", e.name, r.p.hts[i], e.value.Plain)
+			if r.p.height(i) != strings.Count(r.p.textOf(i).Plain, "\n")+1 {
+				t.Fatalf("%s takes %d lines: %q", e.name, r.p.height(i), r.p.textOf(i).Plain)
 			}
 		}
 	}
@@ -295,17 +297,21 @@ func TestHeightsFollowTheScrollbar(t *testing.T) {
 	r.g.rec.Values = vals
 	r.send(kit.ViewChangedMsg{})
 	r.p.View(49, 30)
-	if !r.p.bar || r.p.layW != 48 || r.p.nameW != 3 {
-		t.Fatalf("bar %v width %d", r.p.bar, r.p.layW)
+	if !r.p.bar || r.p.cw != 48 || r.p.nameW != 3 {
+		t.Fatalf("bar %v width %d", r.p.bar, r.p.cw)
 	}
-	if r.p.hts[3] != 1 { // name width 3 here: still fits in 48 - 5
-		t.Fatalf("height %d", r.p.hts[3])
+	if r.p.height(3) != 1 { // name width 3 here: still fits in 48 - 5
+		t.Fatalf("height %d", r.p.height(3))
 	}
 	vals["c03"] = long + "xx" // one column narrower than without the bar: it wraps
 	r.send(kit.CursorMsg{})
 	r.p.View(49, 30)
-	if r.p.hts[3] != 2 || r.p.total != 61 {
-		t.Fatalf("height %d total %d", r.p.hts[3], r.p.total)
+	total := 0
+	for i := range r.p.entries {
+		total += r.p.height(i)
+	}
+	if r.p.height(3) != 2 || total != 61 {
+		t.Fatalf("height %d total %d", r.p.height(3), total)
 	}
 	r.press("down", "down", "down")
 	text := strings.Split(ansi.Strip(r.p.View(49, 30)), "\n")
@@ -382,16 +388,23 @@ func TestKeysMoveTheSelection(t *testing.T) {
 	if m, ok := last[kit.ColumnStatsMsg](r); !ok || m.Column != "ra" {
 		t.Fatalf("%v", r.msgs)
 	}
-	r.press("y", "F", "<", ">", "x")
+	r.press("y", "F", "<", ">")
 	if strings.Join(r.g.keys, ",") != "ra y,ra F,ra <,ra >" {
-		t.Fatalf("%v", r.g.keys) // (x: no filter to clear)
+		t.Fatalf("%v", r.g.keys)
+	}
+	// x: the filter part clears its box (typed text too) and the view;
+	// focus goes to the grid only if there was a view to clear
+	r.msgs = nil
+	r.press("x")
+	if m, ok := last[kit.SetViewMsg](r); !ok || !m.View.Plain() || m.KeepFileRow != 7 {
+		t.Fatalf("%v", r.msgs)
+	}
+	if _, ok := last[kit.FocusMsg](r); ok {
+		t.Fatal("focus moved")
 	}
 	st.View = data.View{Where: "band = 'r'"}
 	r.msgs = nil
-	r.press("x")
-	if r.g.keys[len(r.g.keys)-1] != "ra x" {
-		t.Fatalf("%v", r.g.keys)
-	}
+	r.send(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
 	if m, ok := last[kit.FocusMsg](r); !ok || m.Pane != "grid" {
 		t.Fatalf("x doesn't hand focus to the grid: %v", r.msgs)
 	}
@@ -434,34 +447,37 @@ func TestSelectionLook(t *testing.T) {
 	r := newRig(t, demoCols(), kit.Record{Row: 0, FileRow: 0, Values: map[string]data.Value{"band": "r"}}, 49, 12)
 	r.env.State.Current = "band"
 	r.send(kit.ColumnChangedMsg{From: "grid"})
-	reversed := func() []string {
-		var out []string
+	i := r.p.sel
+	line := func() string {
 		for _, l := range strings.Split(r.p.View(49, 12), "\n") {
-			if strings.Contains(l, "\x1b[7") || strings.Contains(l, ";7m") || strings.Contains(l, ";7;") {
-				out = append(out, l)
+			if strings.HasPrefix(ansi.Strip(l), "band ") {
+				return l
 			}
 		}
-		return out
+		t.Fatal("no band")
+		return ""
 	}
-	rv := reversed()
-	if len(rv) != 1 || !strings.HasPrefix(ansi.Strip(rv[0]), "band") {
-		t.Fatalf("%q", rv)
+	want := func(nameSt styled.Style, whole bool) string {
+		l := entryLines("band", *r.p.textOf(i), r.p.nameW, r.p.cw, nameSt, whole)[0]
+		return fit(r.env.Look.Render(l), r.p.cw)
 	}
-	if strings.Count(rv[0], "\x1b[") > 4 { // the name only: bold reverse, then the rest plain
-		t.Logf("%q", rv[0])
+	// unfocused: only the name reversed
+	if got := line(); got != want(styled.Style{Bold: true, Reverse: true}, false) {
+		t.Fatalf("%q", got)
 	}
 	r.p.Focus()
-	rv = reversed()
-	if len(rv) != 1 {
-		t.Fatalf("%q", rv)
-	}
-	// every cell reversed: the reverse style runs to the end of the line
-	if s := rv[0]; !strings.HasSuffix(ansi.Strip(s), " ") || strings.Count(s, "\x1b[m") > 1+strings.Count(s, "\x1b[7") {
-		t.Fatalf("%q", s)
+	if got := line(); got != want(styled.Style{Bold: true}, true) {
+		t.Fatalf("%q", got)
 	}
 	r.p.Blur()
-	if len(reversed()) != 1 {
-		t.Fatal("blur")
+	if got := line(); got != want(styled.Style{Bold: true, Reverse: true}, false) {
+		t.Fatalf("%q", got)
+	}
+	// the others: bold names
+	for _, l := range strings.Split(r.p.View(49, 12), "\n") {
+		if !strings.HasPrefix(ansi.Strip(l), "band ") && strings.Contains(l, "7m") {
+			t.Fatalf("%q", l)
+		}
 	}
 }
 
@@ -560,7 +576,9 @@ func TestBackgroundRead(t *testing.T) {
 		Missing: []string{"ra", "dec"}}
 	r := newRig(t, cols, kit.Record{Row: -1, FileRow: -1}, 49, 20)
 	view := kit.View{Gen: 4}
-	r.g.read = func() (kit.View, []int64, []string, bool) { return view, []int64{2, 3, 4}, []string{"ra", "dec"}, true }
+	r.g.read = func() (kit.View, [][]int64, [][]string, bool) {
+		return view, [][]int64{{2, 3, 4}}, [][]string{{"ra", "dec"}}, true
+	}
 	r.ds.fetch = func(ctx context.Context, rows []int64, cs []string) (data.Window, error) {
 		w := data.Window{Len: len(rows), FileRows: rows, Cols: map[string][]data.Value{}}
 		for _, c := range cs {
@@ -610,11 +628,235 @@ func TestBackgroundRead(t *testing.T) {
 	if !ok || m.Title != "✗ Columns" || m.Text != "Couldn't load 2 columns: IO Error: ␛]0;pwned␇ broken" {
 		t.Fatalf("%q", m.Text)
 	}
-	// a read running: no second one
+	// a read running: no second one, even a new one
+	view.Gen = 6
 	r.env.Tasks.Run("detail", "x", false, func(context.Context) tea.Msg { return nil })
 	r.send(kit.CursorMsg{})
 	if r.ds.calls != 2 {
 		t.Fatal("read twice")
+	}
+	// a view change cancels it
+	r.send(kit.ViewChangedMsg{})
+	if r.env.Tasks.Running("detail") {
+		t.Fatal("still running")
+	}
+}
+
+// After Esc stopped a read, the next move reads the same again.
+func TestReadAgainAfterACancel(t *testing.T) {
+	r := newRig(t, demoCols(), kit.Record{Row: -1, FileRow: -1}, 49, 20)
+	r.g.read = func() (kit.View, [][]int64, [][]string, bool) {
+		return kit.View{Gen: 1}, [][]int64{{3}}, [][]string{{"ra"}}, true
+	}
+	r.ds.fetch = func(ctx context.Context, rows []int64, cs []string) (data.Window, error) {
+		return data.Window{}, context.Canceled // as if cancelled while it ran
+	}
+	r.g.rec = kit.Record{Row: 3, FileRow: 3, Values: map[string]data.Value{}, Missing: []string{"ra"}}
+	r.send(kit.CursorMsg{})
+	r.send(kit.CursorMsg{})
+	if r.ds.calls != 2 {
+		t.Fatalf("%d reads", r.ds.calls)
+	}
+	// Esc's cancel: the result never comes; the next move reads again
+	r.p.last = readKey(kit.View{Gen: 1}, [][]int64{{3}}, [][]string{{"ra"}})
+	r.send(kit.CancelledMsg{Tags: []string{"detail"}})
+	r.send(kit.CursorMsg{})
+	if r.ds.calls != 3 {
+		t.Fatalf("%d reads", r.ds.calls)
+	}
+}
+
+// A pending record (being looked up in a new view) is neither read nor
+// matched with = while a value is missing.
+func TestPendingRecord(t *testing.T) {
+	r := newRig(t, demoCols(), kit.Record{Row: -1, FileRow: -1}, 49, 20)
+	reads := 0
+	r.g.read = func() (kit.View, [][]int64, [][]string, bool) {
+		reads++
+		return kit.View{Gen: 1}, [][]int64{{3}}, [][]string{{"ra"}}, true
+	}
+	r.g.rec = kit.Record{Row: 0, FileRow: 15000, Pending: true, Values: map[string]data.Value{"band": "r"},
+		Missing: []string{"ra"}}
+	r.send(kit.CursorMsg{})
+	if reads != 0 || r.value("band") != "r" || r.value("ra") != "…" {
+		t.Fatalf("%d reads", reads)
+	}
+	r.env.State.Current = "ra"
+	r.send(kit.ColumnChangedMsg{From: "grid"})
+	r.press("=")
+	if m, ok := last[kit.NotifyMsg](r); !ok || !strings.Contains(m.Text, "not applied") || len(r.g.values) != 0 {
+		t.Fatalf("%v %v", r.msgs, r.g.values)
+	}
+	r.env.State.Current = "band"
+	r.send(kit.ColumnChangedMsg{From: "grid"})
+	r.press("=")
+	if m, ok := last[kit.SetViewMsg](r); !ok || m.KeepFileRow != 15000 || m.View.Where != "band = 'r'" {
+		t.Fatalf("%v", r.msgs)
+	}
+}
+
+// Only the grid's reads refresh the record (not every task's end).
+func TestRefreshOnTheGridsReads(t *testing.T) {
+	r := newRig(t, demoCols(), kit.Record{Row: 0, FileRow: 0, Values: map[string]data.Value{"band": "r"}}, 49, 20)
+	r.g.rec.Values["band"] = "g"
+	r.p.Update(kit.DoneMsg{Tag: "stats"})
+	if r.value("band") != "r" {
+		t.Fatal("refreshed on stats")
+	}
+	for _, tag := range []string{"page", "cols", "cell:band"} {
+		r.g.rec.Values["band"] = tag
+		r.p.Update(kit.DoneMsg{Tag: tag})
+		if r.value("band") != tag {
+			t.Fatalf("not refreshed on %s", tag)
+		}
+	}
+}
+
+// tallRig: 30 entries, a pane 10 lines high; values of the row are one
+// line, or three when tall.
+func tallRig(t *testing.T) *rig {
+	var cols []data.Column
+	for i := 0; i < 30; i++ {
+		cols = append(cols, col(fmt.Sprintf("c%02d", i), str, ""))
+	}
+	r := newRig(t, cols, kit.Record{Row: 0, FileRow: 0, Values: tallValues(false)}, 49, 10)
+	return r
+}
+
+func tallValues(tall bool) map[string]data.Value {
+	m := map[string]data.Value{}
+	for i := 0; i < 30; i++ {
+		v := fmt.Sprint("v", i)
+		if tall {
+			v = strings.Repeat("word ", 18) // three lines of 24
+		}
+		m[fmt.Sprintf("c%02d", i)] = v
+	}
+	return m
+}
+
+// The selection stays in view when a move changes both the row (the
+// entries' heights) and the column, the messages in either order.
+func TestSelectionStaysInView(t *testing.T) {
+	for _, order := range []string{"column first", "row first"} {
+		r := tallRig(t)
+		r.env.State.Current = "c08"
+		r.send(kit.ColumnChangedMsg{From: "grid"})
+		if !r.p.inView(r.p.sel) {
+			t.Fatal("not in view")
+		}
+		r.g.rec = kit.Record{Row: 1, FileRow: 1, Values: tallValues(true)}
+		r.env.State.Current = "c09"
+		if order == "column first" {
+			r.send(kit.ColumnChangedMsg{From: "grid"})
+			r.send(kit.CursorMsg{})
+		} else {
+			r.send(kit.CursorMsg{})
+			r.send(kit.ColumnChangedMsg{From: "grid"})
+		}
+		r.p.View(49, 10)
+		if r.p.Selected() != "c09" || !r.p.inView(r.p.sel) {
+			t.Fatalf("%s: %q top %d", order, r.p.Selected(), r.p.Top())
+		}
+		if !strings.Contains(ansi.Strip(r.p.View(49, 10)), "c09") {
+			t.Fatalf("%s: not drawn", order)
+		}
+	}
+}
+
+// Scrolling, resizing and a new set of columns keep the position sane.
+func TestScrollPosition(t *testing.T) {
+	r := tallRig(t)
+	if r.p.lineAt(9) != 9 || r.p.lineAt(10) != -1 {
+		t.Fatal("lineAt past the bottom")
+	}
+	r.p.Focus()
+	r.press("end")
+	if r.p.Top() != 20 || r.p.lineAt(9) != 29 || r.p.lineAt(10) != -1 || r.p.lineAt(-1) != -1 {
+		t.Fatalf("top %d", r.p.Top())
+	}
+	r.p.View(49, 15) // taller: no blank lines below the last entry
+	if r.p.Top() != 15 {
+		t.Fatalf("top %d", r.p.Top())
+	}
+	r.press("home", "pgdown")
+	if r.p.Selected() != "c15" { // a page of 15 lines
+		t.Fatal(r.p.Selected())
+	}
+	r.press("pgup")
+	if r.p.Selected() != "c00" {
+		t.Fatal(r.p.Selected())
+	}
+	// the wheel past the ends
+	for i := 0; i < 30; i++ {
+		r.send(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	}
+	if r.p.Top() != 15 {
+		t.Fatal(r.p.Top())
+	}
+	// new columns: the list starts over at the top
+	r.env.State.Columns = demoCols()
+	r.env.State.Current = "ra"
+	r.g.rec = kit.Record{Row: 0, FileRow: 0, Values: map[string]data.Value{}}
+	r.send(kit.ViewChangedMsg{})
+	if r.p.Top() != 0 || r.p.Selected() != "ra" {
+		t.Fatalf("top %d %q", r.p.Top(), r.p.Selected())
+	}
+	// another set of many columns, the current one not among them: from
+	// the top, the first selected
+	r.press("end")
+	var other []data.Column
+	for i := 0; i < 30; i++ {
+		other = append(other, col(fmt.Sprintf("x%02d", i), str, ""))
+	}
+	r.env.State.Columns = other
+	r.send(kit.ViewChangedMsg{})
+	r.p.View(49, 15)
+	if r.p.Top() != 0 || r.p.Selected() != "x00" {
+		t.Fatalf("top %d %q", r.p.Top(), r.p.Selected())
+	}
+	r.env.State.Columns = demoCols()
+	r.send(kit.ViewChangedMsg{})
+	// few entries in a short pane: shown from the top, blank below
+	if r.p.lineAt(14) != -1 || r.p.lineAt(0) != 0 {
+		t.Fatal("lineAt")
+	}
+	// a pane of no size draws nothing and doesn't fail
+	for _, wh := range [][2]int{{-5, -3}, {0, 0}, {1, 1}, {3, 2}} {
+		r.p.View(wh[0], wh[1])
+	}
+	r.press("end", "pgup", "down")
+	r.p.View(49, 15)
+}
+
+// Moves to where the selection is send nothing; another part's column
+// moves the selection, the pane's own announcement doesn't.
+func TestNoEcho(t *testing.T) {
+	r := tallRig(t)
+	r.p.Focus()
+	r.msgs = nil
+	r.press("home", "up")
+	if len(r.msgs) != 0 {
+		t.Fatalf("%v", r.msgs)
+	}
+	r.env.State.Current = "c05"
+	r.send(kit.ColumnChangedMsg{From: Part})
+	if r.p.Selected() != "c00" {
+		t.Fatal("followed its own announcement")
+	}
+}
+
+// A click on the scrollbar column selects nothing.
+func TestClickOnTheScrollbar(t *testing.T) {
+	r := tallRig(t)
+	r.p.View(49, 10)
+	r.send(tea.MouseClickMsg{X: 48, Y: 3, Button: tea.MouseLeft})
+	if r.p.Selected() != "c00" {
+		t.Fatal(r.p.Selected())
+	}
+	r.send(tea.MouseClickMsg{X: 47, Y: 3, Button: tea.MouseLeft})
+	if r.p.Selected() != "c03" {
+		t.Fatal(r.p.Selected())
 	}
 }
 
@@ -713,5 +955,51 @@ func TestKeywordsAreDuckDBs(t *testing.T) {
 	}
 	if sqlIdent(`q"uote`) != `"q""uote"` || sqlIdent("a.b") != `"a.b"` || sqlIdent("1a") != `"1a"` {
 		t.Fatal("quoting")
+	}
+}
+
+// The conditions "=" builds are SQL DuckDB runs, matching the value: the
+// infinities, a UUID, controls (C0 and C1) in a value and a name.
+func TestConditionsRunInDuckDB(t *testing.T) {
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE t AS SELECT 'inf'::DOUBLE AS pinf, '-inf'::DOUBLE AS ninf, 'inf'::FLOAT AS f32inf,
+		'nan'::DOUBLE AS nan, 0.1::FLOAT AS f, '01234567-89ab-cdef-0123-456789abcdef'::UUID AS u,
+		'a' || chr(27) || '[31m' || chr(155) || 'b' AS s, 1 AS "bell` + "\x07" + `", TIMESTAMPTZ '2026-01-02 03:04:05.678901+00' AS ts,
+		DATE '2026-01-01' AS "day", true AS flag, NULL::INT AS n`); err != nil {
+		t.Fatal(err)
+	}
+	uuid := data.UUID{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef}
+	cases := map[string]data.Value{"pinf": math.Inf(1), "ninf": math.Inf(-1), "f32inf": float32(math.Inf(1)),
+		"nan": math.NaN(), "f": float32(0.1), "u": uuid, "s": "a\x1b[31m\u009bb", "bell\x07": int64(1),
+		"ts":  data.Timestamp{T: time.Date(2026, 1, 2, 3, 4, 5, 678901000, time.UTC), Zoned: true, Unit: time.Microsecond},
+		"day": data.Date(20454), "flag": true, "n": nil}
+	for name, v := range cases {
+		cond := condition(name, v)
+		if strings.ContainsFunc(cond, func(r rune) bool { return r < 0x20 || (r >= 0x7F && r < 0xA0) }) {
+			t.Fatalf("%s: control characters in %q", name, cond)
+		}
+		var n int
+		if err := db.QueryRow("SELECT count(*) FROM t WHERE " + cond).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("%s: %q: %d rows, %v", name, cond, n, err)
+		}
+	}
+	if c := condition("u", uuid); c != "u = '01234567-89ab-cdef-0123-456789abcdef'" {
+		t.Fatal(c)
+	}
+	if c := condition("x", math.Inf(-1)); c != "x = '-inf'::DOUBLE" {
+		t.Fatal(c)
+	}
+}
+
+// fit pads a line cut before a wide character to the full width.
+func TestFit(t *testing.T) {
+	for _, c := range [][2]string{{"ab日", "ab "}, {"a", "a  "}, {"abcd", "abc"}, {"\x1b[1mab日\x1b[m", "ab "}} {
+		if got := ansi.Strip(fit(c[0], 3)); got != c[1] {
+			t.Fatalf("%q: %q", c[0], got)
+		}
 	}
 }
