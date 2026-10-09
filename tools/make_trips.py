@@ -1,6 +1,10 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["numpy", "pyarrow"]
+# ///
 """Write a synthetic (made-up) taxi-trip Parquet file for the README screenshots.
 
-Usage: python make_trips.py OUT.parquet ROWS
+Usage: uv run tools/make_trips.py OUT.parquet ROWS
 """
 import sys, numpy as np, pyarrow as pa, pyarrow.parquet as pq
 out, n = sys.argv[1], int(sys.argv[2])

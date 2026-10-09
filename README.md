@@ -8,8 +8,7 @@ Browse rows, filter with SQL, profile columns, plot, and export.<br>
 Files of any size open in under a second.
 
 [![PyPI](https://img.shields.io/pypi/v/pqx?include_prereleases&color=7aa2f7)](https://pypi.org/project/pqx/)
-[![Python](https://img.shields.io/pypi/pyversions/pqx?color=7aa2f7)](https://pypi.org/project/pqx/)
-[![CI](https://github.com/mjuric/pqx/actions/workflows/ci.yml/badge.svg)](https://github.com/mjuric/pqx/actions/workflows/ci.yml)
+[![CI](https://github.com/mjuric/pqx/actions/workflows/go.yml/badge.svg)](https://github.com/mjuric/pqx/actions/workflows/go.yml)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-7aa2f7)](#license)
 
 [Install](#install) · [Tour](#a-quick-tour) · [Big files](#built-for-big-files) · [Keys](#keys) · [Astronomy](#for-astronomers)
@@ -25,9 +24,30 @@ pipx install pqx          # or: uv tool install pqx   ·   pip install pqx
 pqx trips.parquet
 ```
 
-The 0.2.0 pre-release has everything on this page: `pipx install --pip-args=--pre pqx`
-or `pip install --pre pqx`. Python 3.10 or newer. pqx runs in any modern terminal, local or over SSH, and
-uses your terminal's own colours.
+or run it once without installing: `uvx pqx trips.parquet`.
+
+pqx is a single program with nothing else to install: the wheels on PyPI hold
+only the binary, with no Python dependencies, so any Python with pip, pipx or uv
+will do. There are wheels for
+
+| platform | needs |
+|---|---|
+| Linux x86_64 and aarch64 | glibc 2.28 or newer (`manylinux_2_28`: RHEL/Rocky 8, Debian 10, Ubuntu 18.10 and later) |
+| macOS arm64 and x86_64 | macOS 13 or newer |
+| Windows x86_64 | Windows 10 or newer |
+
+Or download the archive for your platform (`.tar.gz`, `.zip` on Windows) from
+[GitHub Releases](https://github.com/mjuric/pqx/releases) and put `pqx` on your
+`PATH`. The macOS binaries aren't notarized: a downloaded archive is quarantined
+by Gatekeeper, and `xattr -d com.apple.quarantine pqx` clears it (installs
+through pip, pipx or uv aren't affected).
+
+Elsewhere (musl Linux such as Alpine, older glibc, Windows on ARM, macOS 12 or
+older) pip finds no matching 0.3 wheel and installs the older pure-Python pqx
+0.2.x instead, which needs Python 3.10 or newer.
+
+pqx runs in any modern terminal, local or over SSH, and uses your terminal's
+own colours.
 
 ## A quick tour
 
@@ -85,8 +105,8 @@ pqx never loads a file in full. The grid reads only the rows and columns on
 screen, and counts, statistics and plots run inside
 [DuckDB](https://duckdb.org).
 
-- **Opens fast.** An 8-million-row, 184-column file is ready in under half a
-  second; a file with 2,000 row groups in about a second.
+- **Opens fast.** An 8-million-row, 184-column file, or one with 2,000 row
+  groups, is on screen in under half a second.
 - **Jumps anywhere.** Going to row 3,000,000,000 reads one row group, not the
   rows before it. Paging takes milliseconds whatever the file size.
 - **Wide is fine.** Hundreds of columns scroll as smoothly as ten; columns load
@@ -149,7 +169,8 @@ and the others are on it when you switch tabs.
 
 Numbers get a sensible format from the column's type and unit. Change any
 column in the grid: `<` and `>` drop or add a digit, and `F` takes a Python
-format spec (`.2f`, `.3e`, `,d`, `.1%`); an empty entry goes back to automatic.
+format spec (`.2f`, `.3e`, `,d`, `.1%`), or a number of digits; an empty entry
+goes back to automatic.
 pqx remembers your formats by column name, for every file, in
 `~/.config/pqx/formats.yaml`:
 
@@ -159,7 +180,8 @@ columns:
   trip_distance: 3   # 3 significant digits
 ```
 
-`--format COL=SPEC` sets a format for one session without saving it.
+`--format COL=SPEC` sets a format for one session without saving it. The file
+is under `$XDG_CONFIG_HOME/pqx/` when that is set.
 
 ## Looks
 
@@ -172,9 +194,13 @@ your colour scheme. Colour is kept for things that mean something: ✓ done,
 | `--accent blue\|cyan\|magenta\|green\|yellow` | `PQX_ACCENT` | focus colour (default blue) |
 | `--dim faint\|bright-black` | `PQX_DIM` | secondary text: the faint attribute (default), or bright black for terminals that ignore faint |
 | `--border NAME` | `PQX_BORDER` | unfocused panel border, an ANSI colour name (default `bright_black`) |
-| `--theme NAME` | | a Textual theme instead of your terminal's colours: `tokyo-night`, `dracula`, `catppuccin-mocha`, `nord`, `gruvbox`, … |
+| `--theme NAME` | | fixed colours instead of your terminal's: `tokyo-night`, `dracula`, `catppuccin-mocha`, `nord` or `gruvbox` |
 
-The screenshots on this page use `--theme tokyo-night`.
+The screenshots on this page use `--theme tokyo-night`. Other options:
+`-w`/`--where` opens with a filter or query, `--sample`/`--no-sample` force
+sampling for stats and plots on or off, and `--threads N` limits DuckDB's worker
+threads (it uses all cores by default; lower it on shared machines). `pqx -h`
+lists them all.
 
 ## For astronomers
 
@@ -191,8 +217,8 @@ knows their conventions:
 
 <img src="https://raw.githubusercontent.com/mjuric/pqx/master/docs/screenshots/sky.png" alt="A Mollweide sky map of a million simulated solar-system detections" width="900">
 
-`python -m pqx.demo demo.parquet --rows 1000000` writes a synthetic LSST-like
-file to try it on.
+To try it on: `uv run tools/make_demo.py demo.parquet --rows 1000000`, from a
+clone of this repository, writes a synthetic LSST-like file.
 
 <details>
 <summary><b>How the sky map is drawn</b></summary>
@@ -213,18 +239,49 @@ equirectangular count grid that DuckDB bins in a single `GROUP BY`:
 
 ## Development
 
+pqx is written in Go, with [Bubble Tea](https://github.com/charmbracelet/bubbletea)
+and [Lip Gloss](https://github.com/charmbracelet/lipgloss) for the UI and DuckDB
+(through [duckdb-go](https://github.com/duckdb/duckdb-go)) and
+[arrow-go](https://github.com/apache/arrow-go) for the data. Building needs Go
+1.27 and a C/C++ compiler (cgo, for DuckDB).
+
 ```sh
-python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest
+cd go
+make build        # bin/pqx
+make test         # go test ./...
+make vet
 ```
 
-`pqx/data.py` reads files (DuckDB and PyArrow), `pqx/app.py`, `pqx/cells.py`
-and `pqx/screens.py` are the Textual UI, `pqx/fmt.py` formats values and
-`pqx/plots.py` draws plots. Design notes are in [`docs/design`](docs/design).
-`python docs/screenshots/make_screenshots.py` regenerates the screenshots on this page.
+The `Makefile` sets the `duckdb_arrow` build tag, which every build and test
+needs. CI also runs `staticcheck` (settings in `go/staticcheck.conf`).
 
-Releases come from git tags via setuptools-scm: publishing a GitHub Release
-`vX.Y.Z` builds pqx and uploads it to PyPI.
+- `go/cmd/pqx` is the program: options, terminal setup, wiring the UI parts.
+- `go/internal/data` reads files (arrow-go for the grid's rows, DuckDB for
+  filters, counts, stats, histograms, plots and export).
+- `go/internal/fmtx` formats values (including Python's format-spec
+  mini-language for `F` and `--format`), `cells` styles grid cells, `plots`
+  draws histograms, density plots and sky maps, `config` reads and writes
+  `formats.yaml`, `theme` holds the colours and named themes.
+- `go/internal/ui/...` is the UI: `app` is the root model, `kit` the parts'
+  shared interfaces, and one package per part (`grid`, `detail`, `filter`,
+  `schema`, `stats`, `plot`, `meta`, `dialogs`, `chrome`, `footer`, …).
+- `go/testdata` has the test fixtures and golden files: outputs of Python pqx,
+  the reference for the port, that the Go tests must match.
+- `go/bench/parity` is the pty parity harness, which runs Python and Go pqx on
+  the same key scripts and compares their screens;
+  [its README](go/bench/parity/README.md) says how to run it.
+  `go/bench/pty` has the pty driver and benchmarks.
+
+Design notes are in [`docs/design`](docs/design), the port's in
+[`go-port.md`](docs/design/go-port.md). `uv run go/bench/screenshots/make_screenshots.py`
+regenerates the screenshots on this page from the Go binary (it needs Go and
+headless Chrome or Chromium). `tools/` has the scripts that write the
+synthetic files (`make_demo.py`, `make_trips.py`).
+
+Releases are built by the `go-release.yml` workflow: a wheel per platform for
+PyPI and an archive per platform for GitHub Releases, with release candidates
+going to TestPyPI first. The steps are in the
+[release runbook](docs/runbooks/release.md).
 
 ## License
 
