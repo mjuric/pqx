@@ -47,6 +47,8 @@ type dataset struct {
 	conv      []func(arrow.Array, int) Value
 	hasRowNum bool // the file has no column of its own named file_row_number
 	closeOnce sync.Once
+
+	an analysis // footer scan, encodings, totals and the view t (meta.go)
 }
 
 // Open opens a Parquet file: it parses the footer and schema once with
@@ -109,7 +111,9 @@ func open(path string, f *os.File, opts Options) (_ *dataset, err error) {
 	}
 	d.byName = make(map[string]int, sc.NumFields())
 	for i, fld := range sc.Fields() {
-		d.cols = append(d.cols, Column{Name: fld.Name, Type: duckType(fld.Type), Arrow: fld.Type, Nullable: fld.Nullable, SQLName: fld.Name})
+		c := Column{Name: fld.Name, Type: duckType(fld.Type), Arrow: fld.Type, Nullable: fld.Nullable, SQLName: fld.Name}
+		c.Unit, c.Description = unitDesc(fld.Metadata)
+		d.cols = append(d.cols, c)
 		if _, dup := d.byName[fld.Name]; !dup {
 			d.byName[fld.Name] = i
 		}
