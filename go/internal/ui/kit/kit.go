@@ -76,6 +76,12 @@ type State struct {
 	// follow it; Plot doesn't): ColumnChangedMsg.
 	Current string
 
+	// Loaded is the number of rows in the grid's last read window of the
+	// view (Python's grid.row_count); 0 before the first read of a view.
+	// Set by the grid; the status line shows "first N shown" while
+	// counting, and "row N" only when rows are loaded.
+	Loaded int64
+
 	// Row is the grid's cursor row in the view, and FileRow its file row
 	// (-1 for SQL views). Set by the grid: CursorMsg.
 	Row, FileRow int64
