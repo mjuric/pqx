@@ -245,14 +245,14 @@ def report(results):
             vals = [r for r in runs if r is not None]
             med = statistics.median(vals) if vals else None
             target = next((t for m, fs, t in TARGETS if m == metric and (fs is None or fs == f)), None)
-            proto = PROTOTYPE.get(f, {}).get(metric)
+            proto = PROTOTYPE.get(f, {}).get(metric) if app == "go" else None
             verdict = []
             if med is None:
                 verdict.append("NO DATA")
             else:
                 if target is not None:
                     verdict.append("meets target" if med <= target else "MISSES target")
-                if app == "go" and proto is not None and med * 1000 > proto * 1.2:
+                if proto is not None and med * 1000 > proto * 1.2:
                     verdict.append("REGRESSION vs prototype")
             runs_s = ", ".join("—" if r is None else f"{r * 1000:.0f}" for r in runs)
             med_s = "—" if med is None else f"{med * 1000:.0f}"
