@@ -311,23 +311,39 @@ func TestEscCancelsCount(t *testing.T) {
 }
 
 func TestFilterReadErrorReverts(t *testing.T) {
-	ds := newFake(1000, 3)
-	h := newHarness(t, ds, 80, 20)
-	h.press("down", "down")
-	h.filterWith("bad")
-	h.settle()
-	g := h.g
-	if !h.env.State.View.Plain() || !g.v.view.Plain() {
-		t.Errorf("a filter whose read failed was kept: %q", h.env.State.View.Where)
-	}
-	if g.curRow != 2 {
-		t.Errorf("cursor not restored: %d", g.curRow)
-	}
-	if !h.noted("Binder Error") || !strings.Contains(h.status.Text, "previous view kept") {
-		t.Errorf("no error shown: %+v %+v", h.notes, h.status)
-	}
-	if !strings.Contains(strings.Join(h.grid(), "\n"), "r2") {
-		t.Errorf("the old rows aren't shown:\n%s", strings.Join(h.grid(), "\n"))
+	// the page read and the count of a bad filter both fail: whichever
+	// arrives first, the view goes back, and the status line says why the
+	// read failed (the count's failure is only a toast)
+	for _, readFirst := range []bool{true, false} {
+		ds := newFake(1000, 3)
+		h := newHarness(t, ds, 80, 20)
+		h.press("down", "down")
+		ds.gate, ds.countGate = make(chan struct{}), make(chan struct{})
+		h.filterWith("bad")
+		if h.env.State.View.Where != "bad" {
+			t.Fatalf("the filter wasn't applied: %+v", h.env.State.View)
+		}
+		if readFirst {
+			close(ds.gate)
+			h.waitFor("the revert", func() bool { return h.env.State.View.Plain() && h.g.v.view.Plain() })
+			close(ds.countGate)
+		} else {
+			close(ds.countGate)
+			h.waitFor("the count's failure", func() bool { return h.noted("Count failed") })
+			close(ds.gate)
+			h.waitFor("the revert", func() bool { return h.env.State.View.Plain() && h.g.v.view.Plain() })
+		}
+		h.settle()
+		g := h.g
+		if g.curRow != 2 {
+			t.Errorf("read first %v: cursor not restored: %d", readFirst, g.curRow)
+		}
+		if !h.noted("Binder Error") || h.status.Severity != kit.Error || !strings.Contains(h.status.Text, "previous view kept") {
+			t.Errorf("read first %v: status %+v, notes %+v", readFirst, h.status, h.notes)
+		}
+		if !strings.Contains(strings.Join(h.grid(), "\n"), "r2") {
+			t.Errorf("read first %v: the old rows aren't shown", readFirst)
+		}
 	}
 }
 
@@ -533,7 +549,7 @@ func TestInterruptErrorIsNotAFailure(t *testing.T) {
 	h.press("esc") // cancels the count and the fetch
 	h.waitFor("the cancelled count", func() bool { return ds.countCancels() >= 1 })
 	h.settle()
-	if h.noted("Query failed") || h.noted("count failed") || h.status.Severity == kit.Error {
+	if h.noted("Query failed") || h.noted("Count failed") || h.status.Severity == kit.Error {
 		t.Errorf("a cancelled count counted as a failure: %+v %+v", h.notes, h.status)
 	}
 	close(ds.gate)

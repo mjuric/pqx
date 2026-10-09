@@ -374,6 +374,7 @@ func (f *Filter) onValidated(r validated) tea.Cmd {
 	st := f.st
 	v := r.req.View
 	wasSQL := st.View.IsSQL()
+	f.env.Tasks.Cancel("count") // the old view's: stale (a failure would land on the new one)
 	st.View = v
 	if v.IsSQL() || wasSQL || len(st.Columns) != len(r.cols) {
 		st.Hidden = map[string]bool{}
@@ -458,10 +459,11 @@ func (f *Filter) onCounted(r counted) tea.Cmd {
 		if errors.Is(r.err, context.Canceled) {
 			return nil
 		}
-		first, _ := describe(r.err)
-		return tea.Batch(
-			kit.Send(kit.StatusMsg{Severity: kit.Error, Text: "count failed: " + first}),
-			kit.Send(kit.NotifyMsg{Severity: kit.Error, Title: "✗ Query failed", Text: fmtx.Sanitize(trunc(r.err.Error(), 600), true)}))
+		// A toast only: the status line is the reads' (the grid's). A filter
+		// that can't be counted can't be read either, and the read's error
+		// (with the previous view kept) must not be replaced by this one,
+		// whichever arrives first.
+		return kit.Send(kit.NotifyMsg{Severity: kit.Error, Title: "✗ Count failed", Text: fmtx.Sanitize(trunc(r.err.Error(), 600), true)})
 	}
 	f.counts[countKey(r.view)] = r.n
 	f.st.Total = r.n
