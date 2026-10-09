@@ -687,7 +687,7 @@ func TestKeysWhileTheRecordIsOnItsWayActOnIt(t *testing.T) {
 	ds.mu.Unlock()
 	ds.release(0)
 	h.settle()
-	want := "(band = '" + band + "') and detector = " + strconv.FormatInt(det, 10)
+	want := "band = '" + band + "' and detector = " + strconv.FormatInt(det, 10)
 	if h.env.State.View.Where != want {
 		t.Errorf("where %q, want %q", h.env.State.View.Where, want)
 	}

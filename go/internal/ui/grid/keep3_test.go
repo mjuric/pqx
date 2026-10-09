@@ -62,7 +62,7 @@ func TestTwoQueuedEqualsKeepBothConditions(t *testing.T) {
 	h.press("=")
 	release(ds)
 	h.settle()
-	want := "((band = '" + tr["band"][15_000].(string) + "') and " + cond(t, "detector", tr["detector"][15_000]) + ") and " + cond(t, "mag", tr["mag"][15_000])
+	want := "band = '" + tr["band"][15_000].(string) + "' and " + cond(t, "detector", tr["detector"][15_000]) + " and " + cond(t, "mag", tr["mag"][15_000])
 	if h.env.State.View.Where != want || h.record() != 15_000 {
 		t.Errorf("where %q, want %q; record %d", h.env.State.View.Where, want, h.record())
 	}
@@ -79,7 +79,7 @@ func TestTwoEqualsInOneBatch(t *testing.T) {
 	h.exec(h.g.moved())
 	h.send(kp("="))
 	h.settle()
-	want := "(band = '" + tr["band"][0].(string) + "') and " + cond(t, "detector", tr["detector"][0])
+	want := "band = '" + tr["band"][0].(string) + "' and " + cond(t, "detector", tr["detector"][0])
 	if h.env.State.View.Where != want {
 		t.Errorf("where %q, want %q", h.env.State.View.Where, want)
 	}

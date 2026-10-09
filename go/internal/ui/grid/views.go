@@ -67,9 +67,9 @@ func (g *Grid) onViewChanged() tea.Cmd {
 	g.v = g.newViewData(st.View)
 	g.v.setTotal(st.Total)
 	if !old.view.IsSQL() && !st.View.IsSQL() {
-		// row labels are file rows in both: as wide as they were, so the
-		// columns kept on screen don't move while the new rows arrive
-		g.v.labelW = old.labelW
+		// until the new rows arrive, row labels as wide as they were, so
+		// the columns kept on screen don't move meanwhile
+		g.v.labelW = g.labelWidthOf(old)
 	}
 	if st.View.Plain() {
 		g.v.setTotal(g.ds.NumRows())
