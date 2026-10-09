@@ -112,3 +112,23 @@ func TestCLIPrintsNoControlCharacters(t *testing.T) {
 		t.Errorf("control characters %q in %q", c, err)
 	}
 }
+
+// The messages for files that can't be Parquet are PyArrow's, as Python
+// pqx shows them.
+func TestNotParquet(t *testing.T) {
+	dir := t.TempDir()
+	for content, want := range map[string]string{
+		"":                     "Parquet file size is 0 bytes",
+		"ab":                   "Parquet file size is 2 bytes, smaller than the minimum file footer (8 bytes)",
+		"not a parquet file\n": "Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.",
+	} {
+		p := filepath.Join(dir, "f.parquet")
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var errb bytes.Buffer
+		if code := run([]string{p}, &bytes.Buffer{}, &errb); code != 1 || errb.String() != "pqx: cannot open "+p+": "+want+"\n" {
+			t.Errorf("%q: exit %d, %q", content, code, errb.String())
+		}
+	}
+}
