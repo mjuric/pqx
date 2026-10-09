@@ -18,6 +18,7 @@ import (
 	"github.com/mjuric/pqx/go/internal/theme"
 	"github.com/mjuric/pqx/go/internal/ui/app"
 	"github.com/mjuric/pqx/go/internal/ui/chrome"
+	"github.com/mjuric/pqx/go/internal/ui/detail"
 	"github.com/mjuric/pqx/go/internal/ui/dialogs"
 	"github.com/mjuric/pqx/go/internal/ui/filter"
 	"github.com/mjuric/pqx/go/internal/ui/footer"
@@ -104,9 +105,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	env.State = newState(ds, env.Opts)
 	env.Dialogs = dialogs.New(env)
+	g := grid.New(env)
+	env.Grid = g
 	parts := app.Parts{
 		Chrome: chrome.New(env),
-		Grid:   grid.New(env),
+		Grid:   g,
+		Detail: detail.New(env),
 		Filter: filter.New(env),
 		Schema: schema.New(env, footer.New(env)),
 		Meta:   meta.New(env),
