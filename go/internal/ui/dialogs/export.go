@@ -305,7 +305,7 @@ func expandUser(p string) string {
 func (d *exportDialog) submit() tea.Cmd {
 	path := strings.TrimSpace(d.path.Value())
 	if path == "" {
-		return kit.Send(kit.NotifyMsg{Severity: kit.Warning, Text: "Enter a file name", Timeout: textualTimeout})
+		return kit.Send(kit.NotifyMsg{Severity: kit.Warning, Text: "Enter a file name"})
 	}
 	full, err := filepath.Abs(expandUser(path))
 	if err != nil {
@@ -313,7 +313,7 @@ func (d *exportDialog) submit() tea.Cmd {
 	}
 	if _, err := os.Stat(full); err == nil && !d.over {
 		return kit.Send(kit.NotifyMsg{Severity: kit.Warning,
-			Text: fmtx.Sanitize(path, false) + " exists — tick 'Overwrite' to replace it", Timeout: textualTimeout})
+			Text: fmtx.Sanitize(path, false) + " exists — tick 'Overwrite' to replace it"})
 	}
 	var cols []string
 	if d.onlyVis {

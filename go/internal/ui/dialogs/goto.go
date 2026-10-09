@@ -90,8 +90,7 @@ func (d *gotoDialog) submit() tea.Cmd {
 	}
 	row, err := parseRowSpec(spec, total)
 	if err != nil {
-		return closeWith(kit.NotifyMsg{Severity: kit.Error, Text: "Not a row number: " + fmtx.Sanitize(spec, false),
-			Timeout: textualTimeout})
+		return closeWith(kit.NotifyMsg{Severity: kit.Error, Text: "Not a row number: " + fmtx.Sanitize(spec, false)})
 	}
 	return closeWith(kit.GotoMsg{Row: row})
 }
