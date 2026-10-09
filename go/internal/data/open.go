@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/parquet/file"
@@ -196,10 +197,26 @@ func readParquet(path string, rowNumbers bool) string {
 
 // bind has DuckDB read the footer (into its cache), and name the columns
 // and their types (bindTypes).
+//
+// DuckDB 1.5.6 now and then (about one time in 300 here, in Python too)
+// says "No files found that match the pattern" for a file that was written
+// just before; the bind is tried again then, a few times.
 func (d *dataset) bind() {
 	defer close(d.bound)
-	if err := d.bindTypes(context.Background()); err != nil {
+	for try := 0; ; try++ {
+		err := d.bindTypes(context.Background())
+		if err == nil {
+			return
+		}
+		if try < 4 && strings.Contains(err.Error(), "No files found") {
+			if _, serr := os.Stat(d.duckPath); serr == nil {
+				d.duckInfos, d.duckNames, d.duckArrow, d.duckTypes = nil, nil, nil, nil
+				time.Sleep(time.Duration(try+1) * 10 * time.Millisecond)
+				continue
+			}
+		}
 		d.bindErr = duckError(err)
+		return
 	}
 }
 

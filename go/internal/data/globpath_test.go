@@ -34,7 +34,7 @@ func TestRemoveStaleLinks(t *testing.T) {
 	linked := t.TempDir()
 	os.WriteFile(filepath.Join(linked, "f"), []byte("x"), 0o600)
 	dirLink := mk("dirlink", map[string]string{linkName: linked}, old) // the link goes, not what it points to
-	os.Symlink(t.TempDir(), filepath.Join(base, "alink")) // a link to a directory: not followed
+	os.Symlink(t.TempDir(), filepath.Join(base, "alink"))              // a link to a directory: not followed
 	removeStaleLinks(base, 24*time.Hour)
 	if _, err := os.Lstat(stale); err == nil {
 		t.Error("a stale link directory was left")

@@ -18,6 +18,7 @@ import (
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/decimal256"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/apache/arrow-go/v18/parquet"
 	"github.com/apache/arrow-go/v18/parquet/pqarrow"
@@ -1321,5 +1322,77 @@ func TestPivotGuard(t *testing.T) {
 	// the same lexer guards filters: xe'\' is a name and a one-character string
 	if _, err := whereSQL("s = xe'\\' ) OR (1"); err == nil || !strings.Contains(err.Error(), "closes nothing") {
 		t.Errorf("xe'\\': %v", err)
+	}
+}
+
+// FetchAround with fewer rows of the view before the record than pos says
+// (a stale position): the window starts where those rows start.
+func TestFetchAroundFewerRowsBefore(t *testing.T) {
+	d := openFixture(t, "demo.parquet")
+	v := View{Where: "band = 'r'"}
+	all := mustFetch(t, d, v, 0, 40, []string{"diaSourceId"})
+	rec := all.FileRows[2] // really the view's row 2
+	w, err := d.FetchAround(bg, v, rec, 50, 40, 20, []string{"diaSourceId"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Start != 48 || len(w.FileRows) < 3 || !slices.Equal(w.FileRows[:3], all.FileRows[:3]) {
+		t.Fatalf("Start %d FileRows %v, want 48 and %v…", w.Start, w.FileRows, all.FileRows[:3])
+	}
+}
+
+// FetchAround of a sorted (or SQL) view is Fetch: rows near the record by
+// file row aren't its neighbours in a sort.
+func TestFetchAroundSortedIsFetch(t *testing.T) {
+	d := openFixture(t, "demo.parquet")
+	for _, v := range []View{
+		{Where: "band = 'r'", OrderBy: []Sort{{Column: "mag"}}},
+		{OrderBy: []Sort{{Column: "mag", Desc: true}}},
+	} {
+		page := mustFetch(t, d, v, 100, 50, []string{"diaSourceId"})
+		got, err := d.FetchAround(bg, v, page.FileRows[10], 110, 100, 50, []string{"diaSourceId"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameWindow(t, fmt.Sprintf("%+v", v), got, page)
+	}
+	sql := View{SQL: "select diaSourceId from t where band = 'r'"}
+	page := mustFetch(t, d, sql, 10, 20, []string{"diaSourceId"})
+	got, err := d.FetchAround(bg, sql, 5, 15, 10, 20, []string{"diaSourceId"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameWindow(t, "SQL", got, page)
+}
+
+// A wide decimal in a filtered or sorted view of a file whose rows DuckDB
+// can't number (its own file_row_number column): Failed, never DuckDB's
+// wrong doubles; the plain view reads it exactly.
+func TestWideDecimalWithoutRowNumbers(t *testing.T) {
+	sc := arrow.NewSchema([]arrow.Field{
+		{Name: "file_row_number", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "d", Type: &arrow.Decimal256Type{Precision: 50, Scale: 2}, Nullable: true},
+	}, nil)
+	b := array.NewRecordBuilder(memory.DefaultAllocator, sc)
+	for i := range 20 {
+		b.Field(0).(*array.Int64Builder).Append(int64(i))
+		b.Field(1).(*array.Decimal256Builder).Append(decimal256.FromI64(int64(i - 10)))
+	}
+	rec := b.NewRecordBatch()
+	p := filepath.Join(t.TempDir(), "widefrn.parquet")
+	writeTable(t, p, array.NewTableFromRecords(sc, []arrow.RecordBatch{rec}), 7, 1<<20)
+	ds, err := Open(p, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.Close()
+	if x := mustFetch(t, ds, View{}, 3, 1, []string{"d"}).Cols["d"][0].(Decimal); x.Unscaled.Int64() != -7 {
+		t.Fatalf("plain: %#v", x)
+	}
+	for _, v := range []View{{Where: "file_row_number > 2"}, {OrderBy: []Sort{{Column: "file_row_number", Desc: true}}}} {
+		w := mustFetch(t, ds, v, 0, 5, []string{"file_row_number", "d"})
+		if !errors.Is(w.Failed["d"], errWideNoRows) || w.Cols["d"] != nil || len(w.Cols["file_row_number"]) != 5 {
+			t.Fatalf("%+v: %+v", v, w)
+		}
 	}
 }
