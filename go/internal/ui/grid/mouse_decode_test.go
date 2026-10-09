@@ -49,7 +49,7 @@ func decode(t *testing.T, input []byte) []string {
 	t.Helper()
 	pr, pw := io.Pipe()
 	rec := &recorder{}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	p := tea.NewProgram(rec, tea.WithInput(pr), tea.WithOutput(io.Discard),
 		tea.WithWindowSize(250, 200), tea.WithContext(ctx), tea.WithoutSignals())

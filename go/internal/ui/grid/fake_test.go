@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/apache/arrow-go/v18/arrow"
 
@@ -29,6 +30,7 @@ type fakeDS struct {
 	cols []data.Column
 
 	mu        sync.Mutex
+	held      atomic.Int32 // calls waiting on a gate or a test's channel (hold)
 	calls     []call
 	cancelled int
 	countsCan int
@@ -185,10 +187,29 @@ func (f *fakeDS) fileRow(v data.View, i int64) int64 {
 	return i * k
 }
 
+// hold waits for ch to be closed or ctx to be cancelled, counting the
+// call as held meanwhile: the test harness settles when every command
+// still running is held (see harness.settle).
+func (f *fakeDS) hold(ctx context.Context, ch <-chan struct{}) error {
+	f.held.Add(1)
+	defer f.held.Add(-1)
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// heldCalls is the number of calls held (for the harness).
+func (f *fakeDS) heldCalls() int { return int(f.held.Load()) }
+
 func (f *fakeDS) wait(ctx context.Context, gate chan struct{}, counter *int) error {
 	if gate == nil {
 		return nil
 	}
+	f.held.Add(1)
+	defer f.held.Add(-1)
 	select {
 	case <-gate:
 		return nil

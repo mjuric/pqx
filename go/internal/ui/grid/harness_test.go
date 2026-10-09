@@ -160,16 +160,45 @@ func (h *harness) handle(msg tea.Msg) {
 	}
 }
 
-// settle feeds messages back until no command is running, or until those
-// still running (blocked reads) have been quiet for a while.
+// deadline bounds a wait that should end: only a hang reaches it.
+const deadline = 30 * time.Second
+
+// held is the number of commands blocked on purpose in the fake dataset
+// (gates, tests' channels); 0 for a real dataset.
+func (h *harness) held() int {
+	if f, ok := h.ds.(interface{ heldCalls() int }); ok {
+		return f.heldCalls()
+	}
+	return 0
+}
+
+// settle feeds messages back until no command is running, or until every
+// one still running is held by the fake dataset (a gated read). It doesn't
+// depend on how fast the machine is.
 func (h *harness) settle() {
 	h.t.Helper()
+	end := time.After(deadline)
 	for h.out > 0 {
+		if n := h.held(); n > 0 && n >= h.out {
+			// all that runs is held: check again after a moment that
+			// nothing else is on its way
+			select {
+			case msg := <-h.msgs:
+				h.handle(msg)
+				continue
+			case <-time.After(5 * time.Millisecond):
+			}
+			if n := h.held(); n > 0 && n >= h.out {
+				return
+			}
+			continue
+		}
 		select {
 		case msg := <-h.msgs:
 			h.handle(msg)
-		case <-time.After(100 * time.Millisecond):
-			return
+		case <-time.After(5 * time.Millisecond): // (a held count to look at again)
+		case <-end:
+			h.t.Fatalf("still busy after %v: %d commands running, %d held", deadline, h.out, h.held())
 		}
 	}
 }
@@ -177,12 +206,15 @@ func (h *harness) settle() {
 // waitFor feeds messages until cond holds.
 func (h *harness) waitFor(what string, cond func() bool) {
 	h.t.Helper()
-	deadline := time.After(3 * time.Second)
+	end := time.After(deadline)
 	for !cond() {
 		select {
 		case msg := <-h.msgs:
 			h.handle(msg)
-		case <-deadline:
+		case <-time.After(5 * time.Millisecond):
+			// cond can turn true with no message (a read held in the fake
+			// signals it has started): look again
+		case <-end:
 			h.t.Fatalf("timed out waiting for %s", what)
 		}
 	}

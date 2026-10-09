@@ -191,7 +191,7 @@ func TestStaleColumnFetchIsDiscarded(t *testing.T) {
 		once.Do(func() { first = true })
 		if first {
 			close(started)
-			<-release // read late, whatever ctx says (as if interrupting came too late)
+			_ = ds.hold(context.Background(), release) // read late, whatever ctx says (as if interrupting came too late)
 		}
 		return nil
 	}
@@ -226,10 +226,8 @@ func TestActionsGetValuesOfUnloadedColumns(t *testing.T) {
 		first := false
 		once.Do(func() { first = true })
 		if first { // the scroll's own read hangs; the action's goes through
-			select {
-			case <-release:
-			case <-ctx.Done():
-				return ctx.Err()
+			if err := ds.hold(ctx, release); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -322,12 +320,7 @@ func TestWidthsDoNotJumpWhenColumnsArrive(t *testing.T) {
 	g := h.g
 	release := make(chan struct{})
 	ds.colsHook = func(ctx context.Context, cols []string) error {
-		select {
-		case <-release:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		return ds.hold(ctx, release)
 	}
 	h.press("end")
 	if !strings.Contains(strings.Join(h.grid()[headerRows:], "\n"), cells.Placeholder) {
@@ -389,7 +382,7 @@ func TestColumnsLoadAfterEscCancelsTheirFetch(t *testing.T) {
 		once.Do(func() { first = true })
 		if first {
 			close(started)
-			<-ctx.Done()
+			_ = ds.hold(ctx, nil)
 			return ds.interruptErr
 		}
 		return nil
@@ -481,12 +474,7 @@ func TestActionsOnALoadingColumnAllHappen(t *testing.T) {
 		mu.Lock()
 		calls = append(calls, cols)
 		mu.Unlock()
-		select {
-		case <-release:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		return ds.hold(ctx, release)
 	}
 	h.press("end")
 	name := h.g.curName()
