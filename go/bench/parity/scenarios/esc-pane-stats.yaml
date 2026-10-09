@@ -21,5 +21,8 @@ steps:
     check: cancelled
   - keys: "1"
     wait: '/ filter|↑↓ column'
+    # the toast lasts 2 s in both; whether it still shows at the checkpoint
+    # depends only on how long each app takes to settle after the switch
+    wait_gone: 'Cancelled running queries'
   - check: data
     expect: 'file row'
