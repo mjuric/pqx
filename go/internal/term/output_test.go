@@ -158,12 +158,9 @@ func TestCopy(t *testing.T) {
 	if _, c := Copy("plain é ✓", sanitize); c.Text != "plain é ✓" || c.Sanitized {
 		t.Errorf("plain text: %+v", c)
 	}
-	// tab and newline are text, copied as they are (once fmtx.Sanitize
-	// keeps whitespace; its starter body doesn't)
-	if fmtx.Sanitize("\t", true) == "\t" {
-		if _, c := Copy("tab\there\nnew line", sanitize); c.Text != "tab\there\nnew line" || c.Sanitized {
-			t.Errorf("tab and newline: %+v", c)
-		}
+	// tab and newline are text, copied as they are
+	if _, c := Copy("tab\there\nnew line", sanitize); c.Text != "tab\there\nnew line" || c.Sanitized {
+		t.Errorf("tab and newline: %+v", c)
 	}
 	long := strings.Repeat("é", MaxCopy) // 2 bytes each
 	_, c = Copy(long, sanitize)

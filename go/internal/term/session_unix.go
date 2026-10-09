@@ -13,7 +13,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/term"
-	"github.com/muesli/cancelreader"
 	"golang.org/x/sys/unix"
 )
 
@@ -48,6 +47,12 @@ func (t *ttyState) cooked() {
 	if t.isRaw.Swap(false) {
 		_ = term.Restore(t.fd, t.saved)
 	}
+}
+
+// present reports whether pqx still has its controlling terminal.
+func (t *ttyState) present() bool {
+	_, err := unix.IoctlGetInt(int(t.fd), unix.TIOCGPGRP)
+	return err == nil
 }
 
 // foreground reports whether pqx's process group owns the terminal.
@@ -98,24 +103,15 @@ func open(stdin, stdout, stderr *os.File) (*Session, error) {
 		closeAll()
 		return nil, fmt.Errorf("could not put the terminal in raw mode: %w", err)
 	}
-	// a reader that Close can interrupt, so the filter's goroutine stops
-	// reading the terminal when pqx is done with it
-	cr, err := cancelreader.NewReader(in)
+	f, err := NewTTYFilter(in)
 	if err != nil {
-		t.cooked()
-		closeAll()
-		return nil, err
-	}
-	f, err := NewFilter(cr)
-	if err != nil {
-		cr.Cancel()
 		t.cooked()
 		closeAll()
 		return nil, err
 	}
 	s := &Session{out: NewOutput(out), input: f, tty: t, exit: os.Exit}
 	s.restore = func() {
-		cr.Cancel()
+		_ = f.Close()
 		t.cooked()
 		closeAll()
 	}
@@ -125,8 +121,11 @@ func open(stdin, stdout, stderr *os.File) (*Session, error) {
 // handleSignals handles the signals while p runs; the returned function
 // stops it.
 func (s *Session) handleSignals(p *tea.Program) func() {
-	ch := make(chan os.Signal, 4)
-	signal.Notify(ch, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGINT, syscall.SIGTSTP)
+	// one channel, so that a SIGCONT is seen in order after the SIGTSTP
+	// it answers
+	ch := make(chan os.Signal, 16)
+	signal.Notify(ch, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGINT, syscall.SIGTSTP,
+		syscall.SIGCONT)
 	done := make(chan struct{})
 	go func() {
 		for {
@@ -135,6 +134,7 @@ func (s *Session) handleSignals(p *tea.Program) func() {
 				return
 			case sig := <-ch:
 				switch sig {
+				case syscall.SIGCONT: // not suspended: nothing to do
 				case syscall.SIGINT:
 					p.Quit()
 				case syscall.SIGTSTP:
@@ -168,18 +168,35 @@ func (s *Session) handleSignals(p *tea.Program) func() {
 	}
 }
 
-// orphaned reports whether pqx's process group is orphaned: no parent in
-// another process group of the same session (a job-control shell) to
-// resume it.
+// orphaned reports whether pqx's process group is orphaned (POSIX): no
+// member has a parent in another process group of the same session, as a
+// job-control shell is. It follows pqx's ancestors while they are in its
+// group (a wrapper script, make), so it can be wrong only for a group whose
+// other members have their own parents; when an ancestor can't be read it
+// says orphaned, which only means SIGTSTP is ignored.
 func orphaned() bool {
-	ppid := unix.Getppid()
-	ppg, err1 := unix.Getpgid(ppid)
-	psid, err2 := unix.Getsid(ppid)
-	sid, err3 := unix.Getsid(0)
-	if err1 != nil || err2 != nil || err3 != nil {
+	pg := unix.Getpgrp()
+	sid, err := unix.Getsid(0)
+	if err != nil {
 		return true
 	}
-	return ppg == unix.Getpgrp() || psid != sid
+	pid := unix.Getpid()
+	for range 64 {
+		ppid, err := parentOf(pid)
+		if err != nil || ppid <= 0 {
+			return true
+		}
+		ppg, err1 := unix.Getpgid(ppid)
+		psid, err2 := unix.Getsid(ppid)
+		if err1 != nil || err2 != nil {
+			return true
+		}
+		if ppg != pg {
+			return psid != sid
+		}
+		pid = ppid
+	}
+	return true
 }
 
 // suspend stops pqx with the terminal as pqx found it, and puts it back in
@@ -197,22 +214,27 @@ type suspend struct {
 func (c suspend) Run() error {
 	defer close(c.resumed)
 	t := c.s.tty
-	t.cooked()
-	cont := make(chan os.Signal, 1)
-	signal.Notify(cont, syscall.SIGCONT)
-	defer signal.Stop(cont)
+	c.s.input.Pause()
+	// Stopped as a job (the terminal's Ctrl+Z stops the whole job), pqx
+	// may be in the background already, the shell having taken the
+	// terminal and set its own mode: then the mode is the shell's business
+	// (it gives the job its own back on fg).
+	background := !t.foreground()
+	if !background {
+		t.cooked()
+	}
 	for {
-		// Stop the process group as SIGTSTP would. SIGSTOP, because once
-		// Go has handled SIGTSTP, signal.Reset doesn't give it back its
+		if background && t.foreground() {
+			break // the shell continued pqx (fg) before it stopped itself
+		}
+		// Stop pqx itself, as SIGTSTP's default action would (only this
+		// process: without job control its group holds its parent and
+		// siblings, which must not be frozen). SIGSTOP, because once Go
+		// has handled SIGTSTP, signal.Reset doesn't give it back its
 		// default action (a re-raised SIGTSTP is lost and pqx would wait
 		// here for ever). A shell says "Stopped (signal)".
-		_ = syscall.Kill(0, syscall.SIGSTOP)
-		select {
-		case <-cont:
-		case sig := <-c.ch:
-			c.handle(sig)
-			continue
-		}
+		_ = syscall.Kill(unix.Getpid(), syscall.SIGSTOP)
+		c.continued()
 		if t.foreground() {
 			break
 		}
@@ -220,19 +242,40 @@ func (c suspend) Run() error {
 		// SIGTERM and then SIGCONT (Go may hand them over in either order,
 		// so give a terminating signal a moment). Then stop again until fg,
 		// rather than take the terminal back (Textual's _stop_again).
+		background = true
 		select {
 		case sig := <-c.ch:
 			c.handle(sig)
 		case <-time.After(200 * time.Millisecond):
 		}
+		if orphaned() || !t.present() {
+			// the shell is gone (the kernel's orphan rule came too early
+			// to apply): nothing would continue pqx; end as on a hang-up
+			c.handle(syscall.SIGHUP)
+		}
+	}
+	if err := c.s.input.Resume(); err != nil {
+		return err
 	}
 	return t.raw()
+}
+
+// continued waits for SIGCONT, reading the signals that come first; a
+// terminating one ends pqx.
+func (c suspend) continued() {
+	for {
+		sig := <-c.ch
+		if sig == syscall.SIGCONT {
+			return
+		}
+		c.handle(sig)
+	}
 }
 
 // handle is a signal while suspended: a terminating one ends pqx.
 func (c suspend) handle(sig os.Signal) {
 	switch sig {
-	case syscall.SIGTSTP:
+	case syscall.SIGTSTP, syscall.SIGCONT:
 	case syscall.SIGINT:
 		c.s.Close()
 		c.s.exit(0)

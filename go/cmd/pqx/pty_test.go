@@ -81,7 +81,8 @@ func startPtyCmdOut(t *testing.T, cmd *exec.Cmd, out *os.File) *ptyApp {
 	if out != nil {
 		cmd.Stdout = out
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	// its own session; killed if this test process dies
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0, Pdeathsig: syscall.SIGKILL}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +101,10 @@ func startPtyCmdOut(t *testing.T, cmd *exec.Cmd, out *os.File) *ptyApp {
 		}
 	}()
 	go func() { a.done <- cmd.Wait() }()
+	// a watchdog, so that nothing this test started outlives it stopped
+	watchdog := time.AfterFunc(2*time.Minute, func() { _ = cmd.Process.Kill() })
 	t.Cleanup(func() {
+		watchdog.Stop()
 		_ = cmd.Process.Kill()
 		ptm.Close()
 	})
@@ -338,10 +342,18 @@ func TestPtyStdoutRedirected(t *testing.T) {
 	a.checkCooked()
 }
 
-// startShell runs an interactive bash in a pty, as a user's terminal
-// would, and starts pqx in it as a job (the test binary as pqx, on a local
-// fixture). It returns the shell and pqx's pid.
+// startShell runs an interactive bash in a pty of its own (its own
+// session), as a user's terminal would, and starts pqx in it as a job (the
+// test binary as pqx, on a local fixture). It returns the shell and pqx's
+// pid.
 func startShell(t *testing.T) (*ptyApp, int) {
+	t.Helper()
+	return startShellWith(t, "sh -c 'exec $PQX'")
+}
+
+// startShellWith is startShell with the command line given, in which $PQX
+// runs pqx.
+func startShellWith(t *testing.T, line string) (*ptyApp, int) {
 	t.Helper()
 	bash, err := exec.LookPath("bash")
 	if err != nil {
@@ -354,33 +366,55 @@ func startShell(t *testing.T) (*ptyApp, int) {
 	if _, err := os.Stat(fixture); err != nil {
 		t.Skipf("no fixture: %v", err)
 	}
-	a := startPtyCmd(t, exec.Command(bash, "--norc", "--noprofile", "-i"), "PS1=PROMPT$ ")
+	a := startPtyCmd(t, exec.Command(bash, "--norc", "--noprofile", "-i"), "PS1=PROMPT$ ",
+		fmt.Sprintf("PQX=env PQX_TEST_MAIN=1 %s %s", os.Args[0], fixture))
+	session := a.cmd.Process.Pid // bash leads the pty's session
+	killAll := func() {
+		// everything left in that session (never this test's own)
+		for _, p := range inSession(session) {
+			_ = syscall.Kill(p, syscall.SIGKILL)
+		}
+	}
+	watchdog := time.AfterFunc(2*time.Minute, killAll)
+	t.Cleanup(func() {
+		watchdog.Stop()
+		killAll()
+	})
 	if !a.waitFor("PROMPT$", 10*time.Second) {
 		t.Fatalf("no prompt: %q", a.output())
 	}
-	a.write(fmt.Sprintf("sh -c 'exec env PQX_TEST_MAIN=1 %s %s'\n", os.Args[0], fixture))
+	a.write(line + "\n")
 	if !a.waitFor("row 1 of", 20*time.Second) {
 		t.Fatalf("no first frame: %q", a.output())
 	}
 	time.Sleep(300 * time.Millisecond)
-	// pqx is the shell's child (sh execs it)
+	exe, _ := os.Executable()
 	pid := 0
-	ps, _ := filepath.Glob("/proc/[0-9]*/stat")
-	for _, p := range ps {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		f := strings.Fields(string(b[bytes.LastIndexByte(b, ')')+1:]))
-		if ppid, _ := strconv.Atoi(f[1]); ppid == a.cmd.Process.Pid {
-			pid, _ = strconv.Atoi(strings.Split(p, "/")[2])
+	for _, p := range inSession(session) {
+		if l, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", p)); err == nil && l == exe {
+			pid = p
 		}
 	}
 	if pid == 0 {
 		t.Fatal("pqx's process not found")
 	}
-	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 	return a, pid
+}
+
+// inSession are the processes of session sid.
+func inSession(sid int) []int {
+	var pids []int
+	ps, _ := filepath.Glob("/proc/[0-9]*")
+	for _, p := range ps {
+		n, err := strconv.Atoi(filepath.Base(p))
+		if err != nil || n == os.Getpid() {
+			continue
+		}
+		if s, err := unix.Getsid(n); err == nil && s == sid {
+			pids = append(pids, n)
+		}
+	}
+	return pids
 }
 
 // procState is a process's state letter ("" when it is gone or a zombie).
@@ -483,6 +517,129 @@ func TestShellKillSuspended(t *testing.T) {
 		if !a.waitFor("ALIVE\r\n", 3*time.Second) {
 			t.Errorf("%s: the shell isn't usable: %q", how, a.output()[n:])
 		}
+	}
+}
+
+// A pqx continued in the background whose shell then dies (before pqx
+// stops itself again) has nothing to continue it: it ends, as on a
+// hang-up, rather than stay stopped for ever.
+func TestShellDiesWhileInBackground(t *testing.T) {
+	for _, delay := range []time.Duration{20 * time.Millisecond, 80 * time.Millisecond, 150 * time.Millisecond} {
+		a, pid := startShell(t)
+		_ = syscall.Kill(pid, syscall.SIGTSTP)
+		if !waitProc(pid, "T", 5*time.Second) || !a.waitFor("Stopped", 5*time.Second) {
+			t.Fatalf("pqx didn't stop: state %q", procState(pid))
+		}
+		a.write("bg\n")
+		time.Sleep(delay)
+		_ = a.cmd.Process.Kill() // the shell
+		if !waitProc(pid, "", 5*time.Second) {
+			t.Errorf("shell killed %v after bg: pqx left in state %q", delay, procState(pid))
+		}
+	}
+}
+
+// pqx run by a script (no job control: its process group holds its
+// parent and siblings) stops only itself on SIGTSTP; the script and its
+// other children keep running.
+func TestSuspendStopsOnlyPqx(t *testing.T) {
+	a, pid := startShellWith(t, "sh -c 'sleep 600 & $PQX; kill $!'")
+	pg, _ := unix.Getpgid(pid)
+	if pg == unix.Getpgrp() {
+		t.Fatal("pqx is in this test's process group")
+	}
+	var others []int
+	for _, p := range inSession(a.cmd.Process.Pid) {
+		if g, _ := unix.Getpgid(p); g == pg && p != pid {
+			others = append(others, p) // the sh wrapper and its sleep
+		}
+	}
+	if len(others) < 2 {
+		t.Fatalf("expected sh and sleep beside pqx, found %v", others)
+	}
+	_ = syscall.Kill(pid, syscall.SIGTSTP) // pqx only, as kill -TSTP PID
+	if !waitProc(pid, "T", 5*time.Second) {
+		t.Fatalf("pqx didn't stop: state %q", procState(pid))
+	}
+	time.Sleep(200 * time.Millisecond)
+	for _, p := range others {
+		if st := procState(p); st == "T" {
+			t.Errorf("process %d of pqx's group was stopped too", p)
+		}
+	}
+	n := len(a.output())
+	_ = syscall.Kill(pid, syscall.SIGCONT)
+	time.Sleep(500 * time.Millisecond)
+	if st := procState(pid); st == "T" || !strings.Contains(a.output()[n:], "\x1b[?1049h") {
+		t.Fatalf("pqx didn't come back after SIGCONT: state %q", st)
+	}
+	a.write("q")
+	if !waitProc(pid, "", 5*time.Second) || !a.waitFor("PROMPT$ ", 5*time.Second) {
+		t.Fatalf("q didn't quit: %q", procState(pid))
+	}
+}
+
+// pqx run by a wrapper script that doesn't exec it, stopped as a job (the
+// terminal's Ctrl+Z stops the job's whole process group), suspends, and fg
+// brings it back.
+func TestShellWrapperSuspend(t *testing.T) {
+	a, pid := startShellWith(t, "sh -c '$PQX; true'")
+	pg, _ := unix.Getpgid(pid)
+	if pg == unix.Getpgrp() || pg == pid {
+		t.Fatalf("pqx's group %d: not a wrapper's job", pg)
+	}
+	_ = syscall.Kill(-pg, syscall.SIGTSTP) // the job's group, in the pty's own session
+	if !waitProc(pid, "T", 5*time.Second) || !a.waitFor("Stopped", 5*time.Second) {
+		t.Fatalf("pqx didn't stop: state %q, %q", procState(pid), a.output())
+	}
+	n := len(a.output())
+	a.write("fg\n")
+	time.Sleep(500 * time.Millisecond)
+	if st := procState(pid); st == "T" || !strings.Contains(a.output()[n:], "row 1 of") {
+		for _, q := range inSession(a.cmd.Process.Pid) {
+			b, _ := os.ReadFile(fmt.Sprintf("/proc/%d/status", q))
+			w, _ := os.ReadFile(fmt.Sprintf("/proc/%d/wchan", q))
+			c, _ := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", q))
+			for _, l := range strings.Split(string(b), "\n") {
+				if strings.HasPrefix(l, "State") || strings.HasPrefix(l, "ShdPnd") || strings.HasPrefix(l, "SigPnd") {
+					t.Logf("%d %q %s %s", q, c[:min(len(c), 30)], l, w)
+				}
+			}
+		}
+		t.Fatalf("fg didn't bring pqx back: state %q, %q", st, a.output()[n:])
+	}
+	a.write("q")
+	if !waitProc(pid, "", 5*time.Second) || !a.waitFor("PROMPT$ ", 5*time.Second) {
+		t.Fatalf("q didn't quit: %q", procState(pid))
+	}
+}
+
+// Continued in the background, pqx stops again before touching the
+// terminal, even where SIGTTOU wouldn't stop it (ignored).
+func TestShellBackgroundWithTTOUIgnored(t *testing.T) {
+	a, pid := startShellWith(t, `sh -c 'trap "" TTOU; exec $PQX'`)
+	_ = syscall.Kill(pid, syscall.SIGTSTP)
+	if !waitProc(pid, "T", 5*time.Second) || !a.waitFor("Stopped", 5*time.Second) {
+		t.Fatalf("pqx didn't stop: state %q", procState(pid))
+	}
+	n := len(a.output())
+	a.write("bg\n")
+	time.Sleep(700 * time.Millisecond)
+	if st := procState(pid); st != "T" {
+		t.Errorf("pqx runs in the background: state %q", st)
+	}
+	if tail := a.output()[n:]; strings.Contains(tail, "\x1b[?1049h") || strings.Contains(tail, "\x1b[?1006h") {
+		t.Errorf("pqx drew in the background: %q", tail)
+	}
+	n = len(a.output())
+	a.write("fg\n")
+	time.Sleep(500 * time.Millisecond)
+	if !strings.Contains(a.output()[n:], "row 1 of") {
+		t.Fatalf("fg didn't bring pqx back: %q", a.output()[n:])
+	}
+	a.write("q")
+	if !waitProc(pid, "", 5*time.Second) {
+		t.Fatalf("q didn't quit: %q", procState(pid))
 	}
 }
 

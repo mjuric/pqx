@@ -7,6 +7,7 @@ package term
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"strconv"
@@ -14,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"github.com/muesli/cancelreader"
 )
 
 // How long the filter waits for the rest of a sequence that was cut off at
@@ -257,6 +260,57 @@ type Filter struct {
 	once  sync.Once
 	t     translator
 	timer *time.Timer
+
+	// for a terminal (NewTTYFilter): reading can be paused
+	in     *os.File
+	mu     sync.Mutex
+	cur    cancelreader.CancelReader // the reader pump uses
+	resume chan cancelreader.CancelReader
+}
+
+// NewTTYFilter is NewFilter for a terminal, read through a reader Pause can
+// interrupt.
+func NewTTYFilter(in *os.File) (*Filter, error) {
+	cr, err := cancelreader.NewReader(in)
+	if err != nil {
+		return nil, err
+	}
+	f, err := newFilter()
+	if err != nil {
+		cr.Close()
+		return nil, err
+	}
+	f.in, f.cur, f.resume = in, cr, make(chan cancelreader.CancelReader, 1)
+	go f.pump(cr)
+	go f.loop()
+	return f, nil
+}
+
+// Pause stops reading the terminal (while pqx is suspended: a read from the
+// background would stop it with SIGTTIN, and the input is the shell's)
+// until Resume. Input not read yet stays in the terminal.
+func (f *Filter) Pause() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.cur != nil {
+		f.cur.Cancel()
+	}
+}
+
+// Resume reads the terminal again after Pause.
+func (f *Filter) Resume() error {
+	if f.in == nil {
+		return nil
+	}
+	cr, err := cancelreader.NewReader(f.in)
+	if err != nil {
+		return err
+	}
+	f.mu.Lock()
+	f.cur = cr
+	f.mu.Unlock()
+	f.resume <- cr
+	return nil
 }
 
 // NewFilter starts reading src (the terminal, in raw mode) and translating
@@ -288,6 +342,17 @@ func (f *Filter) pump(src io.Reader) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := src.Read(buf)
+		if f.resume != nil && errors.Is(err, cancelreader.ErrCanceled) {
+			if c, ok := src.(io.Closer); ok {
+				_ = c.Close()
+			}
+			select { // paused
+			case src = <-f.resume:
+				continue
+			case <-f.done:
+				return
+			}
+		}
 		if n > 0 {
 			select {
 			case f.data <- append([]byte(nil), buf[:n]...):
@@ -377,6 +442,11 @@ func (f *Filter) Read(p []byte) (int, error) {
 // Close stops the filter and closes the pipe; it doesn't close the source.
 func (f *Filter) Close() error {
 	f.once.Do(func() {
+		f.mu.Lock()
+		if f.cur != nil {
+			f.cur.Cancel()
+		}
+		f.mu.Unlock()
 		close(f.done)
 		_ = f.w.Close()
 		_ = f.r.Close()

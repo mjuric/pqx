@@ -417,6 +417,27 @@ func TestHeldEscArrivesAlone(t *testing.T) {
 	}
 }
 
+// A read that ends in the middle of a sequence arms the hold timer: it
+// fires within the timeout (checked on the timer itself).
+func TestHoldTimerArmed(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		wait time.Duration
+	}{{"\x1b", EscTimeout}, {"\x1b[M", SeqTimeout}, {"a\xe2\x9c", SeqTimeout}} {
+		f, err := newFilter()
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.onData([]byte(c.in), true)
+		select {
+		case <-f.timer.C:
+		case <-time.After(c.wait + 100*time.Millisecond):
+			t.Errorf("%q: the hold timer isn't armed", c.in)
+		}
+		f.Close()
+	}
+}
+
 // When the timer and the rest of a sequence are both ready, the rest goes
 // first: the sequence isn't passed on cut.
 func TestRestBeatsTimer(t *testing.T) {
