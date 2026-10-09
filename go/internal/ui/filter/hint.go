@@ -3,7 +3,6 @@ package filter
 import (
 	"context"
 	"math"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -12,6 +11,7 @@ import (
 
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/fmtx"
+	"github.com/mjuric/pqx/go/internal/sqllit"
 )
 
 // The filter box's hint has an example drawn from the file's own first row
@@ -23,24 +23,6 @@ const hintCandidates = 8
 
 // placeholderStrMax is the longest string value the example quotes.
 const placeholderStrMax = 20
-
-var plainIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
-// keywords are SQL words a column name can't stand for bare in the example
-// (Python asks DuckDB for its keyword list).
-var keywords = map[string]bool{}
-
-func init() {
-	for _, w := range strings.Fields(`all and any array as asc between both by case cast check collate column
-		constraint create default desc distinct do else end except false fetch for foreign from grant group having in
-		initially intersect into is isnull join lateral leading like limit not notnull null offset on only or order
-		placing primary references returning select some symmetric table then to trailing true union unique using
-		variadic when where window with`) {
-		keywords[w] = true
-	}
-}
-
-func isPlainIdent(s string) bool { return plainIdent.MatchString(s) && !keywords[strings.ToLower(s)] }
 
 type hinted struct{ hint string }
 
@@ -54,7 +36,7 @@ func (f *Filter) startHint() tea.Cmd {
 	var cols []data.Column
 	nums, strs := 0, 0
 	for _, c := range ds.Columns() {
-		if lower[strings.ToLower(c.Name)] != 1 || !isPlainIdent(c.Name) || c.Arrow == nil {
+		if lower[strings.ToLower(c.Name)] != 1 || !sqllit.IsPlainIdent(c.Name) || c.Arrow == nil {
 			continue
 		}
 		id := c.Arrow.ID()
@@ -93,7 +75,7 @@ func (f *Filter) startHint() tea.Cmd {
 func Placeholder(cols []data.Column, row []data.Value) string {
 	var num, text string
 	for i, c := range cols {
-		if i >= len(row) || row[i] == nil || !isPlainIdent(c.Name) || c.Arrow == nil {
+		if i >= len(row) || row[i] == nil || !sqllit.IsPlainIdent(c.Name) || c.Arrow == nil {
 			continue
 		}
 		id := c.Arrow.ID()

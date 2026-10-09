@@ -85,6 +85,9 @@ func (a *App) parts() map[string]kit.Pane {
 	}
 }
 
+// filterClearer is the filter bar's x and Ctrl+X.
+type filterClearer interface{ ClearFilter() tea.Cmd }
+
 // focused is the pane with focus, or nil.
 func (a *App) focused() kit.Pane {
 	return a.parts()[a.focus]
@@ -182,15 +185,26 @@ func (a *App) onKey(k tea.KeyPressMsg) tea.Cmd {
 		return a.dialogs[n-1].Update(k)
 	}
 	s := k.String()
-	switch s {
-	case "ctrl+left":
-		return a.switchTab((a.tab + 4) % 5)
-	case "ctrl+right":
-		return a.switchTab((a.tab + 1) % 5)
-	}
 	if !a.typing() {
+		// (while typing, Ctrl+← and Ctrl+→ jump words, as Python pqx's
+		// check_action has it)
+		switch s {
+		case "ctrl+left":
+			return a.switchTab((a.tab + 4) % 5)
+		case "ctrl+right":
+			return a.switchTab((a.tab + 1) % 5)
+		}
 		if len(s) == 1 && s >= "1" && s <= "5" {
 			return a.switchTab(kit.Tab(s[0] - '1'))
+		}
+	}
+	// x (unless typing) and Ctrl+X clear the filter from anywhere; the grid,
+	// the filter and the details pane do it themselves
+	if s == "ctrl+x" || (s == "x" && !a.typing()) {
+		if a.focus != "grid" && a.focus != "filter" && a.focus != "detail" {
+			if c, ok := a.p.Filter.(filterClearer); ok {
+				return c.ClearFilter()
+			}
 		}
 	}
 	if !a.typing() {

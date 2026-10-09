@@ -205,14 +205,14 @@ func TestFailedFilter(t *testing.T) {
 		t.Errorf("inline error %q", r.f.Err())
 	}
 	st, _ := r.last(kit.StatusMsg{}).(kit.StatusMsg)
-	if st.Severity != kit.Error || !strings.Contains(st.Text, `did you mean "x"?`) || strings.ContainsAny(st.Text, "\n") {
+	if st.Severity != kit.Error || st.Text != "unknown column \"bad\"\ndid you mean \"x\"?" {
 		t.Errorf("status %q", st.Text)
 	}
-	if !strings.Contains(r.f.View(80, 1), "✗ unknown column") {
-		t.Errorf("view %q", r.f.View(80, 1))
+	if !r.f.BorderError() || strings.Contains(r.f.View(80, 1), "✗") {
+		t.Errorf("border error %v, view %q", r.f.BorderError(), r.f.View(80, 1))
 	}
 	r.typeText(" ")
-	if r.f.Err() != "" {
+	if r.f.Err() != "" || r.f.BorderError() {
 		t.Error("the error stays while typing")
 	}
 }
@@ -247,9 +247,12 @@ func TestHistoryAndCtrlX(t *testing.T) {
 	}
 	r.key(tea.KeyUp, 0) // at the oldest: stays
 	r.key(tea.KeyDown, 0)
-	r.key(tea.KeyDown, 0)
-	if r.f.Value() != "x > 2draft" { // (the box keeps the filter applied)
-		t.Errorf("back down: %q", r.f.Value())
+	if r.f.Value() != "x > 2" {
+		t.Errorf("down: %q", r.f.Value())
+	}
+	r.key(tea.KeyDown, 0) // past the newest: an empty box, as in Python pqx
+	if r.f.Value() != "" {
+		t.Errorf("past the newest: %q", r.f.Value())
 	}
 	// ctrl+x with a filter applied: clears it, keeping the record
 	r.env.State.FileRow = 77
