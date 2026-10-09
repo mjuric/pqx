@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"regexp"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -261,7 +262,7 @@ func (a *App) escape(k tea.KeyPressMsg) tea.Cmd {
 	if tasks.Busy() {
 		tags := tasks.CancelAll()
 		return tea.Batch(a.broadcast(kit.CancelledMsg{Tags: tags}),
-			kit.Notify(kit.Info, "Cancelled running queries"))
+			kit.Send(kit.NotifyMsg{Text: "Cancelled running queries", Timeout: 2 * time.Second})) // (Python's timeout)
 	}
 	if a.typing() {
 		if a.tab == kit.TabData {

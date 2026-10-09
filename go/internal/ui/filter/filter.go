@@ -633,7 +633,8 @@ func (f *Filter) onCounted(r counted) tea.Cmd {
 		// that can't be counted can't be read either, and the read's error
 		// (with the previous view kept) must not be replaced by this one,
 		// whichever arrives first.
-		return kit.Send(kit.NotifyMsg{Severity: kit.Error, Title: "✗ Count failed", Text: fmtx.Sanitize(trunc(r.err.Error(), 600), true)})
+		return kit.Send(kit.NotifyMsg{Severity: kit.Error, Title: "✗ Count failed",
+			Text: fmtx.Sanitize(trunc(r.err.Error(), 600), true), Timeout: 8 * time.Second}) // (Python's _show_error)
 	}
 	f.counts[countKey(r.view)] = r.n
 	f.st.Total = r.n

@@ -393,7 +393,7 @@ func TestToastTimeouts(t *testing.T) {
 	for _, tc := range []struct {
 		m    kit.NotifyMsg
 		want time.Duration
-	}{{kit.NotifyMsg{Text: "a"}, 3 * time.Second}, {kit.NotifyMsg{Severity: kit.Error, Text: "a"}, 8 * time.Second},
+	}{{kit.NotifyMsg{Text: "a"}, 5 * time.Second}, {kit.NotifyMsg{Severity: kit.Error, Text: "a"}, 5 * time.Second},
 		{kit.NotifyMsg{Severity: kit.Error, Text: "a", Timeout: 2 * time.Second}, 2 * time.Second}} {
 		if got := timeout(tc.m); got != tc.want {
 			t.Errorf("%+v: %v", tc.m, got)
