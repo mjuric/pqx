@@ -1,0 +1,19 @@
+description: |
+  `=` on a cell narrows the filter to that value, and the cursor stays on the same
+  record; `=` on a second column narrows further.
+covers:
+  - "README Filter: Press = on any cell to keep only rows with that value."
+  - "help: **=** | narrow the filter to rows equal to the cursor cell; the cursor stays on the same record"
+fixture: demo
+steps:
+  - keys: down down down down down right right right right right right right
+    wait: 'row 5\b'
+  - check: on-band
+  - keys: "="
+    wait: "› band = 'i'"
+  - check: band-filter
+    expect: ['✓ 3,3\d\d rows', 'row 5\b|row \d+\b']
+  - keys: left left left left left left
+  - keys: "="
+    wait: "› band = 'i' and ssObjectId"
+  - check: second

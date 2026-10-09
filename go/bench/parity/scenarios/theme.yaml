@@ -1,0 +1,13 @@
+description: |
+  `--theme tokyo-night` draws with a named theme instead of the terminal's colours
+  (compare with --strict-colours).
+covers:
+  - "README Looks: --theme NAME (tokyo-night, dracula, catppuccin-mocha, nord, gruvbox)"
+  - "go-port.md D2: --theme keeps working for the five themes the README names"
+fixture: demo
+args: ["--theme", "tokyo-night"]
+sizes: [[120, 40]]
+steps:
+  - check: first
+  - keys: "2"
+  - check: schema

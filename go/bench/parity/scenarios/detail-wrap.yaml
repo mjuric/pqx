@@ -1,0 +1,11 @@
+description: |
+  The detail panel is 53 columns wide; values get 24 columns and wrap beyond (a 47-digit
+  decimal, a list, a struct, a map).
+covers:
+  - "native-port.md: Details pane. 53 columns wide; values get 24 columns and wrap beyond that (PR #24)."
+fixture: types
+steps:
+  - keys: d
+    wait: '│ │ {5,}the lazy dog the quick'   # the panel has loaded every column
+  - check: open
+    expect: ['longtext +row 0: the quick brown fox', '│ │ {5,}the lazy dog the quick']   # wrapped onto the next line

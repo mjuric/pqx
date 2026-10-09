@@ -1,0 +1,24 @@
+description: |
+  `?` opens the help; it scrolls; Esc closes it.
+covers:
+  - "README Keys: Press ? in pqx for the full list."
+fixture: demo
+steps:
+  - keys: "?"
+    wait: 'Parquet explorer'
+  - check: help
+    expect: ['Written by', 'Filtering and queries']
+  - keys: pgdn
+  - check: help-pgdn
+  - keys: esc
+    wait_gone: 'Parquet explorer'
+  - check: closed
+  - keys: "?"
+    wait: 'Parquet explorer'
+  - keys: q
+    wait_gone: 'Parquet explorer'
+  - check: q-closes   # q closes the help, it doesn't quit
+  - keys: "?"
+    wait: 'Parquet explorer'
+  - keys: "?"
+    wait_gone: 'Parquet explorer'

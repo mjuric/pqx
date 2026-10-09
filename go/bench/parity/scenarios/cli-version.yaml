@@ -1,0 +1,14 @@
+description: |
+  `pqx --version` prints the version and licence (plain ASCII, credits the author)
+  and exits.
+covers:
+  - "pqx -h: --version  show the version and licence, and exit"
+  - "native-port.md: --version output is plain ASCII"
+fixture: demo
+file: false
+args: ["--version"]
+ready: null
+sizes: [[120, 40]]
+steps:
+  - exit: 10
+  - check: output

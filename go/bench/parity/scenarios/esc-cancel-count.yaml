@@ -1,0 +1,19 @@
+description: |
+  Esc while a slow count runs cancels it, and the status line says so.
+covers:
+  - "README Big files: Long queries run in the background, and Esc cancels them."
+  - "help: **Esc** | cancel running queries"
+fixture: slow
+sizes: [[120, 40]]
+steps:
+  - keys: /
+    wait: 'enter apply'
+  - text: "levenshtein(repeat(band, 300), repeat(cast(detector as varchar), 200)) > 5"
+  - keys: enter
+    settle: false
+  - wait: '(?i)counting'
+    settle: false
+  - keys: esc
+    settle: false
+    toast: 'Cancelled running queries'
+    check: cancelled

@@ -1,0 +1,19 @@
+description: |
+  `s` sorts by the cursor column: ascending, descending, then off (header arrow,
+  status line).
+covers:
+  - "README All keys: s | sort by the cursor column (asc → desc → off)"
+fixture: demo
+steps:
+  - keys: right right right
+  - keys: s
+    wait: 'sorted dec ↑'
+  - check: asc
+    expect: 'dec ↑'
+  - keys: s
+    wait: 'sorted dec ↓'
+  - check: desc
+  - keys: s
+    wait_gone: 'sorted dec'
+  - check: sort-off
+    expect_not: '[↑↓]'
