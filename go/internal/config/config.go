@@ -9,13 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/mjuric/pqx/go/internal/fmtx"
 )
@@ -69,94 +69,69 @@ func LoadFormats(path string) (map[string]fmtx.Override, error) {
 	if !utf8.Valid(b) {
 		return nil, errorf("%s: not UTF-8 text", path)
 	}
-	var doc yaml.Node
-	if err := yaml.Unmarshal(b, &doc); err != nil {
+	doc, err := safeLoad(b)
+	if err != nil {
 		return nil, errorf("%s: %v", path, err)
 	}
 	out := map[string]fmtx.Override{}
-	root := &doc
-	if root.Kind == yaml.DocumentNode {
-		if len(root.Content) == 0 {
-			return out, nil
-		}
-		root = root.Content[0]
+	d, ok := doc.(*pyDict)
+	if !ok {
+		return out, nil // not a mapping (or empty): no columns, as Python's doc.get on a dict only
 	}
-	root = deref(root)
-	if root.Kind != yaml.MappingNode {
-		return out, nil // not a mapping: no columns (Python's doc.get on a dict only)
-	}
-	var cols *yaml.Node
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if k := deref(root.Content[i]); k.Kind == yaml.ScalarNode && k.Value == "columns" && resolve(k) == tagStr {
-			cols = deref(root.Content[i+1])
-		}
-	}
-	if cols == nil || (cols.Kind == yaml.ScalarNode && resolve(cols) == tagNull) {
+	cols, _ := d.get("columns")
+	if cols == nil {
 		return out, nil
 	}
-	if cols.Kind != yaml.MappingNode {
+	cd, ok := cols.(*pyDict)
+	if !ok {
 		return nil, errorf("%s: 'columns' must be a mapping", path)
 	}
-	for i := 0; i+1 < len(cols.Content); i += 2 {
-		k, v := deref(cols.Content[i]), deref(cols.Content[i+1])
-		if k.Kind != yaml.ScalarNode {
-			return nil, errorf("%s: a column name that isn't text", path)
-		}
-		if o, ok := valid(v); ok {
-			out[pyStrKey(k)] = o
+	for i, k := range cd.keys {
+		if o, ok := valid(cd.vals[i]); ok {
+			out[pyStr(k)] = o
 		}
 	}
 	return out, nil
 }
 
-func deref(n *yaml.Node) *yaml.Node {
-	for n.Kind == yaml.AliasNode && n.Alias != nil {
-		n = n.Alias
-	}
-	return n
-}
-
 // valid is config._valid: an int of digits (0 or more, at most 17) or a
 // non-empty spec that suits some column.
-func valid(v *yaml.Node) (fmtx.Override, bool) {
-	if v.Kind != yaml.ScalarNode {
-		return fmtx.Override{}, false
-	}
+func valid(v any) (fmtx.Override, bool) {
 	var o fmtx.Override
-	switch resolve(v) {
-	case tagInt:
-		n, ok := yamlInt(v.Value)
-		if !ok || n < 0 {
+	switch x := v.(type) {
+	case *big.Int:
+		if x.Sign() < 0 || !x.IsInt64() || x.Int64() > fmtx.MaxDigits {
+			return o, false // (more digits than there can be: override_error says so)
+		}
+		o = fmtx.Override{Digits: int(x.Int64()), Set: true}
+	case string:
+		if x == "" {
 			return o, false
 		}
-		o = fmtx.Override{Digits: n, Set: true}
-	case tagStr:
-		if v.Value == "" {
-			return o, false
-		}
-		o = fmtx.Override{Spec: v.Value, Set: true}
+		o = fmtx.Override{Spec: x, Set: true}
 	default:
 		return o, false
 	}
 	return o, fmtx.OverrideError(o, "", nil) == ""
 }
 
-// pyStrKey is Python's str() of a key as PyYAML reads it.
-func pyStrKey(k *yaml.Node) string {
-	switch resolve(k) {
-	case tagNull:
-		return "None"
-	case tagBool:
-		if yamlBool(k.Value) {
-			return "True"
-		}
-		return "False"
-	case tagInt:
-		if n, ok := yamlInt(k.Value); ok {
-			return fmt.Sprint(n)
+// syncFile flushes the new file to disk before it replaces the old one (a
+// variable so a test can see that it happens).
+var syncFile = (*os.File).Sync
+
+// staleAge is how old a temporary file left by a crashed save must be to
+// be removed.
+const staleAge = time.Hour
+
+// removeStaleTemps removes .formats.*.tmp files a save that crashed left
+// behind (Python leaves them; a live save's file is younger than an hour).
+func removeStaleTemps(dir string) {
+	m, _ := filepath.Glob(filepath.Join(dir, ".formats.*.tmp"))
+	for _, p := range m {
+		if st, err := os.Lstat(p); err == nil && st.Mode().IsRegular() && time.Since(st.ModTime()) > staleAge {
+			os.Remove(p)
 		}
 	}
-	return k.Value
 }
 
 // SaveFormat sets (or, for the zero Override, removes) one column's format
@@ -197,10 +172,13 @@ func SaveFormat(name string, o fmtx.Override, path string) (string, error) {
 	} else {
 		delete(cols, name)
 	}
-	mode := newFileMode()
+	var mode os.FileMode
 	if st, err := os.Stat(path); err == nil {
 		mode = st.Mode().Perm()
+	} else {
+		mode = newFileMode()
 	}
+	removeStaleTemps(dir)
 	tmp, err := os.CreateTemp(dir, ".formats.*.tmp")
 	if err != nil {
 		return "", err
@@ -215,7 +193,7 @@ func SaveFormat(name string, o fmtx.Override, path string) (string, error) {
 	if _, err := tmp.WriteString(header + dump(cols)); err != nil {
 		return "", err
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := syncFile(tmp); err != nil {
 		return "", err
 	}
 	if err := tmp.Close(); err != nil {

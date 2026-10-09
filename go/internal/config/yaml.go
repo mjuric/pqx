@@ -2,11 +2,8 @@ package config
 
 import (
 	"fmt"
-	"math/big"
 	"regexp"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // Python pqx reads formats.yaml with PyYAML, which follows YAML 1.1: a
@@ -25,7 +22,6 @@ const (
 	tagNull
 	tagTimestamp
 	tagValue
-	tagOther
 )
 
 var resolvers = []struct {
@@ -33,7 +29,7 @@ var resolvers = []struct {
 	re *regexp.Regexp
 }{
 	{tagBool, regexp.MustCompile(`^(?:yes|Yes|YES|no|No|NO|true|True|TRUE|false|False|FALSE|on|On|ON|off|Off|OFF)$`)},
-	{tagFloat, regexp.MustCompile(`^(?:[-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+][0-9]+)?|\.[0-9_]+(?:[eE][-+][0-9]+)?|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$`)},
+	{tagFloat, regexp.MustCompile(`^(?:[-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+][0-9]+)?|\.[0-9][0-9_]*(?:[eE][-+][0-9]+)?|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$`)},
 	{tagInt, regexp.MustCompile(`^(?:[-+]?0b[0-1_]+|[-+]?0[0-7_]+|[-+]?(?:0|[1-9][0-9_]*)|[-+]?0x[0-9a-fA-F_]+|[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+)$`)},
 	{tagMerge, regexp.MustCompile(`^(?:<<)$`)},
 	{tagNull, regexp.MustCompile(`^(?:~|null|Null|NULL|)$`)},
@@ -49,84 +45,6 @@ func implicit(s string) tag {
 		}
 	}
 	return tagStr
-}
-
-// resolve is the tag PyYAML gives a scalar node: quoted and block scalars
-// are text; an explicit tag is taken as given.
-func resolve(n *yaml.Node) tag {
-	if n.Style&yaml.TaggedStyle != 0 {
-		switch n.Tag {
-		case "!!str":
-			return tagStr
-		case "!!int":
-			return tagInt
-		case "!!bool":
-			return tagBool
-		case "!!null":
-			return tagNull
-		case "!!float":
-			return tagFloat
-		}
-		return tagOther
-	}
-	if n.Style&(yaml.SingleQuotedStyle|yaml.DoubleQuotedStyle|yaml.LiteralStyle|yaml.FoldedStyle) != 0 {
-		return tagStr
-	}
-	return implicit(n.Value)
-}
-
-// yamlInt is PyYAML's construct_yaml_int, if the value fits an int.
-func yamlInt(s string) (int, bool) {
-	v := strings.ReplaceAll(s, "_", "")
-	sign := 1
-	if strings.HasPrefix(v, "-") {
-		sign, v = -1, v[1:]
-	} else if strings.HasPrefix(v, "+") {
-		v = v[1:]
-	}
-	n := new(big.Int)
-	ok := true
-	switch {
-	case v == "0":
-	case strings.HasPrefix(v, "0b"):
-		_, ok = n.SetString(v[2:], 2)
-	case strings.HasPrefix(v, "0x"):
-		_, ok = n.SetString(v[2:], 16)
-	case strings.HasPrefix(v, "0"):
-		_, ok = n.SetString(v[1:], 8)
-	case strings.Contains(v, ":"):
-		base := big.NewInt(1)
-		parts := strings.Split(v, ":")
-		for i := len(parts) - 1; i >= 0; i-- {
-			d, ok2 := new(big.Int).SetString(parts[i], 10)
-			if !ok2 {
-				return 0, false
-			}
-			n.Add(n, d.Mul(d, base))
-			base.Mul(base, big.NewInt(60))
-		}
-	default:
-		_, ok = n.SetString(v, 10)
-	}
-	if !ok {
-		return 0, false
-	}
-	n.Mul(n, big.NewInt(int64(sign)))
-	if !n.IsInt64() || n.Int64() > 1<<31 || n.Int64() < -1<<31 {
-		if n.Sign() < 0 {
-			return -1, true
-		}
-		return 1 << 31, true // big: more digits than any limit
-	}
-	return int(n.Int64()), true
-}
-
-func yamlBool(s string) bool {
-	switch strings.ToLower(s) {
-	case "yes", "true", "on":
-		return true
-	}
-	return false
 }
 
 // scalar is s as PyYAML's emitter writes it (with allow_unicode): plain
