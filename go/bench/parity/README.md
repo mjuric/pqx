@@ -51,6 +51,11 @@ cd bench/parity
 | `--write-xfail` | | rewrite `expected_failures.yaml` from this run (keeps the reasons already there) |
 | `--list` | | list the scenarios |
 
+The apps start in a pty whose size is set before they run; `COLUMNS` and `LINES` are not
+set (Python's `shutil.get_terminal_size` reads them before the terminal, so a resize
+would go unseen). A smaller screen loses its bottom lines, as in xterm and VTE (pyte
+drops the top ones).
+
 Each run works in `<scratch>/runs/a|b/<scenario>-<WxH>/` (`a` is the reference),
 with its own `XDG_CONFIG_HOME` (so saved column formats never leak between runs or
 into your `~/.config`) and its own `out/` directory as the working directory (exports
@@ -91,8 +96,9 @@ The full suite (80 scenarios, most at 2 sizes, 2 apps) takes about 15 minutes wi
 | XPASS | listed in `expected_failures.yaml` but passes: remove it from the list |
 | SKIP | `same_version` scenario, and the two apps report different versions |
 | PYBUG | passes once a known Python bug's region is left out (see below) |
+| INTENDED | passes once an intended difference is left out (see below) |
 
-The exit status is 0 when every result is PASS, XFAIL, SKIP or PYBUG.
+The exit status is 0 when every result is PASS, XFAIL, SKIP, PYBUG or INTENDED.
 
 A text difference is shown as the reference's line, the other app's line, and a line
 of `^` under the characters that differ:
@@ -298,7 +304,7 @@ python_bug:
   - checks: [row-1234, half, last]   # these checkpoints
     region: keybar                   # the last screen line
     ref_shows: 'enter apply   esc back'      # the bug, as the reference shows it
-    correct: '^ / filter   x clear filter'   # what the compared app must show there
+    correct: '^\s*/ filter   x clear filter'   # what the compared app must show there (after any margin)
     sizes: [[120, 40]]               # optional: only at these sizes
     note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
 ```
@@ -317,6 +323,29 @@ failure), with the note; everything else on those screens is still compared.
 | dialog-no-shift | after | the same, after the go-to and format dialogs |
 | export-csv, export-parquet, export-json | done | the same, after the export dialog |
 | columns-picker | applied, cancelled | the same, after the column picker |
+
+## Intended differences (INTENDED)
+
+Differences go-port.md lists as intended are marked the same way, with `intended:` and
+`other_shows` (what the compared app shows instead):
+
+```yaml
+intended:
+  - checks: [open]
+    region: screen                       # or keybar
+    ref_shows: 'wide +1e\+46'           # what the reference shows
+    other_shows: 'wide +10{20}'          # what the compared app shows instead
+    note: "exact wide decimals (go-port.md: Progress)"
+```
+
+The region is left out only when both patterns match; the result is INTENDED (not a
+failure). `region: screen` leaves out the whole checkpoint, so its patterns must pin the
+difference down. In use: detail-wrap (exact 47-digit decimal), raw-smart's `raw`
+(shortest float32), cli-bad-theme (D2's usage error), filter-unbalanced's
+`two-statements` (Go pqx's own message; it must still come as a notification: the step
+waits for either app's), esc-cancel-count's status line after Esc (`region: status`, the
+grid's `│ ✓ …` / `│ * …` line: Python shows "Counting rows" until DuckDB has stopped,
+Go the cancelled state at once).
 
 ## Python behaviour the scenarios work around
 
@@ -341,6 +370,9 @@ looks odd:
 - The detail panel shows a decimal256(50, 0) value as `1e+46`, not at full precision.
 - An unknown `--theme` exits with Textual's own message ("Theme 'x' has not been
   registered. Call 'App.register_theme' …").
+- With columns pinned and the grid scrolled right, → from a pinned column moves the
+  cursor (`i` then profiles the next column) but leaves the highlight drawn on the old
+  one; `pinned-cursor` checks the cursor through `i` instead of the highlight.
 - Two quick Ctrl+← from Schema once ended on Data instead of Metadata: a key sent
   while a tab switch is still in progress can be lost. The scenarios settle between
   them.
