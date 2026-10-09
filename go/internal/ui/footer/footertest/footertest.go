@@ -158,6 +158,8 @@ func Value(v golden.Value) data.Value {
 		return data.Timestamp{T: v.Time, Zoned: v.TZ != "", Unit: unit}
 	case golden.KindDate:
 		return data.Date(v.Time.Unix() / 86400)
+	case golden.KindDec:
+		return data.Decimal{Unscaled: v.Int, Scale: int32(v.Scale), Precision: int32(v.Precision)}
 	}
 	return nil
 }

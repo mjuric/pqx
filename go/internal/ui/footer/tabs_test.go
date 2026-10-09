@@ -561,3 +561,19 @@ func TestMetaScroll(t *testing.T) {
 		t.Fatal("home")
 	}
 }
+
+// Decimal statistics show exactly, as str(Decimal) (Python's footer
+// statistics are decimal.Decimal however wide), cut at 40 characters.
+func TestSchemaDecimalStatistics(t *testing.T) {
+	tb := open(t, "types", false)
+	tb.read()
+	for _, c := range []struct{ col, label, want string }{
+		{"dec9_2", "min", "-0.30"},
+		{"dec50_2", "max", "0.29"},
+		{"dec76_10", "min", "-59000000000000000000000000000000000000…"},
+	} {
+		if got := tb.schema.Cell(c.col, c.label); got != c.want {
+			t.Errorf("%s %s: %q, want %q", c.col, c.label, got, c.want)
+		}
+	}
+}
