@@ -159,7 +159,7 @@ func TestTabs(t *testing.T) {
 	}
 	// clicking a tab name on the panel border
 	x := 3 + strings.Index("1 Data ─ 2 Schema", "Schema")
-	run(a, tea.MouseClickMsg{X: x, Y: titleRows + filterRows, Button: tea.MouseLeft})
+	run(a, tea.MouseClickMsg{X: x, Y: bodyTop, Button: tea.MouseLeft})
 	if a.tab != kit.TabSchema {
 		t.Fatalf("click on Schema: tab %d", a.tab)
 	}
@@ -272,7 +272,7 @@ func TestDetailLayout(t *testing.T) {
 	a, _ := setup(t)
 	run(a, kit.ToggleDetailMsg{})
 	s := screen(a)
-	row := s[titleRows+filterRows+2]
+	row := s[bodyTop+2]
 	if !strings.Contains(row, "ggg") || !strings.Contains(row, "ddd") {
 		t.Fatalf("row %q", row)
 	}
@@ -403,7 +403,7 @@ func TestPlacedAndInnerFocus(t *testing.T) {
 	a.p.Plot = pp
 	run(a, key("4"))
 	screen(a)
-	if pp.x != margin+2 || pp.y != titleRows+filterRows+1 {
+	if pp.x != margin+2 || pp.y != bodyTop+1 {
 		t.Fatalf("placed at %d,%d", pp.x, pp.y)
 	}
 }

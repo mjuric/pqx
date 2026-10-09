@@ -379,8 +379,8 @@ func TestSchemaScreen(t *testing.T) {
 	tb.gridMoves("ra")
 	tb.Press("2")
 	s := tb.Screen()
-	if !strings.Contains(s[5], "1 Data ─ 2 Schema ─ 3 Stats ─ 4 Plot ─ 5 Meta") {
-		t.Fatalf("tab strip %q", s[5])
+	if !strings.Contains(s[6], "1 Data ─ 2 Schema ─ 3 Stats ─ 4 Plot ─ 5 Meta") {
+		t.Fatalf("tab strip %q", s[6])
 	}
 	head := tb.line("#  column")
 	for _, h := range []string{"#", "column", "type", "unit", "nulls", "null %", "min", "max", "size", "ratio"} {
@@ -524,7 +524,7 @@ func TestSchemaMouse(t *testing.T) {
 	tb := open(t, "demo", false)
 	tb.read()
 	tb.Press("2")
-	body := 5 // the body starts under the title bar, a blank row and the filter panel
+	body := 6 // the body starts under the title bar, a blank row, the filter panel and another blank row
 	row := func(i int) tea.MouseClickMsg {
 		return tea.MouseClickMsg{X: 10, Y: body + 2 + i, Button: tea.MouseLeft}
 	}
