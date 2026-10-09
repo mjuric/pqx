@@ -5,6 +5,12 @@ covers:
   - "help: **Esc** | cancel running queries"
 fixture: slow
 sizes: [[120, 40]]
+intended:
+  - checks: [cancelled]
+    region: status
+    ref_shows: '^ │ \* Counting rows   first 1,000 shown'   # Python, until DuckDB has stopped (~0.17 s)
+    other_shows: '^ │ ✓ rows'                               # Go shows the cancelled count at once
+    note: "decided: Go shows the cancelled state at once"
 steps:
   - keys: /
     wait: 'enter apply'

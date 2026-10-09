@@ -295,19 +295,17 @@ func (t *Theme) Lip(s styled.Style) lipgloss.Style {
 	}
 	fg, bg := t.color(s.Fg), t.color(s.Bg)
 	if t.named {
-		// Textual draws everything in truecolor: the theme's colours where
-		// none is given, and dim as a blend towards the background
-		fgc, bgc := t.fg, t.bg
-		if c, ok := toRGB(fg); ok {
-			fgc = c
+		// colours as given and faint as faint: Paint (the root applies it
+		// to every frame) gives them the theme as Textual does, the theme's
+		// colours where none is set, faint as a blend over the background
+		// actually under the text (a focused table's is tinted)
+		if fg != nil {
+			st = st.Foreground(fg)
 		}
-		if c, ok := toRGB(bg); ok {
-			bgc = c
+		if bg != nil {
+			st = st.Background(bg)
 		}
-		if s.Dim {
-			fgc, s.Dim = blend(bgc, fgc, dimFactor), false
-		}
-		fg, bg = fgc.color(), bgc.color()
+		return st.Bold(s.Bold).Faint(s.Dim).Italic(s.Italic).Reverse(s.Reverse).Underline(s.Underline)
 	}
 	if fg != nil {
 		st = st.Foreground(t.out(fg))
