@@ -199,11 +199,12 @@ func wrapLine(t styled.Text, w int) []styled.Text {
 			out = append(out, slice(t, start, len(runes)))
 			break
 		}
+		// a line keeps the spaces after its last word (Rich does, cropped
+		// to the width); the next starts at the next word
 		next := end
-		if runes[end] == ' ' {
+		if runes[end] != ' ' && lastSpace > start {
+			end = lastSpace + 1
 			next = end
-		} else if lastSpace > start {
-			end, next = lastSpace, lastSpace
 		}
 		out = append(out, slice(t, start, end))
 		for next < len(runes) && runes[next] == ' ' {
