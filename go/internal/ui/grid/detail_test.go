@@ -676,3 +676,33 @@ func TestDetailReadRunsWaitingActions(t *testing.T) {
 	close(cellRead)
 	h.settle()
 }
+
+// The cells the pane's read brings are left to it row by row: the same
+// columns for other rows are read by the grid meanwhile.
+func TestDetailComingIsPerRow(t *testing.T) {
+	ds := newFake(3000, 300)
+	h, _ := withDetail(t, ds, 160, 48)
+	release := make(chan struct{})
+	held := false
+	ds.colsHook = func(ctx context.Context, cols []string) error {
+		if !held && len(cols) > 50 { // the pane's read: every column off screen
+			held = true
+			return ds.hold(ctx, release)
+		}
+		return nil
+	}
+	h.press("d")
+	if !held {
+		t.Fatal("no pane read")
+	}
+	h.press("end")
+	h.send(kit.GotoMsg{Row: 2000})
+	h.settle()
+	for _, name := range h.g.nearNames(1) {
+		if _, ok := h.g.v.cell(name, 2000); !ok {
+			t.Fatalf("%s not read for row 2000 while the pane reads rows near 0", name)
+		}
+	}
+	close(release)
+	h.settle()
+}

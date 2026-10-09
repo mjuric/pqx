@@ -393,14 +393,14 @@ func TestKeysMoveTheSelection(t *testing.T) {
 		t.Fatalf("%v", r.g.keys)
 	}
 	// x: the filter part clears its box (typed text too) and the view;
-	// focus goes to the grid only if there was a view to clear
+	// focus goes to the grid
 	r.msgs = nil
 	r.press("x")
 	if m, ok := last[kit.SetViewMsg](r); !ok || !m.View.Plain() || m.KeepFileRow != 7 {
 		t.Fatalf("%v", r.msgs)
 	}
-	if _, ok := last[kit.FocusMsg](r); ok {
-		t.Fatal("focus moved")
+	if m, ok := last[kit.FocusMsg](r); !ok || m.Pane != "grid" { // (typed text cleared: back to the grid, as Python)
+		t.Fatalf("%v", r.msgs)
 	}
 	st.View = data.View{Where: "band = 'r'"}
 	r.msgs = nil
@@ -649,17 +649,22 @@ func TestReadAgainAfterACancel(t *testing.T) {
 		return kit.View{Gen: 1}, [][]int64{{3}}, [][]string{{"ra"}}, true
 	}
 	r.ds.fetch = func(ctx context.Context, rows []int64, cs []string) (data.Window, error) {
-		return data.Window{}, context.Canceled // as if cancelled while it ran
+		return data.Window{Len: 1, FileRows: rows, Cols: map[string][]data.Value{"ra": {1.0}}}, nil
 	}
 	r.g.rec = kit.Record{Row: 3, FileRow: 3, Values: map[string]data.Value{}, Missing: []string{"ra"}}
 	r.send(kit.CursorMsg{})
+	r.send(kit.CursorMsg{}) // the same read: not again
+	if r.ds.calls != 1 {
+		t.Fatalf("%d reads", r.ds.calls)
+	}
+	// Esc's cancel (CancelledMsg): the next move reads again
+	r.send(kit.CancelledMsg{Tags: []string{"detail"}})
 	r.send(kit.CursorMsg{})
 	if r.ds.calls != 2 {
 		t.Fatalf("%d reads", r.ds.calls)
 	}
-	// Esc's cancel: the result never comes; the next move reads again
-	r.p.last = readKey(kit.View{Gen: 1}, [][]int64{{3}}, [][]string{{"ra"}})
-	r.send(kit.CancelledMsg{Tags: []string{"detail"}})
+	// a stopped read's result, should one arrive: likewise, and nothing else
+	r.p.Update(kit.DoneMsg{Tag: "detail", Msg: fetched{p: r.p, err: context.Canceled}})
 	r.send(kit.CursorMsg{})
 	if r.ds.calls != 3 {
 		t.Fatalf("%d reads", r.ds.calls)

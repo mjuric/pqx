@@ -46,6 +46,9 @@ const (
 	// wheelStep is the lines a notch of the wheel scrolls (Textual's
 	// scroll sensitivity).
 	wheelStep = 2
+	// exactBar: up to this many entries all are measured, so the
+	// scrollbar is exact; beyond, entries not drawn yet count as a line.
+	exactBar = 500
 	// failedNoticeTime is how long "✗ Columns" shows.
 	failedNoticeTime = 6 * time.Second
 )
@@ -207,9 +210,8 @@ type fetched struct {
 	view     kit.View
 	fileRows [][]int64
 	cols     [][]string
-	ws       []data.Window
-	err      error // a read that failed: its columns and those after it
-	failedAt int
+	ws       []data.Window // by read; Failed holds a read's error for all its columns
+	err      error         // set if the reads were stopped
 }
 
 // gridReads reports whether a task tag is one of the grid's reads, after
@@ -255,8 +257,8 @@ func (p *Pane) Update(msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case kit.ColumnChangedMsg:
-		if msg.From != Part {
-			p.follow()
+		if msg.From != Part && !p.follow() && p.Selected() == p.st.Current {
+			p.scrollTo(p.sel) // asked for again: shown even if scrolled away
 		}
 		return nil
 	case kit.ViewChangedMsg:
@@ -296,10 +298,10 @@ func (p *Pane) refresh() tea.Cmd {
 	// a selection in view stays in view, whatever the new values' heights
 	shown := p.sel >= 0 && p.inView(p.sel)
 	p.setEntries(p.build(rec))
+	p.clamp() // the top entry may be shorter now
 	if !p.follow() && shown {
 		p.scrollTo(p.sel)
 	}
-	p.clamp()
 	if len(rec.Missing) > 0 && !rec.Pending && p.grid != nil {
 		p.seq++
 		seq := p.seq
@@ -492,6 +494,11 @@ func (p *Pane) layout() {
 		}
 		if p.bar {
 			p.setWidth(w - 1)
+			if len(p.entries) <= exactBar {
+				for i := range p.entries {
+					p.height(i) // all measured: the scrollbar's thumb is exact
+				}
+			}
 		}
 	}
 }
@@ -657,13 +664,11 @@ func (p *Pane) onKey(k tea.KeyPressMsg) tea.Cmd {
 			return p.grid.FieldKey(name, k)
 		}
 	case "x", "ctrl+x":
-		// the app's clear-filter key (the filter part empties its box,
-		// typed text too); a view cleared hands focus to the grid
-		msg := kit.Send(kit.SetViewMsg{View: data.View{}, KeepFileRow: p.rec.FileRow})
-		if p.st.View.Plain() {
-			return msg
-		}
-		return tea.Batch(msg, kit.Send(kit.FocusMsg{Pane: "grid"}))
+		// the app's clear-filter key: the filter part empties its box
+		// (typed text too) and the view; focus goes to the grid (also when
+		// there was nothing to clear: the pane can't see the box)
+		return tea.Batch(kit.Send(kit.SetViewMsg{View: data.View{}, KeepFileRow: p.rec.FileRow}),
+			kit.Send(kit.FocusMsg{Pane: "grid"}))
 	}
 	return nil
 }
@@ -770,15 +775,18 @@ func (p *Pane) fetch() tea.Cmd {
 	p.last = key
 	ds := p.env.DS
 	return p.env.Tasks.Run("detail", "loading columns", false, func(ctx context.Context) tea.Msg {
-		r := fetched{p: p, view: view, fileRows: fileRows, cols: cols, failedAt: -1}
+		r := fetched{p: p, view: view, fileRows: fileRows, cols: cols}
 		for i := range fileRows {
 			w, err := ds.FetchColumns(ctx, fileRows[i], cols[i])
 			if ctx.Err() != nil {
-				err = ctx.Err()
+				return fetched{p: p, err: ctx.Err()}
 			}
 			if err != nil {
-				r.err, r.failedAt = err, i
-				break
+				// that read's columns failed; the others are read on
+				w = data.Window{FileRows: fileRows[i], Len: len(fileRows[i]), Failed: map[string]error{}}
+				for _, c := range cols[i] {
+					w.Failed[c] = err
+				}
 			}
 			r.ws = append(r.ws, w)
 		}
@@ -797,19 +805,6 @@ func (p *Pane) onFetched(r fetched) tea.Cmd {
 		p.env.Grid.Merge(r.view, w)
 		for n, err := range w.Failed {
 			failedCols[n] = err
-		}
-	}
-	if r.err != nil {
-		// the read that failed: all its columns; those after it are read
-		// again later
-		w := data.Window{FileRows: r.fileRows[r.failedAt], Len: len(r.fileRows[r.failedAt]), Failed: map[string]error{}}
-		for _, c := range r.cols[r.failedAt] {
-			w.Failed[c] = r.err
-			failedCols[c] = r.err
-		}
-		p.env.Grid.Merge(r.view, w)
-		if r.failedAt < len(r.cols)-1 {
-			p.last = ""
 		}
 	}
 	if len(failedCols) == 0 {
