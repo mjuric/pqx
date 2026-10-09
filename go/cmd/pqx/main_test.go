@@ -3,17 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"unicode"
-
-	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
-	"github.com/apache/arrow-go/v18/parquet/pqarrow"
 )
 
 // TestMain lets the pty tests run this test binary as pqx: with
@@ -116,32 +110,5 @@ func TestCLIPrintsNoControlCharacters(t *testing.T) {
 	}
 	if c := controls(err); len(c) > 0 {
 		t.Errorf("control characters %q in %q", c, err)
-	}
-}
-
-// writeParquet writes a file of ncols int64 columns c00, c01, … with rows
-// 0..nrows-1 (value row*100 + column).
-func writeParquet(t testing.TB, path string, ncols, nrows int) {
-	t.Helper()
-	var fields []arrow.Field
-	var cols []arrow.Array
-	for c := 0; c < ncols; c++ {
-		fields = append(fields, arrow.Field{Name: fmt.Sprintf("c%02d", c), Type: arrow.PrimitiveTypes.Int64})
-		b := array.NewInt64Builder(memory.DefaultAllocator)
-		for r := 0; r < nrows; r++ {
-			b.Append(int64(r*100 + c))
-		}
-		cols = append(cols, b.NewArray())
-		b.Release()
-	}
-	sc := arrow.NewSchema(fields, nil)
-	rec := array.NewRecordBatch(sc, cols, int64(nrows))
-	tbl := array.NewTableFromRecords(sc, []arrow.RecordBatch{rec})
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := pqarrow.WriteTable(tbl, f, 1<<20, nil, pqarrow.DefaultWriterProps()); err != nil {
-		t.Fatal(err)
 	}
 }

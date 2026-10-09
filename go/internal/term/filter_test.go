@@ -293,7 +293,12 @@ func TestEscTiming(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		t0 := time.Now()
 		_, _ = pw.Write([]byte{0x1b})
-		s := <-got
+		var s stamp
+		select {
+		case s = <-got:
+		case <-time.After(2 * time.Second):
+			t.Fatal("no Esc within 2 s")
+		}
 		if s.key != "esc" {
 			t.Fatalf("got %q, want esc", s.key)
 		}

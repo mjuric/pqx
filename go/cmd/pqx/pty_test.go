@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/apache/arrow-go/v18/parquet/pqarrow"
 	"golang.org/x/sys/unix"
-
-	"github.com/mjuric/pqx/go/internal/data"
-	"github.com/mjuric/pqx/go/internal/ui"
 )
 
 // These tests run this test binary as pqx (TestMain) in a pseudo-terminal,
@@ -225,31 +225,6 @@ func TestPtySplitX10ClickDoesNotQuit(t *testing.T) {
 		t.Fatalf("q didn't quit: %v %v", ok, err)
 	}
 	checkCleared(t, a.output()[n:])
-}
-
-// panicky is the app with a key that panics, for the crash test.
-type panicky struct{ tea.Model }
-
-func (p panicky) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if k, ok := msg.(tea.KeyPressMsg); ok && k.String() == "P" {
-		panic("test panic")
-	}
-	m, cmd := p.Model.Update(msg)
-	return panicky{m}, cmd
-}
-
-// panicMain is pqx with panicky (PQX_TEST_MAIN=panic).
-func panicMain(path string) int {
-	ds, err := data.Open(path, data.Options{})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 3
-	}
-	defer ds.Close()
-	code := runApp(panicky{ui.New(ds)}, os.Stderr)
-	// the terminal is out of raw mode again: a newline is a newline
-	fmt.Print("after\nexit\n")
-	return code
 }
 
 func TestPtyCrashRestoresTerminal(t *testing.T) {
@@ -690,5 +665,32 @@ func TestPtySignals(t *testing.T) {
 			t.Errorf("%v: a message: %q", c.sig, tail)
 		}
 		a.checkCooked()
+	}
+}
+
+// writeParquet writes a file of ncols int64 columns c00, c01, … with rows
+// 0..nrows-1 (value row*100 + column).
+func writeParquet(t testing.TB, path string, ncols, nrows int) {
+	t.Helper()
+	var fields []arrow.Field
+	var cols []arrow.Array
+	for c := 0; c < ncols; c++ {
+		fields = append(fields, arrow.Field{Name: fmt.Sprintf("c%02d", c), Type: arrow.PrimitiveTypes.Int64})
+		b := array.NewInt64Builder(memory.DefaultAllocator)
+		for r := 0; r < nrows; r++ {
+			b.Append(int64(r*100 + c))
+		}
+		cols = append(cols, b.NewArray())
+		b.Release()
+	}
+	sc := arrow.NewSchema(fields, nil)
+	rec := array.NewRecordBatch(sc, cols, int64(nrows))
+	tbl := array.NewTableFromRecords(sc, []arrow.RecordBatch{rec})
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pqarrow.WriteTable(tbl, f, 1<<20, nil, pqarrow.DefaultWriterProps()); err != nil {
+		t.Fatal(err)
 	}
 }
