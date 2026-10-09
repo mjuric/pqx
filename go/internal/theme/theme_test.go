@@ -1,9 +1,14 @@
 package theme
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mjuric/pqx/go/internal/styled"
 )
@@ -208,5 +213,97 @@ func TestRoles(t *testing.T) {
 	}
 	if got := hexOf(nord.Lip(nord.Style("border")).GetForeground()); got != "#567380" {
 		t.Errorf("nord border %s", got)
+	}
+}
+
+// testdata/rich_downgrade.json: Rich's Color.downgrade of 2,262 colours to
+// 256 and to 16 colours (from Python, rich 14).
+func TestRichDowngrade(t *testing.T) {
+	b, err := os.ReadFile("testdata/rich_downgrade.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases [][5]int
+	if err := json.Unmarshal(b, &cases); err != nil {
+		t.Fatal(err)
+	}
+	bad := 0
+	for _, c := range cases {
+		r, g, bl := uint8(c[0]), uint8(c[1]), uint8(c[2])
+		if got := rich256(r, g, bl); int(got) != c[3] && bad < 10 {
+			bad++
+			t.Errorf("rich256(%d,%d,%d) = %d, want %d", r, g, bl, got, c[3])
+		}
+		if got := richStandard(r, g, bl); got != c[4] && bad < 10 {
+			bad++
+			t.Errorf("richStandard(%d,%d,%d) = %d, want %d", r, g, bl, got, c[4])
+		}
+	}
+}
+
+// With a 256-colour terminal a named theme's colours are Rich's choices
+// (what Python pqx shows).
+func TestProfile256(t *testing.T) {
+	th := mustNew(t, "", "", "", "tokyo-night")
+	th.SetProfile(colorprofile.ANSI256)
+	for _, c := range []struct {
+		st   styled.Style
+		want string
+	}{
+		{styled.Style{}, "\x1b[38;5;146;48;5;16mx\x1b[m"},                           // #a9b1d6 on #1a1b26
+		{styled.Style{Dim: true}, "\x1b[38;5;244;48;5;16mx\x1b[m"},                  // #787e9a
+		{styled.Style{Fg: "border"}, "\x1b[38;5;60;48;5;16mx\x1b[m"},                // #625484
+		{styled.Style{Fg: "accent", Bold: true}, "\x1b[1;38;5;135;48;5;16mx\x1b[m"}, // Monokai blue #9d65ff
+		{styled.Style{Fg: "cyan"}, "\x1b[38;5;80;48;5;16mx\x1b[m"},                  // #58d1eb
+	} {
+		if got := th.Render(styled.New("x", c.st)); got != c.want {
+			t.Errorf("%+v: %s, want %s", c.st, sgr(got), sgr(c.want))
+		}
+	}
+	if got := fmt.Sprint(th.Primary()); got != fmt.Sprint(ansi.IndexedColor(141)) {
+		t.Errorf("primary %s", got)
+	}
+	th = mustNew(t, "", "", "#123456", "")
+	th.SetProfile(colorprofile.ANSI)
+	if got := th.Render(styled.New("x", styled.Style{Fg: "border"})); got != "\x1b[90mx\x1b[m" { // as Rich: bright black
+		t.Errorf("16 colours: %s", sgr(got))
+	}
+}
+
+// Paint gives every cell of a frame the named theme's colours, as Textual
+// does: default colours become the theme's, ANSI colours Monokai's, faint
+// a blend, short lines are padded; without a named theme nothing changes.
+func TestPaint(t *testing.T) {
+	plain := mustNew(t, "", "", "", "")
+	if got := plain.Paint("a\x1b[31mb\x1b[m", 5); got != "a\x1b[31mb\x1b[m" {
+		t.Errorf("terminal palette: %q", got)
+	}
+	th := mustNew(t, "", "", "", "tokyo-night")
+	th.SetProfile(colorprofile.ANSI256)
+	base := "\x1b[0;38;5;146;48;5;16m"
+	cases := []struct{ in, want string }{
+		{"ab", base + "ab" + "\x1b[m"},
+		{"a", base + "a" + base + "   " + base + "\x1b[m"},                                         // padded to 4
+		{"\x1b[31mab\x1b[m", base + "\x1b[0;38;5;197;48;5;16m" + "ab" + base + "\x1b[m"},           // red: Monokai #f4005f
+		{"\x1b[2mab\x1b[22m", base + "\x1b[0;38;5;244;48;5;16m" + "ab" + base + "\x1b[m"},          // faint: #787e9a
+		{"\x1b[1;7mab\x1b[0m", base + "\x1b[0;1;7;38;5;146;48;5;16m" + "ab" + base + "\x1b[m"},     // bold reverse
+		{"\x1b[38;5;200mab\x1b[39m", base + "\x1b[0;38;5;200;48;5;16m" + "ab" + base + "\x1b[m"},   // 256-colour
+		{"\x1b[38;2;255;0;0mab\x1b[m", base + "\x1b[0;38;5;196;48;5;16m" + "ab" + base + "\x1b[m"}, // truecolor, reduced
+		{"\x1b[?25lab", base + "\x1b[?25lab" + "\x1b[m"},                                           // another sequence
+	}
+	for _, c := range cases {
+		w := 2
+		if c.in == "a" {
+			w = 4
+		}
+		if got := th.Paint(c.in, w); got != c.want {
+			t.Errorf("Paint(%q)\n got %q\nwant %q", c.in, got, c.want)
+		}
+	}
+	// the pen carries across lines
+	got := th.Paint("\x1b[31ma\nb", 1)
+	red := "\x1b[0;38;5;197;48;5;16m"
+	if got != base+red+"a\n"+red+"b\x1b[m" {
+		t.Errorf("two lines: %q", got)
 	}
 }
