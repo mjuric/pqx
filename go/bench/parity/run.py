@@ -250,9 +250,13 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
             # expectations are checked on the checkpoint's own screen when the step took
             # one (a notification may be gone by now), else on the screen as it is
             seen = "\n".join(res["checks"][-1]["lines"]) if "check" in st else norm(s.text())
-            for key, want in (("expect", True), ("expect_not", False)):
+            for key, want in (("expect", True), ("expect_not", False), ("expect_app", True),
+                              ("expect_not_app", False)):
                 if key in st:
-                    pats = st[key] if isinstance(st[key], list) else [st[key]]
+                    pats = st[key]
+                    if key.endswith("_app"):  # {app: patterns}: only for that app
+                        pats = pats.get(app, [])
+                    pats = pats if isinstance(pats, list) else [pats]
                     for p in pats:
                         found = re.search(fill(p), seen, re.M) is not None
                         if found != want:
@@ -348,7 +352,7 @@ def python_bug_applies(pb, ref, other):
         return None
     if pb.get("region") == "keybar":
         r, o = ref["lines"][-1], other["lines"][-1]
-    elif pb.get("region") in ("screen", "status", "pane", "readout"):
+    elif pb.get("region") in ("screen", "status", "pane", "readout", "scrollbar"):
         r, o = "\n".join(ref["lines"]), "\n".join(other["lines"])
     else:
         return None
@@ -357,9 +361,40 @@ def python_bug_applies(pb, ref, other):
     return None
 
 
-def mask_region(c, region):
+def mask_scrollbar(c, anchor):
+    """Blank a dialog's scrollbar: find the dialog's right border (the first │ after the
+    `anchor` text), then the two cells four and three columns left of it, on every line of
+    the dialog (where that border is). The rest of the dialog is still compared."""
+    rx = re.compile(anchor or r"\S")
+    hit = next(((y, m) for y, ln in enumerate(c["lines"]) for m in [rx.search(ln)] if m), None)
+    if hit is None:
+        return c
+    y0, m = hit
+    xr = c["lines"][y0].find("│", m.end())
+    if xr < 4:
+        return c
+    rows = [y for y, ln in enumerate(c["lines"]) if len(ln) > xr and ln[xr] in "│┐┘"]
+    cols = (xr - 4, xr - 3)
+    c = dict(c)
+    lines = list(c["lines"])
+    styles = [list(st) for st in c["styles"]]
+    for y in rows:
+        ln = lines[y]
+        lines[y] = "".join(" " if x in cols else ch for x, ch in enumerate(ln))
+        if y < len(styles):
+            for x in cols:
+                if x < len(styles[y]):
+                    styles[y][x] = (None,) * 7
+    c["lines"], c["styles"] = lines, styles
+    return c
+
+
+def mask_region(c, region, anchor=None):
     """A capture with a screen region blanked out: `keybar` is the last line, `screen` all
-    of it (for a bug that changes the whole checkpoint)."""
+    of it (for a bug that changes the whole checkpoint), `scrollbar` the two thumb cells
+    of the dialog whose text matches `anchor` (left of its two-cell right padding)."""
+    if region == "scrollbar":
+        return mask_scrollbar(c, anchor)
     if region == "screen":
         return {**c, "lines": [], "styles": [], "plain": [], "clipboard": []}
     if region == "pane":  # the details pane: every column from its left border on
@@ -445,6 +480,15 @@ def selftest():
     ok = (not compare_check(mask_region(pa_, "pane"), mask_region(pb_, "pane"))["text"]
           and compare_check(mask_region(pa_, "pane"), mask_region(pc_, "pane"))["text"])
     print(f"{'ok  ' if ok else 'FAIL'} region pane: the pane is left out, the grid beside it isn't")
+    bad += not ok
+    sa_, sb_ = pair(" x", " x")
+    sa_["lines"] = ["┌─────────────┐", "│ Help    ▆▆  │", "│ text    ▆▆  │", "└─────────────┘"]
+    sb_["lines"] = ["┌─────────────┐", "│ Help    ▅▅  │", "│ text    ▅▅  │", "└─────────────┘"]
+    sc_ = {**sb_, "lines": ["┌─────────────┐", "│ Help    ▅▅  │", "│ texT    ▅▅  │", "└─────────────┘"]}
+    sa_["styles"] = sb_["styles"] = sc_["styles"] = [[(None,) * 7] * 15] * 4
+    ok = (not compare_check(mask_scrollbar(sa_, "Help"), mask_scrollbar(sb_, "Help"))["text"]
+          and compare_check(mask_scrollbar(sa_, "Help"), mask_scrollbar(sc_, "Help"))["text"])
+    print(f"{'ok  ' if ok else 'FAIL'} region scrollbar: the thumb is left out, the dialog's text isn't")
     bad += not ok
     for name, ref_bar, other_bar, want_masked in [
             ("bug shown, other app right: left out", " enter apply   esc back", " / filter   x clear", True),
@@ -726,7 +770,8 @@ def report(scen, results, labels, out, xfail, a, versions, elapsed):
                           if rule_applies(r, ca[name], cb[name], "other_shows")]
                 ma, mb = ca[name], cb[name]
                 for r, _ in rules:
-                    ma, mb = mask_region(ma, r["region"]), mask_region(mb, r["region"])
+                    ma = mask_region(ma, r["region"], r.get("anchor"))
+                    mb = mask_region(mb, r["region"], r.get("anchor"))
                 d = compare_check(ma, mb)
                 if rules:
                     full = compare_check(ca[name], cb[name])
