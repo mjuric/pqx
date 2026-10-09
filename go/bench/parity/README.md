@@ -63,7 +63,7 @@ Both apps should report the same version: the title bar's version is normalized 
 `<VER>`, but its length decides what fits on a narrow screen. Build Go with
 `make build VERSION=<python pqx's version>` for the narrow-title scenario.
 
-The full suite (58 scenarios, most at 2 sizes, 2 apps) takes about 8 minutes with `-j 5`.
+The full suite (58 scenarios, most at 2 sizes, 2 apps) takes about 11 minutes with `-j 4` for Python against itself, and about 35 minutes against an incomplete Go version (every missed wait runs to its timeout).
 
 ## Reading the report
 
@@ -109,7 +109,7 @@ Before comparing, and before deciding a screen has settled, each line goes throu
 (see `NORMALIZE` in `run.py`):
 
 - the version after `pqx ` → `<VER>`;
-- timings (`0.12 s`, `120 ms`, `35µs`) → `<T>`, and a running count's `·  00:03 elapsed` is dropped;
+- timings (`0.12 s`, `120 ms`, `35µs`) → `<T>`, and a running count's `·  00:03 elapsed` is blanked;
 - a spinner frame before a word → `*`;
 - the run's output directory → `<OUT>`, the fixture directory → `<FIX>`, the slot
   letter in `runs/a/…` → `_`;

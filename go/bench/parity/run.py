@@ -58,7 +58,8 @@ NORMALIZE = [
     (r"\b\d+(?:\.\d+)?\s?(?:ms|µs|us)\b", "<T>"),
     (r"\b\d+\.\d+\s?s\b", "<T>"),
     # the elapsed time of a running count ("·  00:03 elapsed"), shown only after a while
-    (r"\s+·\s+\d+:\d\d(?::\d\d)?\s?elapsed\b", ""),
+    # (blanked, not removed, so what is drawn to its right stays in place)
+    (r"\s+·\s+\d+:\d\d(?::\d\d)?\s?elapsed\b", lambda m: " " * len(m.group(0))),
     # a spinner frame in front of a word ("⠹ counting…")
     (rf"[{SPINNER}](?= \S)", "*"),
 ]
