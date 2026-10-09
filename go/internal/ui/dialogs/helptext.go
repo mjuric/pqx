@@ -65,7 +65,6 @@ They change only the grid and stats; the detail panel and **y** keep full precis
 | **e** | export the current view (filter + sort) to Parquet / CSV / JSON |
 | **m** | toggle sampling for stats and plots on large files |
 | **Esc** | cancel running queries; when nothing is running, leave the filter box or close the detail panel |
-| **Ctrl+P** | command palette |
 | **?** | this help · **q** quit |
 
 Data, Schema and Stats stay on the same column: move to a column in one and

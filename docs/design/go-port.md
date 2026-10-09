@@ -358,3 +358,36 @@ how to make the workflow dispatchable before the cutover (it must exist on
 `master`, or the tag trigger is enabled); `publish.yml` must go at the cutover;
 third-party licence notices (DuckDB, the Go modules) for the binaries; macOS
 notarization of the archives.
+
+
+### Docs (WP13b)
+
+- **README** for the Go version: install from platform wheels (`pipx`/`uv
+  tool`/`pip`, `uvx`) or GitHub Release archives, the supported platforms and
+  minimums, and the fallback to Python pqx 0.2.x elsewhere; `--theme` limited to
+  the five named themes (D2); the other options (`--sample`, `--threads`); the
+  Go development section (`make build`/`test`/`vet`, the code layout, the parity
+  harness, `go-release.yml` and the runbook). The opening-time claim is now
+  "under half a second" for SSSource and 2,000 row groups alike (prototype:
+  0.17 s and 0.3 s); the integrator's benchmark run should confirm it.
+- **Tools** (D8): `tools/make_demo.py` is `pqx.demo`'s generator as a standalone
+  `uv run` script (numpy and pyarrow only; byte-identical output with the same
+  pyarrow), and `make_trips.py` moved to `tools/`. `pqx/demo.py` stays until the
+  cutover (D5).
+- **Screenshots** come from the Go binary:
+  `go/bench/screenshots/make_screenshots.py` runs pqx in the pty driver at
+  150×42 with `--theme tokyo-night` and `COLORTERM=truecolor`, turns pyte's
+  screen (colours, bold, faint, reverse) into Rich text, exports it with Rich's
+  SVG export (the same export and window frame as Textual's screenshots) and
+  renders the PNG with headless Chromium. The seven PNGs replace the Python ones;
+  layout and colours match them, the differences being the version in the title
+  bar and the current layout (which the old Python screenshots predate).
+  Rendering needs a font with `▾` and braille (DejaVu Sans Mono here) besides
+  Fira Code, which the SVG loads from a CDN.
+- **Help**: the `Ctrl+P` command palette row is gone from `?` (D2). `pqx -h`
+  still says "use a Textual theme" for `--theme`, because `opts` matches
+  Python's argparse output exactly (`internal/opts/testdata/cli.json`); to
+  change at the cutover.
+- **Note**: the xy plot's bins move by a cell between runs on the same file
+  (the "count" legend reads 298, 299 or 300), as in Python: the range comes from
+  DuckDB's `approx_quantile`, which isn't deterministic across threads.
