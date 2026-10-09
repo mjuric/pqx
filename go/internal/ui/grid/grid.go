@@ -92,8 +92,8 @@ type Grid struct {
 	prev *saved // the view before a filter, kept until it reads (revert)
 	gen  int
 
-	curRow, top  int64
-	curCol, left int // left: the first scrollable column shown (>= pinned)
+	curRow, top int64
+	curCol, sx  int // sx: the columns' scroll, in cells (DataTable's scroll_x)
 
 	page          *fetchReq // the "page" task running, if any
 	failed        *fetchReq // the last page read that failed (not retried)
@@ -123,14 +123,18 @@ type Grid struct {
 	// widened then (none should: fitVisible fits first; for tests)
 	drawing    bool
 	lateGrowth int
+	// the scrollable width and whether the cursor was on screen when last
+	// drawn (View keeps it there when the width changes)
+	lastViewW  int
+	lastInView bool
 }
 
 // saved is a view and the cursor on it, kept so a view that fails on its
 // first read can be undone.
 type saved struct {
-	v            *viewData
-	curRow, top  int64
-	curCol, left int
+	v           *viewData
+	curRow, top int64
+	curCol, sx  int
 }
 
 // New makes the grid over env's dataset and state.

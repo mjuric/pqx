@@ -265,13 +265,13 @@ func TestViewportKeptAcrossViews(t *testing.T) {
 		h.send(kp("left"))
 	}
 	h.settle()
-	left := g.cols[g.left].Name
-	if g.left == 0 {
+	left := g.cols[leftmost(g)].Name
+	if g.sx == 0 {
 		t.Fatal("not scrolled")
 	}
 	h.filterWith("id % 3 = 0")
-	if g.cols[g.left].Name != left {
-		t.Errorf("leftmost column %q after a filter, want %q", g.cols[g.left].Name, left)
+	if g.cols[leftmost(g)].Name != left {
+		t.Errorf("leftmost column %q after a filter, want %q", g.cols[leftmost(g)].Name, left)
 	}
 	// the record on screen row 5 stays there when the filter is cleared
 	h.send(kit.GotoMsg{Row: 700})
@@ -288,8 +288,8 @@ func TestViewportKeptAcrossViews(t *testing.T) {
 	if !h.env.State.View.Plain() || g.curRow != fr || g.curRow-g.top != 5 {
 		t.Errorf("after x: row %d (want file row %d), screen row %d", g.curRow, fr, g.curRow-g.top)
 	}
-	if g.cols[g.left].Name != left {
-		t.Errorf("leftmost column %q after clearing, want %q", g.cols[g.left].Name, left)
+	if g.cols[leftmost(g)].Name != left {
+		t.Errorf("leftmost column %q after clearing, want %q", g.cols[leftmost(g)].Name, left)
 	}
 }
 
@@ -327,7 +327,7 @@ func TestFitVisibleScrollsTheCursorBack(t *testing.T) {
 	h.press("end")
 	h.grid()
 	if !g.cursorInView() {
-		t.Errorf("cursor off screen: left %d, blob %d wide", g.left, g.colWidth("blob"))
+		t.Errorf("cursor off screen: scroll %d, blob %d wide", g.sx, g.colWidth("blob"))
 	}
 	drawnCellsFit(t, h, "binary")
 }
@@ -491,11 +491,11 @@ func TestPageLeftAndClickBelowTheRows(t *testing.T) {
 	h := newHarness(t, newFake(5, 60), 120, 30)
 	g := h.g
 	h.press("end")
-	first, _, _, _ := g.colWindow()
+	sx := g.sx
 	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: g.x, Y: g.y + 3})
 	h.settle()
-	if _, last, _, _ := g.colWindow(); last != first-1 || !g.fits(g.left, first-1) || (g.left > 0 && g.fits(g.left-1, first-1)) {
-		t.Errorf("after ‹: left %d, last shown %d, want %d", g.left, last, first-1)
+	if want := max(0, sx-(g.w-2*edgeCells)); g.sx != want {
+		t.Errorf("after ‹: scroll %d, want %d (a table's width less)", g.sx, want)
 	}
 	row, col := g.curRow, g.curCol
 	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: g.x + g.layout()[0].x + 1, Y: g.y + headerRows + 8})
@@ -609,7 +609,7 @@ func secondRound(t *testing.T, width, size int) bool {
 	if !g.cursorInView() {
 		t.Errorf("width %d, %d bytes: cursor off screen", width, size)
 	}
-	return g.left > 0
+	return g.sx > 0
 }
 
 // A grid that gets wider scrolls back left so no space is left empty at the
@@ -626,8 +626,8 @@ func TestWiderGridFillsTheSpace(t *testing.T) {
 	h.press("d")
 	h.grid()
 	n := len(g.cols)
-	if g.left > g.pinned() && g.fits(g.left-1, n-1) {
-		t.Errorf("left %d leaves room: columns %d to %d would fit", g.left, g.left-1, n-1)
+	if g.sx > g.maxSX() {
+		t.Errorf("scroll %d leaves room (at most %d, %d columns)", g.sx, g.maxSX(), n)
 	}
 	if !g.cursorInView() {
 		t.Error("cursor off screen")
@@ -638,8 +638,8 @@ func TestWiderGridFillsTheSpace(t *testing.T) {
 	h.send(tea.WindowSizeMsg{Width: 200, Height: 30})
 	h.settle()
 	h.grid()
-	if g.left > g.pinned() && g.fits(g.left-1, n-1) {
-		t.Errorf("after growing the terminal: left %d leaves room", g.left)
+	if g.sx > g.maxSX() {
+		t.Errorf("after growing the terminal: scroll %d leaves room", g.sx)
 	}
 }
 
@@ -687,4 +687,13 @@ func TestReadColumnsByPositionChecksTheRows(t *testing.T) {
 	if _, err := readColumns(t.Context(), ds, v, moved); err == nil {
 		t.Error("rows that moved were read by position")
 	}
+}
+
+// leftmost is the first scrollable column wholly on screen.
+func leftmost(g *Grid) int {
+	first, last, _, _ := g.colWindow()
+	if last < first {
+		return g.pinned()
+	}
+	return first
 }

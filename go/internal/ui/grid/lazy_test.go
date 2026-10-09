@@ -331,7 +331,7 @@ func TestWidthsDoNotJumpWhenColumnsArrive(t *testing.T) {
 	for _, c := range g.cols {
 		before[c.Name] = g.colWidth(c.Name)
 	}
-	left := g.left
+	left := g.sx
 	close(release)
 	h.settle()
 	h.grid()
@@ -344,8 +344,8 @@ func TestWidthsDoNotJumpWhenColumnsArrive(t *testing.T) {
 			t.Errorf("%s: reserved %d, now %d (statistics give ints their width)", c.Name, before[c.Name], after)
 		}
 	}
-	if g.left != left || g.curCol != lazyCols-1 || !g.cursorInView() {
-		t.Errorf("view moved: left %d (was %d), cursor %d, in view %v", g.left, left, g.curCol, g.cursorInView())
+	if g.sx != left || g.curCol != lazyCols-1 || !g.cursorInView() {
+		t.Errorf("view moved: scroll %d (was %d), cursor %d, in view %v", g.sx, left, g.curCol, g.cursorInView())
 	}
 	if strings.Contains(strings.Join(h.grid()[headerRows:], "\n"), cells.Placeholder) {
 		t.Error("placeholders remain")

@@ -434,6 +434,13 @@ func (g *Grid) onPage(r pageResult) tea.Cmd {
 		g.store(start, n, r.win)
 		g.reserve(nil)
 	})
+	if g.anchorLeft != "" {
+		// the new view's first rows: its kept leftmost column goes to the
+		// left edge, where their widths put it, and the cursor into view
+		g.applyAnchor()
+		g.anchorLeft = ""
+		g.scrollToColumn()
+	}
 	if r.win.Len < n {
 		req := r.req
 		g.failed = &req // a short read: reading it again tells nothing new

@@ -133,22 +133,13 @@ func (g *Grid) onClick(ms tea.Mouse) tea.Cmd {
 // pageColumns scrolls a screen of columns sideways without moving the
 // cursor (a click on ‹ or ›).
 func (g *Grid) pageColumns(dir int) tea.Cmd {
-	first, last, hl, hr := g.colWindow()
-	p := g.pinned()
-	if dir > 0 && hr > 0 {
-		g.left = max(p, last+1)
-	} else if dir < 0 && hl > 0 {
-		// back until the old first column is the last that fits
-		target := max(p, first-1)
-		l := target
-		for l > p && g.fits(l-1, target) {
-			l--
-		}
-		g.left = l
-	} else {
+	// by the table's width, as DataTable's scroll_page_left/right
+	sx := g.sx
+	g.sx += dir * max(1, g.w-2*edgeCells)
+	g.clampSX()
+	if g.sx == sx {
 		return nil
 	}
-	g.fillRight()
 	return g.ensure()
 }
 
@@ -217,10 +208,12 @@ func (g *Grid) onColumnsChanged() tea.Cmd { return g.applyColumns(g.curName()) }
 // target, or stays where it is if that isn't shown; the view keeps its
 // leftmost column, or the first one right of it still shown.
 func (g *Grid) applyColumns(target string) tea.Cmd {
+	// Python rebuilds the columns, keeping the leftmost wholly visible one
+	// (or the first after it still shown) leftmost (_rebuild_columns(follow))
 	leftName := ""
 	idx := g.curCol
-	if g.left < len(g.cols) {
-		leftName = g.cols[g.left].Name
+	if first, last, hl, _ := g.colWindow(); hl > 0 && first <= last {
+		leftName = g.cols[first].Name
 	}
 	old := g.cols
 	g.setColumns()
@@ -229,11 +222,11 @@ func (g *Grid) applyColumns(target string) tea.Cmd {
 	} else {
 		g.curCol = min(idx, len(g.cols)-1)
 	}
-	g.left = g.pinned()
+	g.sx = 0
 	if leftName != "" {
 		for _, c := range old[indexOf(old, leftName):] {
-			if i, ok := g.byName[c.Name]; ok {
-				g.left = max(i, g.pinned())
+			if i, ok := g.byName[c.Name]; ok && i >= g.pinned() {
+				g.sx = g.colStart(i)
 				break
 			}
 		}

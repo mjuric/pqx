@@ -189,11 +189,11 @@ func TestHiddenColumnHints(t *testing.T) {
 	if _, _, _, hr := g.colWindow(); hr == 0 {
 		t.Error("a click on ‹ didn't page left")
 	}
-	before := g.left
+	before := g.sx
 	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: g.x + g.w - 1, Y: g.y + 3})
 	h.settle()
-	if g.left <= before {
-		t.Errorf("a click on › didn't page right: left %d (was %d)", g.left, before)
+	if g.sx <= before {
+		t.Errorf("a click on › didn't page right: scroll %d (was %d)", g.sx, before)
 	}
 	// pinned columns show in the readout
 	h.press("home", "right", "p")

@@ -448,7 +448,7 @@ func TestHorizontalScroll(t *testing.T) {
 	}
 	ds.clearLog()
 	h.press("end")
-	if h.g.left == 0 {
+	if h.g.sx == 0 {
 		t.Fatal("End didn't scroll right")
 	}
 	calls := ds.log()

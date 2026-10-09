@@ -194,7 +194,8 @@ func (g *Grid) nearRows() (int64, int64) {
 // (sw); clipped if the right edge cuts it.
 type slot struct {
 	col, x, w, sw int
-	clipped       bool
+	skip          int  // cells of the slot cut off at the left
+	clipped       bool // cut at either edge
 }
 
 // right is the x where the table ends (the right edge marker's column).
@@ -263,30 +264,44 @@ func (g *Grid) labelWidthOf(d *viewData) int {
 	return w
 }
 
-// layout places the pinned columns, then the scrollable ones from g.left
-// that fit; the last may be clipped.
+// layout places the pinned columns, then the scrollable ones shifted left
+// by g.sx cells (DataTable's scroll_x): the first and the last on screen
+// may be cut by the edges.
 func (g *Grid) layout() []slot {
 	lab := g.labelSlot()
 	x := lab.x + lab.sw
 	right := g.right()
 	out := make([]slot, 0, 32)
-	add := func(i int) {
+	p := g.pinned()
+	for i := 0; i < p && x < right; i++ {
 		w := g.colWidth(g.cols[i].Name)
 		s := slot{col: i, x: x, w: w, sw: w + 2*pad}
 		if x+s.sw > right {
-			s.sw = right - x
-			s.w = max(0, s.sw-2*pad)
-			s.clipped = true
+			s.sw, s.clipped = right-x, true
 		}
 		out = append(out, s)
 		x += s.sw
 	}
-	p := g.pinned()
-	for i := 0; i < p && x < right; i++ {
-		add(i)
-	}
-	for i := max(g.left, p); i < len(g.cols) && x < right; i++ {
-		add(i)
+	base, pos := x, 0
+	for i := p; i < len(g.cols); i++ {
+		w := g.colWidth(g.cols[i].Name)
+		sw := w + 2*pad
+		x0 := base + pos - g.sx
+		pos += sw
+		if x0+sw <= base {
+			continue
+		}
+		if x0 >= right {
+			break
+		}
+		s := slot{col: i, x: x0, w: w, sw: sw}
+		if x0 < base {
+			s.skip, s.x, s.sw, s.clipped = base-x0, base, sw-(base-x0), true
+		}
+		if s.x+s.sw > right {
+			s.sw, s.clipped = right-s.x, true
+		}
+		out = append(out, s)
 	}
 	return out
 }
@@ -301,48 +316,68 @@ func (g *Grid) scrollX() int {
 	return x
 }
 
-// fits reports whether scrollable column c is wholly on screen with left
-// as the first scrollable column.
-func (g *Grid) fits(left, c int) bool {
-	if c < left {
-		return false
-	}
-	x := g.scrollX()
-	for i := left; i <= c; i++ {
+// viewW is the width the scrollable columns are shown in.
+func (g *Grid) viewW() int { return max(0, g.right()-g.scrollX()) }
+
+// colStart is where scrollable column c starts, in cells from the first
+// scrollable column (DataTable's virtual x, less the pinned columns).
+func (g *Grid) colStart(c int) int {
+	x := 0
+	for i := g.pinned(); i < c && i < len(g.cols); i++ {
 		x += g.colWidth(g.cols[i].Name) + 2*pad
 	}
-	return x <= g.right()
+	return x
+}
+
+// maxSX is the furthest the columns scroll: the last one at the right edge.
+func (g *Grid) maxSX() int { return max(0, g.colStart(len(g.cols))-g.viewW()) }
+
+// clampSX keeps the scroll within [0, maxSX] (a wider grid shows no empty
+// space at the right, as DataTable clamps its scroll offset).
+func (g *Grid) clampSX() { g.sx = max(0, min(g.sx, g.maxSX())) }
+
+// fits reports whether scrollable column c is wholly on screen.
+func (g *Grid) fits(c int) bool {
+	if c < g.pinned() {
+		return true
+	}
+	a := g.colStart(c)
+	b := a + g.colWidth(g.cols[c].Name) + 2*pad
+	return a >= g.sx && b <= g.sx+g.viewW()
 }
 
 // cursorInView reports whether the cursor's cell is wholly on screen
 // horizontally (a pinned one always is).
-func (g *Grid) cursorInView() bool {
-	if g.curCol < g.pinned() {
-		return true
-	}
-	return g.fits(g.left, g.curCol)
-}
+func (g *Grid) cursorInView() bool { return g.curCol >= len(g.cols) || g.fits(g.curCol) }
 
 // colWindow is (first, last, hidden left, hidden right) over the scrollable
 // columns (Python's column_window): first and last are the wholly visible
-// ones; a column cut by the edge counts as hidden. last < first if none.
+// ones; a column cut by an edge counts as hidden on that side. last <
+// first if none.
 func (g *Grid) colWindow() (int, int, int, int) {
 	p := g.pinned()
-	first, last := -1, -2
-	for _, s := range g.layout() {
-		if s.col < p || s.clipped {
-			continue
+	left, right := g.sx, g.sx+g.viewW()
+	first, last, hl, hr := -1, -2, 0, 0
+	a := 0
+	for i := p; i < len(g.cols); i++ {
+		b := a + g.colWidth(g.cols[i].Name) + 2*pad
+		switch {
+		case a < left:
+			hl++
+		case b > right:
+			hr++
+		default:
+			if first < 0 {
+				first = i
+			}
+			last = i
 		}
-		if first < 0 {
-			first = s.col
-		}
-		last = s.col
+		a = b
 	}
 	if first < 0 {
-		left := max(g.left, p)
-		return 0, -1, left - p, len(g.cols) - left
+		return 0, -1, hl, hr
 	}
-	return first, last, first - p, len(g.cols) - 1 - last
+	return first, last, hl, hr
 }
 
 // colsNear are the pinned columns and the scrollable ones within screens
@@ -358,12 +393,12 @@ func (g *Grid) colsNear(screens int) []int {
 	if p >= n {
 		return out
 	}
-	view := max(1, g.right()-g.scrollX())
+	view := max(1, g.viewW())
 	starts := make([]int, n+1)
 	for i := p; i < n; i++ {
 		starts[i+1] = starts[i] + g.colWidth(g.cols[i].Name) + 2*pad
 	}
-	x1 := starts[max(g.left, p)]
+	x1 := g.sx
 	x2 := x1 + view
 	if c := g.curCol; c >= p && c < n {
 		if starts[c] < x1 {
@@ -381,11 +416,22 @@ func (g *Grid) colsNear(screens int) []int {
 	return out
 }
 
-// keepCursorInView runs fn (which may widen columns) and, if that pushed
-// the cursor's cell, on screen until then, off it, scrolls it back.
+// keepCursorInView runs fn (which may widen columns, as values arrive)
+// keeping the leftmost column shown where it is, and, if that pushed the
+// cursor's cell, on screen until then, off it, scrolls it back.
 func (g *Grid) keepCursorInView(fn func()) {
 	was := g.cursorInView()
+	first, off := -1, 0
+	if g.sx > 0 {
+		if f, l, _, _ := g.colWindow(); l >= f {
+			first, off = f, g.colStart(f)-g.sx
+		}
+	}
 	fn()
+	if first >= 0 && first < len(g.cols) {
+		g.sx = g.colStart(first) - off
+		g.clampSX()
+	}
 	if was && !g.cursorInView() {
 		g.scrollToColumn()
 	}
@@ -422,29 +468,18 @@ func (g *Grid) scrollRows() {
 }
 
 func (g *Grid) scrollToColumn() {
-	p := g.pinned()
-	g.left = max(g.left, p)
-	if g.curCol >= p {
-		if g.curCol < g.left {
-			g.left = g.curCol
-		}
-		for g.left < g.curCol && !g.fits(g.left, g.curCol) {
-			g.left++
+	if c := g.curCol; c >= g.pinned() && c < len(g.cols) {
+		// as little as shows it (DataTable's scroll_to_region)
+		a := g.colStart(c)
+		b := a + g.colWidth(g.cols[c].Name) + 2*pad
+		switch view := g.viewW(); {
+		case a < g.sx || b-a > view:
+			g.sx = a
+		case b > g.sx+view:
+			g.sx = b - view
 		}
 	}
-	g.left = max(p, min(g.left, max(p, len(g.cols)-1)))
-	g.fillRight()
-}
-
-// fillRight scrolls back left while the columns from the leftmost to the
-// last still fit, so a wider grid (a larger terminal, the details pane
-// closed) shows no empty space at the right (DataTable clamps its scroll
-// offset the same way).
-func (g *Grid) fillRight() {
-	p, n := g.pinned(), len(g.cols)
-	for g.left > p && g.fits(g.left-1, n-1) {
-		g.left--
-	}
+	g.clampSX()
 }
 
 // fitVisible formats the cells about to be drawn and widens any column
