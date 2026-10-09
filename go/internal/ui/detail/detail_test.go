@@ -43,12 +43,13 @@ func (d *colsDS) FetchColumns(ctx context.Context, rows []int64, cols []string) 
 
 // fakeGrid is the grid as the pane sees it.
 type fakeGrid struct {
-	rec    kit.Record
-	merged []data.Window
-	views  []kit.View
-	read   func() (kit.View, [][]int64, [][]string, bool)
-	keys   []string // "column key" of FieldKey calls
-	queued []string // "column key" of QueueKey calls while Pending
+	cursorCol string
+	rec       kit.Record
+	merged    []data.Window
+	views     []kit.View
+	read      func() (kit.View, [][]int64, [][]string, bool)
+	keys      []string // "column key" of FieldKey calls
+	queued    []string // "column key" of QueueKey calls while Pending
 }
 
 func (g *fakeGrid) Record() kit.Record { return g.rec }
@@ -62,6 +63,8 @@ func (g *fakeGrid) DetailRead() (kit.View, [][]int64, [][]string, bool) {
 	}
 	return g.read()
 }
+func (g *fakeGrid) CursorColumn() string { return g.cursorCol }
+
 func (g *fakeGrid) FieldKey(name string, k tea.KeyPressMsg) tea.Cmd {
 	g.keys = append(g.keys, name+" "+k.String())
 	return nil
@@ -854,5 +857,28 @@ func TestFit(t *testing.T) {
 		if got := ansi.Strip(fit(c[0], 3)); got != c[1] {
 			t.Fatalf("%q: %q", c[0], got)
 		}
+	}
+}
+
+// A current column the grid doesn't show (hidden, picked in Schema): the
+// pane is on the grid's column, as Python's (it selects the grid cursor's).
+func TestSelectsTheGridsColumnWhenTheCurrentIsHidden(t *testing.T) {
+	cols := demoCols()
+	r := newRig(t, cols, kit.Record{Row: 0, FileRow: 0, Values: map[string]data.Value{}}, 49, 20)
+	r.g.cursorCol = "band"
+	r.env.State.Hidden["ra"] = true
+	r.env.State.Current = "ra"
+	r.env.State.DetailOpen = false
+	r.send(kit.ToggleDetailMsg{})
+	r.env.State.DetailOpen = true
+	r.p.setEntries(nil) // as when it opens
+	r.send(kit.ToggleDetailMsg{})
+	if r.p.Selected() != "band" {
+		t.Fatalf("%q", r.p.Selected())
+	}
+	r.env.State.Current = "dec"
+	r.send(kit.ColumnChangedMsg{From: "grid"})
+	if r.p.Selected() != "dec" {
+		t.Fatalf("%q", r.p.Selected())
 	}
 }
