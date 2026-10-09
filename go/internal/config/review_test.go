@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -144,5 +145,82 @@ func TestYAMLReadsAsPyYAML(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(got, map[string]fmtx.Override{"a": spec(".2f")}) {
 			t.Errorf("%q: got %v %v", text, got, err)
 		}
+	}
+}
+
+// The stale-file cleanup reads the directory itself: glob characters in
+// its path don't reach other directories.
+func TestStaleCleanupStaysInItsDirectory(t *testing.T) {
+	root := t.TempDir()
+	old := time.Now().Add(-2 * time.Hour)
+	var victims []string
+	for _, sib := range []string{"abc", "ab", "a1"} {
+		d := filepath.Join(root, sib, "pqx")
+		os.MkdirAll(d, 0o755)
+		v := filepath.Join(d, ".formats.victim.tmp")
+		os.WriteFile(v, nil, 0o600)
+		os.Chtimes(v, old, old)
+		victims = append(victims, v)
+	}
+	for _, meta := range []string{"a*", "a?c", "a[b1]"} {
+		if _, err := SaveFormat("ra", spec(".2f"), filepath.Join(root, meta, "pqx", "formats.yaml")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, v := range victims {
+		if _, err := os.Stat(v); err != nil {
+			t.Errorf("%s removed", v)
+		}
+	}
+}
+
+func TestYAMLLimits(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "formats.yaml")
+	read := func(text string) (map[string]fmtx.Override, error) {
+		os.WriteFile(p, []byte(text), 0o644)
+		return LoadFormats(p)
+	}
+	// an anchor defined twice: PyYAML refuses the file, so Go must not rewrite it
+	if _, err := read("a: &a 3\ncolumns:\n  dec: &a 4\n"); !errors.Is(err, ErrConfig) {
+		t.Errorf("duplicate anchor: %v", err)
+	}
+	if _, err := SaveFormat("ra", digits(2), p); !errors.Is(err, ErrConfig) {
+		t.Error("saved over a duplicate anchor")
+	}
+	// merge keys nine levels deep, eight references each: refused, quickly
+	var b strings.Builder
+	b.WriteString("l0: &l0 {a: 1, b: 2}\n")
+	for i := 1; i <= 9; i++ {
+		refs := strings.TrimSuffix(strings.Repeat("*l"+strconv.Itoa(i-1)+", ", 8), ", ")
+		b.WriteString("l" + strconv.Itoa(i) + ": &l" + strconv.Itoa(i) + " {<<: [" + refs + "], k" + strconv.Itoa(i) + ": 1}\n")
+	}
+	b.WriteString("columns:\n  <<: *l9\n")
+	start := time.Now()
+	if _, err := read(b.String()); !errors.Is(err, ErrConfig) {
+		t.Errorf("merge bomb: %v", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("merge bomb took %v", d)
+	}
+	// a smaller one is read, as Python reads it
+	if m, err := read("l0: &l0 {a: 1, b: 2}\nl1: &l1 {<<: [*l0, *l0], c: 3}\ncolumns:\n  <<: *l1\n"); err != nil ||
+		!reflect.DeepEqual(m, map[string]fmtx.Override{"a": digits(1), "b": digits(2), "c": digits(3)}) {
+		t.Errorf("merges: %v %v", m, err)
+	}
+	// nesting deeper than Python can construct
+	deep := strings.Repeat("[", 400) + strings.Repeat("]", 400)
+	if _, err := read("x: " + deep + "\ncolumns: {a: 3}\n"); !errors.Is(err, ErrConfig) {
+		t.Errorf("deep: %v", err)
+	}
+	if m, err := read("x: " + strings.Repeat("[", 50) + strings.Repeat("]", 50) + "\ncolumns: {a: 3}\n"); err != nil || len(m) != 1 {
+		t.Errorf("50 deep: %v %v", m, err)
+	}
+	// one BOM is stripped; a second is text (no "columns" key, as in Python)
+	bom := "\xef\xbb\xbf"
+	if m, err := read(bom + "columns: {a: 3}\n"); err != nil || len(m) != 1 {
+		t.Errorf("BOM: %v %v", m, err)
+	}
+	if m, err := read(bom + bom + "columns: {a: 3}\n"); err != nil || len(m) != 0 {
+		t.Errorf("two BOMs: %v %v", m, err)
 	}
 }

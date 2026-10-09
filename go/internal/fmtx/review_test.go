@@ -74,7 +74,7 @@ func TestStrftimeReviewCases(t *testing.T) {
 
 // %U and %W against their definitions: the Sundays (Mondays) so far.
 func TestStrftimeWeekNumbers(t *testing.T) {
-	for _, y := range []int{2021, 2024, 2026} {
+	for _, y := range []int{2021, 2023, 2024, 2026} { // 2023 starts on a Sunday
 		sundays, mondays := 0, 0
 		for d := time.Date(y, 1, 1, 0, 0, 0, 0, time.UTC); d.Year() == y; d = d.AddDate(0, 0, 1) {
 			if d.Weekday() == time.Sunday {

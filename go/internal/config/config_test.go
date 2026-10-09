@@ -241,6 +241,19 @@ func TestYAMLResolution(t *testing.T) {
 	}
 }
 
+// pyTempDir is a temporary directory for tests that run Python: under
+// /dev/shm where there is one (Python's mkstemp in this machine's /tmp has
+// failed with "Is a directory" now and then).
+func pyTempDir(t *testing.T) string {
+	if st, err := os.Stat("/dev/shm"); err == nil && st.IsDir() {
+		if d, err := os.MkdirTemp("/dev/shm", "pqx-config-test-"); err == nil {
+			t.Cleanup(func() { os.RemoveAll(d) })
+			return d
+		}
+	}
+	return t.TempDir()
+}
+
 // python is the reference Python with this checkout's pqx, or a skip.
 func python(t *testing.T) func(code string, args ...string) string {
 	t.Helper()
@@ -268,7 +281,7 @@ func python(t *testing.T) func(code string, args ...string) string {
 // Python writes, Go reads and writes, Python reads: the file is shared.
 func TestRoundTripWithPython(t *testing.T) {
 	py := python(t)
-	p := filepath.Join(t.TempDir(), "pqx", "formats.yaml")
+	p := filepath.Join(pyTempDir(t), "pqx", "formats.yaml")
 	py(`import sys
 from pathlib import Path
 from pqx import config
@@ -367,7 +380,7 @@ func TestLockInteroperatesWithPython(t *testing.T) {
 		t.Skip("no flock")
 	}
 	python(t) // skips without the reference Python
-	p := filepath.Join(t.TempDir(), "formats.yaml")
+	p := filepath.Join(pyTempDir(t), "formats.yaml")
 	cmd := exec.Command("/root/parquet-explorer/.venv/bin/python", "-c", `import sys, time
 from pathlib import Path
 from pqx import config

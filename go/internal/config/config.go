@@ -126,9 +126,14 @@ const staleAge = time.Hour
 // removeStaleTemps removes .formats.*.tmp files a save that crashed left
 // behind (Python leaves them; a live save's file is younger than an hour).
 func removeStaleTemps(dir string) {
-	m, _ := filepath.Glob(filepath.Join(dir, ".formats.*.tmp"))
-	for _, p := range m {
-		if st, err := os.Lstat(p); err == nil && st.Mode().IsRegular() && time.Since(st.ModTime()) > staleAge {
+	ents, _ := os.ReadDir(dir) // (not a glob: dir may hold * ? [)
+	for _, e := range ents {
+		name := e.Name()
+		if !strings.HasPrefix(name, ".formats.") || !strings.HasSuffix(name, ".tmp") || !e.Type().IsRegular() {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		if st, err := os.Lstat(p); err == nil && time.Since(st.ModTime()) > staleAge {
 			os.Remove(p)
 		}
 	}

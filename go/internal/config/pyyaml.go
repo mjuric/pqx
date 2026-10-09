@@ -156,7 +156,13 @@ func safeLoad(text []byte) (any, error) {
 	if err := checkReadable(string(text)); err != nil {
 		return nil, err
 	}
-	dec := yaml.NewDecoder(strings.NewReader(yaml11(string(text))))
+	src := strings.TrimPrefix(string(text), "\ufeff")
+	if strings.HasPrefix(src, "\ufeff") {
+		// PyYAML strips one BOM; the next is text. yaml.v3 would strip it
+		// too at the start, but not after a (blank) line.
+		src = "\n" + src
+	}
+	dec := yaml.NewDecoder(strings.NewReader(yaml11(src)))
 	var doc yaml.Node
 	if err := dec.Decode(&doc); err != nil {
 		if err == io.EOF {
@@ -174,8 +180,39 @@ func safeLoad(text []byte) (any, error) {
 	if len(doc.Content) == 0 {
 		return nil, nil
 	}
-	c := constructor{memo: map[*yaml.Node]any{}, busy: map[*yaml.Node]bool{}}
+	if err := checkTree(doc.Content[0], map[string]bool{}, 0); err != nil {
+		return nil, err
+	}
+	c := constructor{memo: map[*yaml.Node]any{}, busy: map[*yaml.Node]bool{}, flat: map[*yaml.Node][][2]*yaml.Node{}}
 	return c.construct(doc.Content[0])
+}
+
+// maxDepth is the deepest nesting read: deeper, Python pqx crashes
+// (RecursionError), so the file is refused (and never rewritten).
+const maxDepth = 300
+
+// maxPairs bounds the mapping pairs merge keys may produce (a "billion
+// laughs" of merges).
+const maxPairs = 1_000_000
+
+// checkTree refuses an anchor defined twice (PyYAML: "found duplicate
+// anchor"; yaml.v3 redefines it) and nesting deeper than maxDepth.
+func checkTree(n *yaml.Node, anchors map[string]bool, depth int) error {
+	if depth > maxDepth {
+		return fmt.Errorf("nested more than %d deep", maxDepth)
+	}
+	if n.Anchor != "" && n.Kind != yaml.AliasNode {
+		if anchors[n.Anchor] {
+			return fmt.Errorf("found duplicate anchor %q", n.Anchor)
+		}
+		anchors[n.Anchor] = true
+	}
+	for _, x := range n.Content {
+		if err := checkTree(x, anchors, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 var yamlDirective = regexp.MustCompile(`(?m)^%YAML[ \t]+1\.[0-9]+[ \t]*$`)
@@ -184,7 +221,7 @@ var yamlDirective = regexp.MustCompile(`(?m)^%YAML[ \t]+1\.[0-9]+[ \t]*$`)
 // with its 1.1 rules; yaml.v3 refuses all but 1.1. (Only the directives
 // before the document's "---" are touched.)
 func yaml11(s string) string {
-	if !strings.HasPrefix(s, "%") && !strings.HasPrefix(s, "\ufeff%") {
+	if !strings.HasPrefix(s, "%") {
 		return s
 	}
 	end := strings.Index(s, "\n---")
@@ -216,6 +253,9 @@ func checkReadable(s string) error {
 type constructor struct {
 	memo map[*yaml.Node]any
 	busy map[*yaml.Node]bool
+	// flat: each mapping's flattened pairs; pairs: how many were made
+	flat  map[*yaml.Node][][2]*yaml.Node
+	pairs int
 }
 
 // nodeTag is the tag PyYAML gives a node: an explicit one (short form), or
@@ -381,6 +421,21 @@ func (c *constructor) build(n *yaml.Node) (any, error) {
 // flatten is SafeConstructor.flatten_mapping: the pairs of a mapping with
 // its merge keys ("<<") applied, merged pairs first.
 func (c *constructor) flatten(n *yaml.Node) ([][2]*yaml.Node, error) {
+	if f, ok := c.flat[n]; ok {
+		return f, nil
+	}
+	f, err := c.flattenNode(n)
+	if err != nil {
+		return nil, err
+	}
+	if c.pairs += len(f); c.pairs > maxPairs {
+		return nil, fmt.Errorf("merge keys make more than %d pairs", maxPairs)
+	}
+	c.flat[n] = f
+	return f, nil
+}
+
+func (c *constructor) flattenNode(n *yaml.Node) ([][2]*yaml.Node, error) {
 	var merge, own [][2]*yaml.Node
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		k, v := n.Content[i], n.Content[i+1]

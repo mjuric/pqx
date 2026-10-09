@@ -24,3 +24,13 @@ func TestWidestCandidatesAtFourK(t *testing.T) {
 		t.Errorf("strings: %v", got)
 	}
 }
+
+// The longest 4·k strings by length, then the widest by cells: a short
+// string of wide characters beyond the first 2·k still wins.
+func TestWidestCandidatesWideString(t *testing.T) {
+	vals := []data.Value{"aaaaa", "bbbbb", "ccccc", "日日日", "d"}
+	got := WidestCandidates(vals, fmtx.KindStr, false, 1)
+	if !sameValues(got, []data.Value{"日日日"}) {
+		t.Errorf("got %v", got)
+	}
+}
