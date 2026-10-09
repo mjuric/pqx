@@ -6,6 +6,6 @@ covers:
 fixture: types
 steps:
   - keys: d
-    wait: 'row 0 · file row 0'
+    wait: '│ │ {5,}the lazy dog the quick'   # the panel has loaded every column
   - check: open
     expect: ['longtext +row 0: the quick brown fox', '│ │ {5,}the lazy dog the quick']   # wrapped onto the next line

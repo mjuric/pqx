@@ -245,11 +245,14 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
                     res["errors"].append(f"{where}: screen never settled")
             if "check" in st:
                 capture(st["check"])
+            # expectations are checked on the checkpoint's own screen when the step took
+            # one (a notification may be gone by now), else on the screen as it is
+            seen = "\n".join(res["checks"][-1]["lines"]) if "check" in st else norm(s.text())
             for key, want in (("expect", True), ("expect_not", False)):
                 if key in st:
                     pats = st[key] if isinstance(st[key], list) else [st[key]]
                     for p in pats:
-                        found = re.search(fill(p), norm(s.text()), re.M) is not None
+                        found = re.search(fill(p), seen, re.M) is not None
                         if found != want:
                             res["errors"].append(f"{where}: {'missing' if want else 'unexpected'} {p!r}")
             if "clipboard" in st:
