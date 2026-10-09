@@ -1239,7 +1239,7 @@ func TestSortTiesWithoutRowNumbers(t *testing.T) {
 	_, ds0 := fixture(t)
 	p := filepath.Join(t.TempDir(), "ties.parquet")
 	duckExec(t, ds0, "COPY (SELECT i AS id, i % 3 AS k, i * 10 AS file_row_number, CASE WHEN i % 7 = 0 THEN NULL ELSE i % 5 END AS m, "+
-		"[i % 2] AS l, {'a': i % 4} AS s FROM range(1706) r(i) ORDER BY hash(i)) TO "+quoteStr(p)+" (FORMAT parquet, ROW_GROUP_SIZE 300)")
+		"[i % 2] AS l, {'a': i % 4} AS s, MAP {'k': i % 2} AS mp, [MAP {'j': i % 3}] AS lm FROM range(1706) r(i) ORDER BY hash(i)) TO "+quoteStr(p)+" (FORMAT parquet, ROW_GROUP_SIZE 300)")
 	ds, err := Open(p, Options{Threads: 8})
 	if err != nil {
 		t.Fatal(err)
@@ -1248,7 +1248,7 @@ func TestSortTiesWithoutRowNumbers(t *testing.T) {
 	if ds.(*dataset).hasRowNum {
 		t.Fatal("the file has its own file_row_number")
 	}
-	for _, v := range []View{{OrderBy: []Sort{{Column: "k"}}}, {OrderBy: []Sort{{Column: "m", Desc: true}}}, {Where: "k > 0", OrderBy: []Sort{{Column: "l"}}}} {
+	for _, v := range []View{{OrderBy: []Sort{{Column: "k"}}}, {OrderBy: []Sort{{Column: "m", Desc: true}}}, {Where: "k > 0", OrderBy: []Sort{{Column: "l"}}}, {OrderBy: []Sort{{Column: "mp"}}}, {OrderBy: []Sort{{Column: "lm", Desc: true}}}} {
 		n, _ := ds.Count(bg, v)
 		seen := map[int64]int{}
 		for start := int64(0); start < n; start += 37 {

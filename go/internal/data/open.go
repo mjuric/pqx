@@ -77,9 +77,7 @@ func open(path string, f *os.File, opts Options) (_ *dataset, err error) {
 		return nil, safeErr(fmt.Errorf("%s is a directory", path))
 	}
 	d := &dataset{path: path, f: f, size: st.Size(), bound: make(chan struct{})}
-	if d.duckPath, d.linkDir, err = duckPathFor(path); err != nil {
-		return nil, safeErr(err)
-	}
+	d.duckPath, d.linkDir, d.linkLock = duckPathFor(path)
 
 	// DuckDB first, so its bind overlaps arrow-go's footer parse.
 	dsn := ":memory:?TimeZone=UTC&enable_object_cache=true"
@@ -195,6 +193,10 @@ func readParquet(path string, rowNumbers bool) string {
 	return "read_parquet(" + pathLiteral(path) + opts + ")"
 }
 
+// bindHook, if set (by tests), runs before each try of the bind; an error it
+// returns is the try's.
+var bindHook func(d *dataset) error
+
 // bind has DuckDB read the footer (into its cache), and name the columns
 // and their types (bindTypes).
 //
@@ -204,7 +206,13 @@ func readParquet(path string, rowNumbers bool) string {
 func (d *dataset) bind() {
 	defer close(d.bound)
 	for try := 0; ; try++ {
-		err := d.bindTypes(context.Background())
+		var err error
+		if bindHook != nil {
+			err = bindHook(d)
+		}
+		if err == nil {
+			err = d.bindTypes(context.Background())
+		}
 		if err == nil {
 			return
 		}

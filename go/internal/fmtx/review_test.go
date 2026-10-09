@@ -119,7 +119,7 @@ func TestParseOverrideStripsLikePython(t *testing.T) {
 }
 
 func TestOverrideTextIsSafe(t *testing.T) {
-	for _, s := range []string{"\x1b]0;x\x07>12", "‮<30", "\u009b2J^5", "\x1b[2J%Y"} {
+	for _, s := range []string{"\x1b]0;x\x07>12", "\u202e<30", "\u009b2J^5", "\x1b[2J%Y"} {
 		o := specOv(s)
 		if d := DescribeOverride(o, KindFloat); anyControls(d) || strings.ContainsRune(d, 0x202E) {
 			t.Errorf("DescribeOverride(%q) = %q", s, d)
@@ -134,7 +134,7 @@ func TestOverrideTextIsSafe(t *testing.T) {
 }
 
 func TestLongStringsCutBeforeSanitizing(t *testing.T) {
-	long := strings.Repeat("\x1b‮", 2_000_000)
+	long := strings.Repeat("\x1b\u202e", 2_000_000)
 	start := time.Now()
 	got := fv(long, KindStr)
 	if d := time.Since(start); d > 50*time.Millisecond {
@@ -144,7 +144,7 @@ func TestLongStringsCutBeforeSanitizing(t *testing.T) {
 	eq(t, "same", got, cutRunes(naive, 39)+"…")
 	// every width and string: the same as sanitizing first
 	rng := rand.New(rand.NewPCG(1, 2))
-	parts := []string{"a", "\x1b", "‮", "\t", "\n", "日", "\xff", "\u009b"}
+	parts := []string{"a", "\x1b", "\u202e", "\t", "\n", "日", "\xff", "\u009b"}
 	for range 3000 {
 		var b strings.Builder
 		for range rng.IntN(30) {
@@ -254,7 +254,7 @@ func TestKindForNamesEndingInNewline(t *testing.T) {
 }
 
 func TestShortTypeSanitizesTheTimeZone(t *testing.T) {
-	ty := &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "\x1b]0;x\x07‮"}
+	ty := &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "\x1b]0;x\x07\u202e"}
 	s := ShortType(ty)
 	if anyControls(s) || strings.ContainsRune(s, 0x202E) {
 		t.Errorf("ShortType = %q", s)

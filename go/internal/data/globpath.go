@@ -16,7 +16,10 @@ import (
 // read through a symbolic link with a plain name, in a new directory of its
 // own (linkDir, removed by Close) under linkBase; if that can't be made,
 // the escaped path.
-func duckPathFor(path string) (duckPath, linkDir string, err error) {
+//
+// The dataset holds a shared lock (flock) on its link directory until
+// Close, so removeStaleLinks leaves it alone however long it is open.
+func duckPathFor(path string) (duckPath, linkDir string, lock *os.File) {
 	if os.PathSeparator != '/' || !strings.ContainsAny(path, "*?[") {
 		return path, "", nil
 	}
@@ -24,18 +27,29 @@ func duckPathFor(path string) (duckPath, linkDir string, err error) {
 	if !ok {
 		return path, "", nil
 	}
-	removeStaleLinks(base, 24*time.Hour)
+	removeStaleLinks(base, staleAge)
 	dir, err := os.MkdirTemp(base, "")
 	if err != nil {
 		return path, "", nil
 	}
-	link := filepath.Join(dir, linkName)
-	if err := os.Symlink(path, link); err != nil {
-		os.RemoveAll(dir)
+	lock, err = holdDir(dir)
+	if err != nil {
+		os.Remove(dir)
 		return path, "", nil
 	}
-	return link, dir, nil
+	link := filepath.Join(dir, linkName)
+	if err := os.Symlink(path, link); err != nil {
+		lock.Close()
+		os.Remove(dir)
+		return path, "", nil
+	}
+	return link, dir, lock
 }
+
+// staleAge is how old a link directory nobody holds must be before another
+// pqx removes it (it is locked right after it is made; the age keeps that
+// moment safe too).
+const staleAge = time.Hour
 
 const linkName = "data.parquet"
 
@@ -43,7 +57,10 @@ const linkName = "data.parquet"
 // (0700) if it isn't there, and used only if it is a real directory (not a
 // link) owned by this user and private.
 func linkBase() (string, bool) {
-	base := filepath.Join(os.TempDir(), fmt.Sprintf("pqx-links-%d", os.Getuid()))
+	return checkLinkBase(filepath.Join(os.TempDir(), fmt.Sprintf("pqx-links-%d", os.Getuid())))
+}
+
+func checkLinkBase(base string) (string, bool) {
 	if err := os.Mkdir(base, 0o700); err != nil && !os.IsExist(err) {
 		return "", false
 	}
@@ -55,9 +72,9 @@ func linkBase() (string, bool) {
 }
 
 // removeStaleLinks removes what pqx left behind in base when it didn't get
-// to Close (killed, crashed): directories older than age that hold nothing
-// but one symbolic link named data.parquet. Nothing is followed, and
-// anything else is left alone.
+// to Close (killed, crashed): directories older than age, that no open
+// dataset holds (its lock), and that hold nothing but one symbolic link named
+// data.parquet. Nothing is followed, and anything else is left alone.
 func removeStaleLinks(base string, age time.Duration) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
@@ -69,18 +86,18 @@ func removeStaleLinks(base string, age time.Duration) {
 		if err != nil || !fi.IsDir() || !ownedByMe(fi) || time.Since(fi.ModTime()) < age {
 			continue
 		}
+		lock, free := unusedDir(dir)
+		if !free {
+			continue
+		}
 		inner, err := os.ReadDir(dir)
-		if err != nil || len(inner) != 1 || inner[0].Name() != linkName {
-			continue
-		}
 		link := filepath.Join(dir, linkName)
-		li, err := os.Lstat(link)
-		if err != nil || li.Mode()&os.ModeSymlink == 0 || !ownedByMe(li) {
-			continue
-		}
-		if os.Remove(link) == nil {
+		li, lerr := os.Lstat(link)
+		if err == nil && len(inner) == 1 && inner[0].Name() == linkName &&
+			lerr == nil && li.Mode()&os.ModeSymlink != 0 && ownedByMe(li) && os.Remove(link) == nil {
 			os.Remove(dir) // (only if empty)
 		}
+		lock.Close()
 	}
 }
 
@@ -89,5 +106,8 @@ func (d *dataset) removeLink() {
 	if d.linkDir != "" {
 		os.Remove(filepath.Join(d.linkDir, linkName))
 		os.Remove(d.linkDir)
+	}
+	if d.linkLock != nil {
+		d.linkLock.Close()
 	}
 }

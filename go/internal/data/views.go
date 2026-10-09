@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,6 +40,7 @@ type viewState struct {
 	// DuckDB reads glob patterns: a file whose name can't be escaped as one
 	// is read through a symbolic link in linkDir (see duckPathFor).
 	duckPath, linkDir string
+	linkLock          *os.File // held while the dataset is open
 
 	fb fallback
 }
@@ -234,14 +236,26 @@ func (d *dataset) orderBy(keys []Sort) (string, error) {
 		// of the file instead, so pages of the sort are consistent (rows
 		// alike in every column are interchangeable). pqx has no tiebreak
 		// here, and its pages can repeat or skip rows of a tie.
+		// (DuckDB orders every type, maps and nested ones too.) A very wide
+		// file is broken on its first maxTiebreak columns: rows alike in all
+		// of those may still come in either order.
+		n := 0
 		for _, c := range d.cols {
-			if q, err := quoteIdent(c.SQLName); err == nil && !strings.HasPrefix(c.Type, "MAP(") {
+			if n == maxTiebreak {
+				break
+			}
+			if q, err := quoteIdent(c.SQLName); err == nil {
 				parts = append(parts, q+" ASC NULLS LAST")
+				n++
 			}
 		}
 	}
 	return strings.Join(parts, ", "), nil
 }
+
+// maxTiebreak bounds the columns a sort breaks ties on when DuckDB can't
+// number the file's rows.
+const maxTiebreak = 64
 
 // qcol is the file's column name quoted for SQL, by DuckDB's name for it.
 func (d *dataset) qcol(name string) (string, error) { return d.colRef(View{}, name) }
