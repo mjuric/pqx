@@ -662,3 +662,22 @@ func TestFieldSelectOnFocus(t *testing.T) {
 		t.Fatalf("ctrl+u: %q", in.Value())
 	}
 }
+
+// A prefilled value longer than the box shows its end; replaced by a short
+// one, the box scrolls back to the start (Textual's clamped scroll).
+func TestFieldScroll(t *testing.T) {
+	f, _, _ := setup(t, "/x/demo.parquet", demoCols)
+	in := newField(strings.Repeat("a", 30)+"/demo.subset.parquet", "")
+	in.focus()
+	look := f.env.Look
+	if got := ansi.Strip(in.content(look, 20)); got != "demo.subset.parquet" { // (the last cell kept for the cursor)
+		t.Fatalf("%q", got)
+	}
+	in.update(keyMsg("ctrl+u"))
+	for _, r := range "view.csv" {
+		in.update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	if got := ansi.Strip(in.content(look, 20)); got != "view.csv " {
+		t.Fatalf("%q", got)
+	}
+}

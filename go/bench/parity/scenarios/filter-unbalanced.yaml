@@ -4,6 +4,12 @@ description: |
 covers:
   - "native-port.md Security: where_sql rejects unbalanced parentheses"
 fixture: demo
+intended:
+  - checks: [two-statements]
+    region: screen
+    ref_shows: 'syntax error at or near ";"'     # DuckDB's parser message
+    other_shows: 'the ; at character \d+ would end it'   # Go pqx's own check
+    note: "Go pqx's own message for a second statement (decided intended); it must still be a notification"
 steps:
   - keys: /
     wait: 'enter apply'
@@ -17,6 +23,6 @@ steps:
     wait: '› SQL WHERE'
   - text: "1=1; select 42"
   - keys: enter
-    toast: 'syntax error at or near ";"'
+    toast: 'syntax error at or near ";"|the ; at character \d+ would end it'   # either app's own message
     toast_gone: false
     check: two-statements

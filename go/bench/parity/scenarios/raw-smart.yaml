@@ -3,6 +3,12 @@ description: |
 covers:
   - "help: **f** | toggle smart / raw number formatting"
 fixture: demo
+intended:
+  - checks: [raw]
+    region: screen
+    ref_shows: '2\.6714136765804142e-05'   # Python prints the float32 widened to a double
+    other_shows: '2\.6714137e-05'          # the shortest float32 form
+    note: "raw float32 in its shortest form (go-port.md: intended differences)"
 steps:
   - keys: f
   - check: raw

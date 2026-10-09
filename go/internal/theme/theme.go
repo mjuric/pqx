@@ -170,9 +170,11 @@ func New(accent, dim, border, name string) (*Theme, error) {
 
 // Style is the styled.Style for a role (kit.Look): "accent", "dim",
 // "border", "border-focus", "error", "warning", "success", "header",
-// "cursor" (reverse video), "selection" or "scrollbar" (Fg the thumb, Bg
+// "cursor" (reverse video), "selection", "scrollbar" (Fg the thumb, Bg
 // the track: the unfocused border colour on the terminal's background, as
-// pqx's own theme sets them, or a named theme's Textual scrollbar colours).
+// pqx's own theme sets them, or a named theme's Textual scrollbar colours)
+// or "focus-background" (Bg: a named theme's background tinted for a
+// focused table; nothing for pqx's own theme).
 func (t *Theme) Style(role string) styled.Style {
 	switch role {
 	case "accent":
@@ -197,6 +199,13 @@ func (t *Theme) Style(role string) styled.Style {
 		return styled.Style{Bold: true}
 	case "cursor", "selection":
 		return styled.Style{Reverse: true}
+	case "focus-background":
+		// the background Textual tints a focused table with
+		if t.named {
+			c := blend(t.bg, t.fg, focusTint)
+			return styled.Style{Bg: styled.Color(fmt.Sprintf("#%02x%02x%02x", c.r, c.g, c.b))}
+		}
+		return styled.Style{}
 	case "scrollbar":
 		if t.named {
 			p := Palettes[t.Name]
@@ -312,19 +321,17 @@ func (t *Theme) Lip(s styled.Style) lipgloss.Style {
 	}
 	fg, bg := t.color(s.Fg), t.color(s.Bg)
 	if t.named {
-		// Textual draws everything in truecolor: the theme's colours where
-		// none is given, and dim as a blend towards the background
-		fgc, bgc := t.fg, t.bg
-		if c, ok := toRGB(fg); ok {
-			fgc = c
+		// colours as given and faint as faint: Paint (the root applies it
+		// to every frame) gives them the theme as Textual does, the theme's
+		// colours where none is set, faint as a blend over the background
+		// actually under the text (a focused table's is tinted)
+		if fg != nil {
+			st = st.Foreground(fg)
 		}
-		if c, ok := toRGB(bg); ok {
-			bgc = c
+		if bg != nil {
+			st = st.Background(bg)
 		}
-		if s.Dim {
-			fgc, s.Dim = blend(bgc, fgc, dimFactor), false
-		}
-		fg, bg = fgc.color(), bgc.color()
+		return st.Bold(s.Bold).Faint(s.Dim).Italic(s.Italic).Reverse(s.Reverse).Underline(s.Underline)
 	}
 	if fg != nil {
 		st = st.Foreground(t.out(fg))

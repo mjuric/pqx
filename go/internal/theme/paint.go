@@ -1,6 +1,7 @@
 package theme
 
 import (
+	"image"
 	"image/color"
 	"strconv"
 	"strings"
@@ -18,6 +19,18 @@ import (
 // sequences (the grid) are themed this way. Without a named theme the frame
 // is returned as it is.
 func (t *Theme) Paint(frame string, w int) string {
+	return t.PaintTinted(frame, w, image.Rectangle{})
+}
+
+// focusTint is how much of the foreground Textual mixes into a focused
+// table's background ("background-tint: $foreground 5%").
+const focusTint = 0.05
+
+// PaintTinted is Paint with the cells in tint (screen cells, the focused
+// table's area) on the focused background: Textual tints a focused
+// DataTable's background 5% towards the foreground, which also changes
+// what its faint text blends to.
+func (t *Theme) PaintTinted(frame string, w int, tint image.Rectangle) string {
 	if !t.named {
 		return frame
 	}
@@ -25,19 +38,37 @@ func (t *Theme) Paint(frame string, w int) string {
 	b.Grow(len(frame) + len(frame)/4)
 	var st pen
 	lines := strings.Split(frame, "\n")
-	for li, line := range lines {
-		if li > 0 {
+	for y, line := range lines {
+		if y > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(t.sgr(st))
+		row := y >= tint.Min.Y && y < tint.Max.Y
+		x, in := 0, false
+		inside := func() bool { return row && x >= tint.Min.X && x < tint.Max.X }
+		b.WriteString(t.sgr(st, false))
+		text := func(s string) {
+			if !row {
+				b.WriteString(s)
+				x += ansi.StringWidth(s)
+				return
+			}
+			for _, r := range s {
+				if now := inside(); now != in {
+					in = now
+					b.WriteString(t.sgr(st, in))
+				}
+				b.WriteRune(r)
+				x += ansi.StringWidth(string(r))
+			}
+		}
 		i := 0
 		for i < len(line) {
 			j := strings.Index(line[i:], "\x1b[")
 			if j < 0 {
-				b.WriteString(line[i:])
+				text(line[i:])
 				break
 			}
-			b.WriteString(line[i : i+j])
+			text(line[i : i+j])
 			i += j
 			k := i + 2
 			for k < len(line) && (line[k] >= '0' && line[k] <= '9' || line[k] == ';' || line[k] == ':') {
@@ -45,17 +76,20 @@ func (t *Theme) Paint(frame string, w int) string {
 			}
 			if k < len(line) && line[k] == 'm' {
 				st.apply(line[i+2 : k])
-				b.WriteString(t.sgr(st))
+				b.WriteString(t.sgr(st, in))
 				i = k + 1
 				continue
 			}
 			b.WriteString(line[i:min(k+1, len(line))]) // another sequence: as it is
 			i = k + 1
 		}
-		if n := ansi.StringWidth(line); n < w {
-			b.WriteString(t.sgr(pen{}))
-			b.WriteString(strings.Repeat(" ", w-n))
-			b.WriteString(t.sgr(st))
+		if x < w {
+			cur := st
+			st = pen{}
+			b.WriteString(t.sgr(st, in))
+			text(strings.Repeat(" ", w-x))
+			st = cur
+			b.WriteString(t.sgr(st, in))
 		}
 	}
 	b.WriteString("\x1b[m")
@@ -147,8 +181,9 @@ func (p *pen) apply(params string) {
 	}
 }
 
-// sgr is the full SGR sequence for p under the theme.
-func (t *Theme) sgr(p pen) string {
+// sgr is the full SGR sequence for p under the theme; tinted for a cell of
+// the focused table.
+func (t *Theme) sgr(p pen, tinted bool) string {
 	var b strings.Builder
 	b.WriteString("\x1b[0")
 	for _, a := range []struct {
@@ -162,6 +197,9 @@ func (t *Theme) sgr(p pen) string {
 	bg := t.bg
 	if c, ok := t.themed(p.bg); ok {
 		bg = c
+	} else if tinted && !p.reverse {
+		// (a table's cursor sets the plain background: not tinted)
+		bg = blend(t.bg, t.fg, focusTint)
 	}
 	fg := t.fg
 	if c, ok := t.themed(p.fg); ok {
@@ -170,10 +208,10 @@ func (t *Theme) sgr(p pen) string {
 	if p.faint {
 		fg = blend(bg, fg, dimFactor)
 	}
-	fgc, bgc := t.out(fg.color()), t.out(bg.color())
-	// a colour the frame already has from the 256-colour palette was reduced
-	// by Render (or asked for as such): reducing it again would move the
-	// cube's greys (59, #5f5f5f) to the grey ramp (240, #585858)
+	fgc, bgc := t.reduce(fg.color()), t.reduce(bg.color())
+	// a colour the frame already has from the 256-colour palette (asked
+	// for as such) isn't reduced again: that would move the cube's greys
+	// (59, #5f5f5f) to the grey ramp (240, #585858)
 	if c, ok := kept(t.profile, p.fg); ok && !p.faint {
 		fgc = c
 	}

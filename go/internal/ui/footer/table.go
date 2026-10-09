@@ -186,9 +186,13 @@ func (t *Table) View(look kit.Look, w, h int, cur styled.Style) []string {
 	t.X = max(0, min(t.X, vw-cw))
 	fill := max(vw, t.X+cw)
 	sb := look.Style("scrollbar")
+	var thumbBg styled.Color // a focused table's thumb is on its tinted background
+	if cur != (styled.Style{}) {
+		thumbBg = look.Style("focus-background").Bg
+	}
 	var vbar []styled.Text
 	if showV {
-		vbar = scrollbar(ch, vh, ch, t.Top, true, sb)
+		vbar = scrollbar(ch, vh, ch, t.Top, true, sb, thumbBg)
 	}
 	row := func(lt styled.Text, y int) string {
 		s := ansi.Cut(look.Render(lt), t.X, t.X+cw)
@@ -211,7 +215,7 @@ func (t *Table) View(look kit.Look, w, h int, cur styled.Style) []string {
 	}
 	if showH {
 		var b strings.Builder
-		for _, c := range scrollbar(cw, vw, cw, t.X, false, sb) {
+		for _, c := range scrollbar(cw, vw, cw, t.X, false, sb, thumbBg) {
 			b.WriteString(look.Render(c))
 		}
 		if showV {
@@ -224,8 +228,9 @@ func (t *Table) View(look kit.Look, w, h int, cur styled.Style) []string {
 
 // scrollbar is Textual's ScrollBarRender.render_bar: size cells of a bar
 // for a window of window cells at position over virtual cells, the thumb in
-// st's Fg on a track in its Bg, the thumb's ends in eighths of a cell.
-func scrollbar(size, virtual, window, position int, vertical bool, st styled.Style) []styled.Text {
+// st's Fg (in reverse, on thumbBg) on a track in its Bg, the thumb's ends in
+// eighths of a cell.
+func scrollbar(size, virtual, window, position int, vertical bool, st styled.Style, thumbBg styled.Color) []styled.Text {
 	bar, back := st.Fg, st.Bg
 	bars := []string{"▉", "▊", "▋", "▌", "▍", "▎", "▏", " "}
 	if vertical {
@@ -249,7 +254,7 @@ func scrollbar(size, virtual, window, position int, vertical bool, st styled.Sty
 	si, sb := max(0, start)/n, max(0, start)%n
 	ei, eb := max(0, end)/n, max(0, end)%n
 	for i := si; i < min(ei, size); i++ {
-		out[i] = styled.New(" ", styled.Style{Fg: bar, Reverse: true})
+		out[i] = styled.New(" ", styled.Style{Fg: bar, Bg: thumbBg, Reverse: true})
 	}
 	if si < size {
 		if c := bars[n-1-sb]; c != " " {

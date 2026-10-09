@@ -3,12 +3,13 @@ package theme
 import (
 	"encoding/json"
 	"fmt"
+	"image"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/colorprofile"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mjuric/pqx/go/internal/styled"
 )
@@ -108,6 +109,35 @@ func TestAccentDimBorder(t *testing.T) {
 	}
 }
 
+// painted is the SGR sequence the frame painted with th has before "x"
+// drawn in style st.
+func painted(th *Theme, st styled.Style) string {
+	out := th.Paint(th.Render(styled.New("x", st)), 1)
+	i := strings.Index(out, "x")
+	j := strings.LastIndex(out[:i], "\x1b[")
+	return out[j:i]
+}
+
+// colours of a painted SGR sequence (truecolor profile): fg and bg as #hex.
+func paintedColours(t *testing.T, th *Theme, st styled.Style) (fg, bg string) {
+	t.Helper()
+	ps := strings.Split(strings.TrimSuffix(strings.TrimPrefix(painted(th, st), "\x1b["), "m"), ";")
+	for i := 0; i+4 < len(ps); i++ {
+		if (ps[i] == "38" || ps[i] == "48") && ps[i+1] == "2" {
+			r, _ := strconv.Atoi(ps[i+2])
+			g, _ := strconv.Atoi(ps[i+3])
+			b, _ := strconv.Atoi(ps[i+4])
+			h := fmt.Sprintf("#%02x%02x%02x", r, g, b)
+			if ps[i] == "38" {
+				fg = h
+			} else {
+				bg = h
+			}
+		}
+	}
+	return fg, bg
+}
+
 func TestNamedThemes(t *testing.T) {
 	// Python pqx on Textual: the unfocused border is "$primary 45%" over the
 	// background; dim text is blended to 66%; ANSI red is Monokai's.
@@ -124,32 +154,30 @@ func TestNamedThemes(t *testing.T) {
 			t.Fatalf("%s: not named", name)
 		}
 		w := want[name]
+		p := Palettes[name]
 		if got := hexOf(th.BorderColor()); !strings.EqualFold(got, w[0]) {
 			t.Errorf("%s border %s, want %s", name, got, w[0])
 		}
-		dim := th.Lip(styled.Style{Dim: true})
-		if got := hexOf(dim.GetForeground()); got != w[1] {
-			t.Errorf("%s dim %s, want %s", name, got, w[1])
+		if fg, _ := paintedColours(t, th, styled.Style{Fg: "border"}); !strings.EqualFold(fg, w[0]) {
+			t.Errorf("%s painted border %s, want %s", name, fg, w[0])
 		}
-		dimRed := th.Lip(styled.Style{Dim: true, Fg: "red"})
-		if got := hexOf(dimRed.GetForeground()); got != w[2] {
-			t.Errorf("%s dim red %s, want %s", name, got, w[2])
+		if fg, bg := paintedColours(t, th, styled.Style{Dim: true}); fg != w[1] || !strings.EqualFold(bg, p.Background) {
+			t.Errorf("%s dim %s on %s, want %s", name, fg, bg, w[1])
 		}
-		p := Palettes[name]
+		if fg, _ := paintedColours(t, th, styled.Style{Dim: true, Fg: "red"}); fg != w[2] {
+			t.Errorf("%s dim red %s, want %s", name, fg, w[2])
+		}
 		if got := hexOf(th.Primary()); !strings.EqualFold(got, p.Primary) {
 			t.Errorf("%s primary %s", name, got)
 		}
-		if got := hexOf(th.Base.GetBackground()); !strings.EqualFold(got, p.Background) {
-			t.Errorf("%s background %s", name, got)
+		if fg, bg := paintedColours(t, th, styled.Style{}); !strings.EqualFold(fg, p.Foreground) || !strings.EqualFold(bg, p.Background) {
+			t.Errorf("%s plain %s on %s", name, fg, bg)
 		}
-		if got := hexOf(th.Base.GetForeground()); !strings.EqualFold(got, p.Foreground) {
-			t.Errorf("%s foreground %s", name, got)
+		if fg, _ := paintedColours(t, th, styled.Style{Fg: "color(200)"}); fg != "#ff00d7" {
+			t.Errorf("%s color(200) %s", name, fg)
 		}
-		if got := hexOf(th.Lip(styled.Style{Fg: "color(200)"}).GetForeground()); got != "#ff00d7" {
-			t.Errorf("%s color(200) %s", name, got)
-		}
-		if got := hexOf(th.Accent.GetForeground()); got != "#9d65ff" { // ansi blue, as Python's tab titles
-			t.Errorf("%s accent %s", name, got)
+		if fg, _ := paintedColours(t, th, styled.Style{Fg: "accent"}); fg != "#9d65ff" { // ansi blue, as Python's tab titles
+			t.Errorf("%s accent %s", name, fg)
 		}
 		// --border and --accent don't apply to a named theme (as in Python)
 		if got := hexOf(mustNew(t, "green", "", "white", name).BorderColor()); !strings.EqualFold(got, w[0]) {
@@ -159,6 +187,22 @@ func TestNamedThemes(t *testing.T) {
 	_, err := New("", "", "", "monokai")
 	if err == nil || !strings.Contains(err.Error(), "tokyo-night, dracula, catppuccin-mocha, nord, gruvbox") {
 		t.Errorf("unknown theme: %v", err)
+	}
+}
+
+// A focused table's background is tinted 5% towards the foreground, and
+// its faint text blends over that (Textual's background-tint).
+func TestFocusTint(t *testing.T) {
+	th := mustNew(t, "", "", "", "tokyo-night")
+	frame := th.Render(styled.New("ab", styled.Style{Dim: true}))
+	out := th.PaintTinted(frame, 2, image.Rect(1, 0, 2, 1))
+	if !strings.Contains(out, "38;2;120;126;154;48;2;26;27;38ma") || !strings.Contains(out, "38;2;122;128;156;48;2;33;34;46mb") {
+		t.Errorf("tinted: %q", out)
+	}
+	th.SetProfile(colorprofile.ANSI256)
+	out = th.PaintTinted(frame, 2, image.Rect(0, 0, 2, 1))
+	if !strings.Contains(out, "38;5;245;48;5;16m") { // what Python shows (#7a809c)
+		t.Errorf("tinted, 256 colours: %q", out)
 	}
 }
 
@@ -250,18 +294,15 @@ func TestProfile256(t *testing.T) {
 		st   styled.Style
 		want string
 	}{
-		{styled.Style{}, "\x1b[38;5;146;48;5;16mx\x1b[m"},                           // #a9b1d6 on #1a1b26
-		{styled.Style{Dim: true}, "\x1b[38;5;244;48;5;16mx\x1b[m"},                  // #787e9a
-		{styled.Style{Fg: "border"}, "\x1b[38;5;60;48;5;16mx\x1b[m"},                // #625484
-		{styled.Style{Fg: "accent", Bold: true}, "\x1b[1;38;5;135;48;5;16mx\x1b[m"}, // Monokai blue #9d65ff
-		{styled.Style{Fg: "cyan"}, "\x1b[38;5;80;48;5;16mx\x1b[m"},                  // #58d1eb
+		{styled.Style{}, "\x1b[0;38;5;146;48;5;16m"},                           // #a9b1d6 on #1a1b26
+		{styled.Style{Dim: true}, "\x1b[0;38;5;244;48;5;16m"},                  // #787e9a
+		{styled.Style{Fg: "border"}, "\x1b[0;38;5;60;48;5;16m"},                // #625484
+		{styled.Style{Fg: "accent", Bold: true}, "\x1b[0;1;38;5;135;48;5;16m"}, // Monokai blue #9d65ff
+		{styled.Style{Fg: "cyan"}, "\x1b[0;38;5;80;48;5;16m"},                  // #58d1eb
 	} {
-		if got := th.Render(styled.New("x", c.st)); got != c.want {
+		if got := painted(th, c.st); got != c.want {
 			t.Errorf("%+v: %s, want %s", c.st, sgr(got), sgr(c.want))
 		}
-	}
-	if got := fmt.Sprint(th.Primary()); got != fmt.Sprint(ansi.IndexedColor(141)) {
-		t.Errorf("primary %s", got)
 	}
 	th = mustNew(t, "", "", "#123456", "")
 	th.SetProfile(colorprofile.ANSI)
@@ -335,5 +376,19 @@ func TestPaintKeepsReducedColours(t *testing.T) {
 	out := th.Paint(th.Render(styled.New("x", th.Style("scrollbar"))), 1)
 	if !strings.Contains(out, "38;5;59") || strings.Contains(out, "38;5;240") {
 		t.Fatalf("%q", out)
+	}
+}
+
+// focus-background: a named theme's background tinted 5% towards its
+// foreground (#1A1B26 → #21222e for tokyo-night, as Textual draws a
+// focused table); nothing for pqx's own theme.
+func TestFocusBackgroundRole(t *testing.T) {
+	tn, _ := New("blue", "faint", "", "tokyo-night")
+	if s := tn.Style("focus-background"); s.Bg != "#21222e" {
+		t.Fatalf("%+v", s)
+	}
+	plain, _ := New("blue", "faint", "", "")
+	if s := plain.Style("focus-background"); s != (styled.Style{}) {
+		t.Fatalf("%+v", s)
 	}
 }

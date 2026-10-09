@@ -179,7 +179,9 @@ func (f *field) content(look kit.Look, iw int) string {
 	if f.pos-f.off >= iw {
 		f.off = f.pos - iw + 1
 	}
-	f.off = max(0, min(f.off, len(f.value)))
+	// never scrolled past what the text needs (its cells and the cursor's
+	// after it), as Textual's scroll offset is clamped
+	f.off = max(0, min(f.off, len(f.value)+1-iw))
 	end := min(len(f.value), f.off+iw)
 	for i := f.off; i < end; i++ {
 		st := styled.Style{}
@@ -188,7 +190,8 @@ func (f *field) content(look kit.Look, iw int) string {
 		}
 		t.Append(string(f.value[i]), st)
 	}
-	if f.hasFocus && f.pos == len(f.value) && f.pos-f.off < iw {
+	// (with the text selected, Textual shows no cursor after it)
+	if f.hasFocus && !f.selected && f.pos == len(f.value) && f.pos-f.off < iw {
 		t.Append(" ", cursor)
 	}
 	return look.Render(t)

@@ -6,6 +6,12 @@ fixture: demo
 sizes: [[120, 30]]
 args: ["--theme", "nosuchtheme"]
 ready: null
+intended:
+  - checks: [output]
+    region: screen
+    ref_shows: "Theme 'nosuchtheme' has not been registered"   # Textual's own message
+    other_shows: 'usage: pqx \[-h\]'                           # a usage error
+    note: "go-port.md D2: other theme names are an error listing the five"
 steps:
   - exit: 15
   - check: output
