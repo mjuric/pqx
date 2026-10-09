@@ -211,5 +211,7 @@ func HumanCount(n float64) string { return humanCount(n) }
 // HumanBytes is n bytes as KiB, MiB, ….
 func HumanBytes(n float64) string { return humanBytes(n) }
 
-// ShortType is a short type name for headers (f64, i32, ts[us,UTC], dict<…>).
-func ShortType(t arrow.DataType) string { return shortType(t) }
+// ShortType is a short type name for headers (f64, i32, ts[us,UTC], dict<…>),
+// safe to show: struct field names and time zones come from the file, so the
+// whole name is sanitized (Python's short_type isn't; this is deliberate).
+func ShortType(t arrow.DataType) string { return Sanitize(shortType(t), false) }
