@@ -181,7 +181,7 @@ A step can hold several of these; they run in this order: `keys`, `text`, `click
 `resize`, a wait for
 the screen to change (`change`, default up to 1.5 s), `sleep`, `wait`, `wait_gone`,
 `toast`, settle (`settle: false` skips it, a number sets the quiet time), `check`,
-`expect` / `expect_not` (regexes the screen must or must not show, reported as errors:
+`expect` / `expect_not` (and `expect_app` / `expect_not_app`, `{app: patterns}` for one app only) (regexes the screen must or must not show, reported as errors:
 every scenario asserts with them what it claims, on the reference too),
 `clipboard`, `file`, `exit` (seconds within which the app must exit). After a `toast`
 step the runner waits until the notification is gone (`toast_gone: false` skips that,
@@ -333,7 +333,8 @@ Differences go-port.md lists as intended are marked the same way, with `intended
 ```yaml
 intended:
   - checks: [open]
-    region: screen                       # or keybar, status, pane (the details pane)
+    region: screen                       # or keybar, status, pane (the details pane),
+                                         # readout, scrollbar (a dialog's thumb; with anchor:)
     ref_shows: 'wide +1e\+46'           # what the reference shows
     other_shows: 'wide +10{20}'          # what the compared app shows instead
     note: "exact wide decimals (go-port.md: Progress)"
@@ -344,7 +345,7 @@ failure). `region: screen` leaves out the whole checkpoint, so its patterns must
 difference down. In use: detail-wrap and types-grid's `detail-null-row` (`region: pane`) (exact 47-digit decimal), raw-smart's `raw`
 (shortest float32) and `smart` (columns never shrink, so they keep raw mode's widths), cli-bad-theme (D2's usage error), filter-unbalanced's
 `two-statements` (Go pqx's own message; it must still come as a notification: the step
-waits for either app's), esc-cancel-count's status line after Esc (`region: status`, the
+waits for either app's), help's scrollbar thumb (`region: scrollbar`, `anchor:` the help's header: D2, no command palette, so Go's help is one line shorter, #88; pinned by `expect_app` that only Python's help ends with Ctrl+P), esc-cancel-count's status line after Esc (`region: status`, the
 grid's `│ ✓ …` / `│ * …` line: Python shows "Counting rows" until DuckDB has stopped,
 Go the cancelled state at once).
 

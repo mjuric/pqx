@@ -3,6 +3,13 @@ description: |
 covers:
   - "README Keys: Press ? in pqx for the full list."
 fixture: demo
+intended:
+  - checks: [help, help-pgdn]
+    region: scrollbar
+    anchor: 'Written by .*https://github[.]com/mjuric/pqx'   # the help dialog's header (always shown)
+    ref_shows: 'Written by .*https://github[.]com/mjuric/pqx'
+    other_shows: 'Written by .*https://github[.]com/mjuric/pqx'
+    note: "D2: no command palette, so the help is one line shorter (#88) and its scrollbar thumb differs"
 steps:
   - keys: "?"
     wait: 'Parquet explorer'
@@ -10,6 +17,19 @@ steps:
     expect: ['Written by', 'Filtering and queries']
   - keys: pgdn
   - check: help-pgdn
+  # pins the intended difference: the end of the help lists the command palette in
+  # Python pqx only
+  - keys: end
+    wait: '│ [?] +│ this help'
+    expect_app@200x50:
+      python: 'Ctrl[+]P +│ command palette'
+    expect_not_app@200x50:
+      go: 'Ctrl[+]P'
+  - keys: pgup
+    expect_app@120x40:
+      python: 'Ctrl[+]P +│ command palette'
+    expect_not_app@120x40:
+      go: 'Ctrl[+]P'
   - keys: esc
     wait_gone: 'Parquet explorer'
   - check: closed
