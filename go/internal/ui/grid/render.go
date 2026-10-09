@@ -52,13 +52,18 @@ func (g *Grid) draw(t *cellTx, extra styled.Style) string {
 // markers, in exactly w × h cells.
 func (g *Grid) View(w, h int) string {
 	if w != g.w || h != g.h {
+		// a new size (a resize, the details pane): the rows follow the
+		// cursor; sideways the scroll is only clamped, as DataTable does
+		// (the cursor's column may go off screen)
 		g.w, g.h = w, h
-		g.scrollToCursor()
+		g.scrollRows()
+		g.clampSX()
+		g.lastViewW = g.viewW()
 	}
 	if w <= 0 || h <= 0 {
 		return ""
 	}
-	if vw := g.viewW(); vw != g.lastViewW {
+	if vw := g.viewW(); vw != g.lastViewW && w == g.drawnW {
 		// the row labels widened (rows arrived) or pins changed: a cursor
 		// that was on screen stays there (Python's scroll_cursor_fitted)
 		if g.lastInView && !g.cursorInView() {
@@ -68,7 +73,7 @@ func (g *Grid) View(w, h int) string {
 	}
 	g.fitVisible()
 	g.lastInView = g.cursorInView()
-	g.drawnCol = g.curCol
+	g.drawnCol, g.drawnW = g.curCol, w
 	g.drawing = true
 	defer func() { g.drawing = false }()
 	var b strings.Builder

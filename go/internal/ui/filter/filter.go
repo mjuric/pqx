@@ -251,6 +251,11 @@ func (f *Filter) Update(msg tea.Msg) tea.Cmd {
 		return f.edit(msg)
 	case tea.MouseClickMsg:
 		return nil // the root focuses the bar on a click
+	case startCount:
+		if sameView(msg.view, f.st.View) && f.st.Total < 0 && !f.env.Tasks.Running("count") {
+			return f.count(msg.view)
+		}
+		return nil
 	case kit.SetViewMsg:
 		return f.onSetView(msg)
 	case kit.CancelledMsg:
@@ -542,7 +547,12 @@ func (f *Filter) onValidated(r validated) tea.Cmd {
 		cmds = append(cmds, kit.Send(kit.TotalMsg{}))
 	} else {
 		st.Total = -1
-		cmds = append(cmds, f.count(v))
+		// counted after the view reaches the grid: its first rows start
+		// first, as Python's _set_view loads the window before counting
+		// (the status line names the oldest work: "Loading rows", then
+		// "Counting rows")
+		f.err = r.mark
+		return tea.Sequence(kit.Send(kit.StatusMsg{}), tea.Batch(cmds...), kit.Send(startCount{v}))
 	}
 	f.err = r.mark
 	return tea.Sequence(kit.Send(kit.StatusMsg{}), tea.Batch(cmds...))
@@ -605,6 +615,9 @@ func trunc(s string, n int) string {
 }
 
 // count counts the rows of view ("count").
+// startCount starts the count of view v once its ViewChangedMsg is out.
+type startCount struct{ view data.View }
+
 func (f *Filter) count(v data.View) tea.Cmd {
 	ds := f.env.DS
 	return f.env.Tasks.Run("count", "counting rows", false, func(ctx context.Context) tea.Msg {

@@ -130,6 +130,7 @@ type Grid struct {
 	window     int64 // pageRows, if set (tests of reads near the screen only)
 	lastInView bool
 	drawnCol   int // the cursor's column when last drawn
+	drawnW     int // the width last drawn at
 }
 
 // saved is a view and the cursor on it, kept so a view that fails on its
@@ -260,7 +261,8 @@ func (g *Grid) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		g.estimate(msg.Width, msg.Height)
-		g.scrollToCursor()
+		g.scrollRows()
+		g.clampSX()
 		return g.ensure()
 	case kit.ToggleDetailMsg:
 		if g.w > 0 {
@@ -270,7 +272,8 @@ func (g *Grid) Update(msg tea.Msg) tea.Cmd {
 				g.w += detailW
 			}
 		}
-		g.scrollToCursor()
+		g.scrollRows()
+		g.clampSX()
 		return g.ensure()
 	case tea.KeyPressMsg:
 		return g.onKey(msg)
