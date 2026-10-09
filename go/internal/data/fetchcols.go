@@ -180,12 +180,16 @@ func (d *dataset) readRows(ctx context.Context, rows []int64, fields []int) (map
 	noDuck := d.bindErr != nil || d.direct == nil
 	bad := d.fb.anyBad(rgs)
 	cheap := !forceDuck && (contiguous || d.directCheaper(rows, fields))
+	// arrow-go reads a repeated column from its row group's start (see
+	// readColumn): DuckDB is faster for rows deep in a row group (100 rows of
+	// two list columns 512k rows in: 106 ms against 23 ms)
+	deep := d.deepestLocal(rows) >= repeatedSkipRows
 	var direct, duck []int
 	for _, j := range fields {
 		switch {
 		case noDuck || d.wide[j]:
 			direct = append(direct, j)
-		case d.direct[j] == nil || bad || !cheap || d.fb.isExcluded(j):
+		case d.direct[j] == nil || bad || !cheap || d.fb.isExcluded(j) || deep && d.repeated(j):
 			duck = append(duck, j)
 		default:
 			direct = append(direct, j)
@@ -257,6 +261,20 @@ func (d *dataset) readRows(ctx context.Context, rows []int64, fields []int) (map
 
 // forceDuck, set by tests, has DuckDB read every column it can.
 var forceDuck bool
+
+// repeatedSkipRows is how far into a row group arrow-go still reads a
+// repeated column (from the row group's start) for the plain view.
+var repeatedSkipRows = int64(32 << 10)
+
+// deepestLocal is the largest row number, within its row group, of rows.
+func (d *dataset) deepestLocal(rows []int64) int64 {
+	deepest := int64(0)
+	for _, r := range rows {
+		rg := sort.Search(len(d.rgRows), func(k int) bool { return d.rgStart[k+1] > r })
+		deepest = max(deepest, r-d.rgStart[rg])
+	}
+	return deepest
+}
 
 // rowGroupsOf is the row groups holding rows (sorted).
 func (d *dataset) rowGroupsOf(rows []int64) []int {

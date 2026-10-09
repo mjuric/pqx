@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"slices"
 	"sort"
 	"sync"
 
@@ -125,6 +126,13 @@ func (d *dataset) readRowGroup(ctx context.Context, pf *file.Reader, rg int, loc
 	if err != nil {
 		return nil, err
 	}
+	// a repeated column is read from the row group's start (see readColumn)
+	frRep := fr
+	if lo > 0 && slices.ContainsFunc(fields, d.repeated) {
+		if frRep, err = pqarrow.NewFileReader(pf, pqarrow.ArrowReadProperties{BatchSize: min(hi, maxBatch)}, memory.DefaultAllocator); err != nil {
+			return nil, err
+		}
+	}
 	pick := local
 	if int64(len(local)) == hi-lo {
 		pick = nil // every row of [lo, hi)
@@ -146,7 +154,11 @@ func (d *dataset) readRowGroup(ctx context.Context, pf *file.Reader, rg int, loc
 			if d.direct != nil && d.direct[j] != nil {
 				cell = d.direct[j]
 			}
-			out[k], errs[k] = readColumn(ctx, fr, rg, d.leaves[j], lo, hi, pick, cell)
+			if d.repeated(j) {
+				out[k], errs[k] = readColumn(ctx, frRep, rg, d.leaves[j], lo, hi, pick, cell, false)
+			} else {
+				out[k], errs[k] = readColumn(ctx, fr, rg, d.leaves[j], lo, hi, pick, cell, true)
+			}
 		}()
 	}
 	wg.Wait()
@@ -168,7 +180,25 @@ var readHook func(rg int, leaves []int) error
 
 // readColumn reads rows [lo, hi) of one top-level column (its leaves) in row
 // group rg, keeping only the rows pick (sorted, in [lo, hi)) unless it is nil.
-func readColumn(ctx context.Context, fr *pqarrow.FileReader, rg int, leaves []int, lo, hi int64, pick []int64, cell cellFunc) ([]Value, error) {
+//
+// A column with repeated leaves (lists, maps) is read from the row group's
+// first row, the rows before lo dropped: arrow-go v18.8's SeekToRow
+// miscounts records in a repeated column whose row group has more than one
+// data page (it returns rows twice, or panics). Minimal reproduction: write a
+// list<int64> column with pqarrow.WriteTable, 13 rows per row group,
+// parquet.WithDataPageSize(64) and WithBatchSize(2) (so each row group has
+// several pages), values [k]*(k%4) for row k; GetRecordReader on that column
+// and row group 0, SeekToRow(1), then Next: it gives more rows than are left
+// in the row group, or panics with an index out of range (TestNestedColumnsInsideRowGroups).
+//
+// A panic in arrow-go (it panics on some corrupt pages) is returned as an
+// error.
+func readColumn(ctx context.Context, fr *pqarrow.FileReader, rg int, leaves []int, lo, hi int64, pick []int64, cell cellFunc, seek bool) (out []Value, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			out, err = nil, fmt.Errorf("arrow-go failed reading row group %d: %v", rg, r)
+		}
+	}()
 	if readHook != nil {
 		if err := readHook(rg, leaves); err != nil {
 			return nil, err
@@ -179,17 +209,18 @@ func readColumn(ctx context.Context, fr *pqarrow.FileReader, rg int, leaves []in
 		return nil, err
 	}
 	defer rr.Release()
-	if lo > 0 {
+	at := int64(0) // row (in the row group) of the next batch's first row
+	if lo > 0 && seek {
 		if err := rr.SeekToRow(lo); err != nil {
 			return nil, err
 		}
+		at = lo
 	}
 	want := hi - lo
 	if pick != nil {
 		want = int64(len(pick))
 	}
-	out := make([]Value, 0, want)
-	at := lo // row (in the row group) of the next batch's first row
+	out = make([]Value, 0, want)
 	p := 0   // next of pick
 	for at < hi {
 		if !rr.Next() {
@@ -205,8 +236,8 @@ func readColumn(ctx context.Context, fr *pqarrow.FileReader, rg int, leaves []in
 		m := min(rec.NumRows(), hi-at)
 		col := rec.Column(0)
 		if pick == nil {
-			for i := range int(m) {
-				out = append(out, cell(col, i))
+			for i := max(0, lo-at); i < m; i++ {
+				out = append(out, cell(col, int(i)))
 			}
 		} else {
 			for p < len(pick) && pick[p] < at+m {
@@ -226,4 +257,15 @@ func (d *dataset) readErr(ctx context.Context, err error) error {
 		return ctx.Err()
 	}
 	return safeErr(fmt.Errorf("reading %s: %w", d.path, err))
+}
+
+// repeated reports whether top-level column j has a repeated leaf (a list or
+// map somewhere in it).
+func (d *dataset) repeated(j int) bool {
+	for _, leaf := range d.leaves[j] {
+		if d.md.Schema.Column(leaf).MaxRepetitionLevel() > 0 {
+			return true
+		}
+	}
+	return false
 }

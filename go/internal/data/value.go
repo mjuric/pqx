@@ -1,6 +1,7 @@
 package data
 
 import (
+	"math"
 	"math/big"
 	"strings"
 	"time"
@@ -118,7 +119,7 @@ func ValueAt(arr arrow.Array, i int) Value {
 	case *array.Uint64:
 		return a.Value(i)
 	case *array.Float16:
-		return a.Value(i).Float32()
+		return halfToFloat32(a.Value(i).Uint16())
 	case *array.Float32:
 		return a.Value(i)
 	case *array.Float64:
@@ -198,6 +199,29 @@ func ValueAt(arr arrow.Array, i int) Value {
 		return ValueAt(a.Storage(), i)
 	}
 	return arr.ValueStr(i) // a type pqx doesn't know: its text
+}
+
+// halfToFloat32 is the IEEE half-precision number with bits h as a float32
+// (exactly). arrow-go's float16.Num.Float32 gets subnormals wrong (2^-24
+// comes out as 1.1e-41).
+func halfToFloat32(h uint16) float32 {
+	sign := uint32(h>>15) << 31
+	exp := uint32(h>>10) & 0x1f
+	frac := uint32(h) & 0x3ff
+	switch {
+	case exp == 0x1f: // inf, NaN
+		return math.Float32frombits(sign | 0xff<<23 | frac<<13)
+	case exp != 0: // normal
+		return math.Float32frombits(sign | (exp+127-15)<<23 | frac<<13)
+	case frac == 0: // ±0
+		return math.Float32frombits(sign)
+	}
+	// subnormal: frac × 2^-24, exact in a float32
+	v := float32(frac) * (1.0 / (1 << 24))
+	if sign != 0 {
+		v = -v
+	}
+	return v
 }
 
 func cloneBytes(b []byte) []byte { return append([]byte{}, b...) }
