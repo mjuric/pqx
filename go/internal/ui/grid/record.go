@@ -2,7 +2,8 @@ package grid
 
 import (
 	"errors"
-	"slices"
+	"strconv"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -52,12 +53,11 @@ func (g *Grid) Record() kit.Record {
 	return rec
 }
 
-// detailReq is the pane's background read, while it runs: the columns it
-// brings for the view rows it reads.
+// detailReq is the pane's background read, while it runs: the view rows it
+// reads, by column.
 type detailReq struct {
 	gen  int
-	rows map[int64]bool
-	cols []string
+	rows map[string]map[int64]bool
 }
 
 // coming reports whether the pane's read is bringing column name for view
@@ -67,16 +67,24 @@ func (g *Grid) coming(name string, r int64) bool {
 	if q == nil || q.gen != g.v.gen || !g.env.Tasks.Running("detail") {
 		return false
 	}
-	return q.rows[r] && slices.Contains(q.cols, name)
+	return q.rows[name][r]
 }
 
-// DetailRead is what the details pane's background read is to bring: for the
+// maxDetailReads bounds the reads of one background read; columns missing
+// for other sets of rows are read with the last one, as a rectangle.
+const maxDetailReads = 4
+
+// DetailRead is what the details pane's background read is to bring: of the
 // rows read near the screen (those the grid's own column reads cover), the
-// columns shown that some of them lack, except those a running column read
-// is bringing and those that failed. ok is false if there is nothing to
-// read, or the view's rows have no file rows. The pane runs the read under
-// the tag "detail" right away: the grid leaves those cells to it.
-func (g *Grid) DetailRead() (view kit.View, fileRows []int64, cols []string, ok bool) {
+// cells of the columns shown not read yet (a column that failed in this
+// view has ✗ in every row), except those a running read is bringing. The cells come as
+// reads of file rows × columns: columns lacking the same rows go together,
+// so no cell is read that is there already (but for the last read, when
+// there are more than maxDetailReads such sets). ok is false if there is
+// nothing to read, or the view's rows have no file rows. The pane runs the
+// reads under the tag "detail" right away: the grid leaves those cells to
+// it.
+func (g *Grid) DetailRead() (view kit.View, fileRows [][]int64, cols [][]string, ok bool) {
 	d := g.v
 	if !d.ids || !g.sized() || len(g.cols) == 0 {
 		return kit.View{}, nil, nil, false
@@ -87,11 +95,7 @@ func (g *Grid) DetailRead() (view kit.View, fileRows []int64, cols []string, ok 
 	for r := a; r < b; r++ {
 		if fr, ok := d.fileRow[r]; ok && fr >= 0 {
 			rows = append(rows, r)
-			fileRows = append(fileRows, fr)
 		}
-	}
-	if len(rows) == 0 {
-		return kit.View{}, nil, nil, false
 	}
 	busy := map[string]bool{}
 	if c := g.cols1; c != nil && c.gen == d.gen && g.env.Tasks.Running("cols") {
@@ -99,24 +103,76 @@ func (g *Grid) DetailRead() (view kit.View, fileRows []int64, cols []string, ok 
 			busy[name] = true
 		}
 	}
+	// columns by the rows they lack
+	type group struct {
+		rows []int64
+		cols []string
+	}
+	var groups []*group
+	byKey := map[string]*group{}
 	for _, c := range g.cols {
-		if busy[c.Name] || g.cellTasks[c.Name] {
+		if busy[c.Name] || g.cellTasks[c.Name] { // (failed columns have their cells: ✗)
 			continue
 		}
 		col := d.vals[c.Name]
+		var lack []int64
+		var key strings.Builder
 		for _, r := range rows {
 			if _, ok := col[r]; !ok {
-				cols = append(cols, c.Name)
-				break
+				lack = append(lack, r)
+				key.WriteString(strconv.FormatInt(r, 36))
+				key.WriteByte(',')
 			}
 		}
+		if len(lack) == 0 {
+			continue
+		}
+		gr := byKey[key.String()]
+		if gr == nil {
+			gr = &group{rows: lack}
+			byKey[key.String()] = gr
+			groups = append(groups, gr)
+		}
+		gr.cols = append(gr.cols, c.Name)
 	}
-	if len(cols) == 0 {
+	if len(groups) == 0 {
 		return kit.View{}, nil, nil, false
 	}
-	q := &detailReq{gen: d.gen, rows: make(map[int64]bool, len(rows)), cols: cols}
-	for _, r := range rows {
-		q.rows[r] = true
+	if len(groups) > maxDetailReads {
+		// the rest as one rectangle
+		last := &group{}
+		in := map[int64]bool{}
+		for _, gr := range groups[maxDetailReads-1:] {
+			last.cols = append(last.cols, gr.cols...)
+			for _, r := range gr.rows {
+				in[r] = true
+			}
+		}
+		for _, r := range rows {
+			if in[r] {
+				last.rows = append(last.rows, r)
+			}
+		}
+		groups = append(groups[:maxDetailReads-1], last)
+	}
+	q := &detailReq{gen: d.gen, rows: map[string]map[int64]bool{}}
+	for _, gr := range groups {
+		frs := make([]int64, len(gr.rows))
+		for i, r := range gr.rows {
+			frs[i] = d.fileRow[r]
+		}
+		for _, name := range gr.cols {
+			m := q.rows[name]
+			if m == nil {
+				m = map[int64]bool{}
+				q.rows[name] = m
+			}
+			for _, r := range gr.rows {
+				m[r] = true
+			}
+		}
+		fileRows = append(fileRows, frs)
+		cols = append(cols, gr.cols)
 	}
 	g.detail = q
 	return kit.View{View: d.view, Gen: d.gen}, fileRows, cols, true
@@ -163,14 +219,7 @@ func (g *Grid) Merge(view kit.View, w data.Window) {
 			g.fitValues(name, vals)
 		}
 		for name := range w.Failed {
-			for _, fr := range w.FileRows {
-				if r, ok := at[fr]; ok {
-					if _, ok := d.cell(name, r); !ok {
-						d.set(name, r, failedCell{})
-					}
-				}
-			}
-			g.v.noticed[name] = true // the pane said so
+			g.failColumn(name) // (not read again: the grid has nothing more to say about it)
 		}
 	})
 }
@@ -185,8 +234,8 @@ func (g *Grid) onDetailDone() tea.Cmd {
 	return tea.Batch(g.runWaiters(), g.refreshed())
 }
 
-// FieldKey runs the grid's own action for key k ("y", "F", "<", ">", "x",
-// ctrl+x) as pressed in the details pane on its field name: the grid's
+// FieldKey runs the grid's own action for key k ("y", "F", "<", ">") as
+// pressed in the details pane on its field name: the grid's
 // cursor goes to that column first (Python's action_detail_key). The digit
 // keys say where the change shows (" (grid)": the pane shows full
 // precision).
@@ -220,3 +269,16 @@ func (g *Grid) toColumn(name string) tea.Cmd {
 }
 
 func isFailed(v data.Value) bool { _, bad := v.(failedCell); return bad }
+
+// failColumn marks column name failed in this view: its cells not read
+// yet show ✗, those of rows read later too, and it isn't read again
+// (Python's _cols_failed, here for the view rather than the page).
+func (g *Grid) failColumn(name string) {
+	d := g.v
+	d.failedCols[name] = true
+	for r := range d.fileRow {
+		if _, ok := d.cell(name, r); !ok {
+			d.set(name, r, failedCell{})
+		}
+	}
+}

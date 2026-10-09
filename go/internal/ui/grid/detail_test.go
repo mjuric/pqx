@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -22,7 +25,7 @@ import (
 
 // withDetail is the harness with the details pane wired in, as
 // cmd/pqx does.
-func withDetail(t *testing.T, ds data.Dataset, w, h int, o ...hopts) (*harness, *detail.Pane) {
+func withDetail(t testing.TB, ds data.Dataset, w, h int, o ...hopts) (*harness, *detail.Pane) {
 	t.Helper()
 	hs := newHarness(t, ds, w, h, o...)
 	hs.env.Grid = hs.g
@@ -460,6 +463,9 @@ func TestMergeDropsStaleWindows(t *testing.T) {
 		t.Fatal("stale window merged")
 	}
 	g.Merge(kit.View{View: g.v.view, Gen: g.v.gen}, w)
+	if _, ok := g.v.cell(far, 100_000); ok {
+		t.Fatal("merged into a row not read")
+	}
 	if v, _ := g.v.cell(far, 0); v != int64(-1) || g.v.loaded(100_000) {
 		t.Fatalf("%v", v)
 	}
@@ -496,4 +502,177 @@ func TestDetailShowsHostileTextSafely(t *testing.T) {
 		check("entry " + p.Selected())
 		h.press("down")
 	}
+}
+
+// The pane's cost of a row move on a 2,000-column file, the grid's record
+// included (the grid's own drawing is not).
+func BenchmarkDetailRowMove(b *testing.B) {
+	ds := newFake(3000, 2000)
+	h, p := withDetail(b, ds, 200, 50)
+	h.press("d")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		h.g.curRow = int64(i % 30)
+		p.Update(kit.CursorMsg{})
+		p.View(49, 44)
+	}
+}
+
+// A column that fails is marked failed for the view: rows read later show
+// it ✗ too, it isn't read again, and it is said once.
+func TestDetailFailedColumnsAcrossPages(t *testing.T) {
+	ds := newFake(3000, 120)
+	h, p := withDetail(t, ds, 160, 48)
+	far := h.g.cols[len(h.g.cols)-1].Name
+	reads := 0
+	ds.colsHook = func(ctx context.Context, cols []string) error {
+		for _, c := range cols {
+			if c == far {
+				reads++
+				return errors.New("boom")
+			}
+		}
+		return nil
+	}
+	h.press("d")
+	for i := 0; i < 4; i++ {
+		h.press("pgdown")
+	}
+	h.send(kit.GotoMsg{Row: 2500})
+	h.settle()
+	h.press("end")
+	notes := 0
+	for _, n := range h.notes {
+		if n.Title == "✗ Columns" {
+			notes++
+		}
+	}
+	if reads != 1 || notes != 1 || !strings.HasPrefix(paneValue(t, p, far), "✗") {
+		t.Fatalf("%d reads of %s, %d notices, %q", reads, far, notes, paneValue(t, p, far))
+	}
+	// the other columns load on every page
+	if v := paneValue(t, p, "c003"); v != fmtTruth("c003", 2500) {
+		t.Fatal(v)
+	}
+}
+
+// The pane reads only the cells not read yet: scrolling with it open, no
+// cell the pane reads is read twice. (The grid's own column reads cover the
+// rows near the screen whole, and may read a cell again themselves.)
+func TestDetailReadsEachCellOnce(t *testing.T) {
+	ds := newFake(3000, 120)
+	h, _ := withDetail(t, ds, 160, 48)
+	var mu sync.Mutex
+	pane := map[string]bool{} // the column lists the pane asked for
+	ds.colsHook = func(ctx context.Context, cols []string) error {
+		buf := make([]byte, 1<<14)
+		n := runtime.Stack(buf, false)
+		if strings.Contains(string(buf[:n]), "detail.(*Pane)") {
+			mu.Lock()
+			pane[strings.Join(cols, ",")] = true
+			mu.Unlock()
+		}
+		return nil
+	}
+	h.press("d")
+	for i := 0; i < 60; i++ {
+		h.send(kp("down"))
+		if i%7 == 0 {
+			h.send(kp("right"))
+		}
+		if i%11 == 0 {
+			h.send(kp("pgdown"))
+		}
+		h.settle()
+	}
+	seen := map[string]bool{}   // cells read
+	byPane := map[string]bool{} // cells the pane read
+	panes := 0
+	for _, c := range colCalls(ds) {
+		mine := pane[strings.Join(c.cols, ",")]
+		if mine {
+			panes++
+		}
+		for _, name := range c.cols {
+			for _, r := range c.rows {
+				k := fmt.Sprint(name, ":", r)
+				if seen[k] && (mine || byPane[k]) {
+					t.Fatalf("%s read twice", k)
+				}
+				seen[k] = true
+				byPane[k] = byPane[k] || mine
+			}
+		}
+	}
+	if panes < 2 {
+		t.Fatalf("%d reads by the pane", panes)
+	}
+}
+
+// The pane's read leaves out the columns the grid's own read is bringing.
+func TestDetailLeavesTheGridsColumnsToIt(t *testing.T) {
+	ds := newFake(3000, 300)
+	h, _ := withDetail(t, ds, 160, 48)
+	release := make(chan struct{})
+	far := h.g.cols[len(h.g.cols)-1].Name
+	var gridCols []string
+	ds.colsHook = func(ctx context.Context, cols []string) error {
+		if gridCols == nil && slices.Contains(cols, far) {
+			gridCols = cols
+			return ds.hold(ctx, release)
+		}
+		return nil
+	}
+	h.press("end") // the grid reads the far columns (held)
+	if gridCols == nil {
+		t.Fatal("no column read")
+	}
+	h.press("d")
+	calls := colCalls(ds)
+	i := slices.IndexFunc(calls, func(c call) bool { return slices.Contains(c.cols, far) })
+	if i < 0 || i == len(calls)-1 {
+		t.Fatalf("%d reads", len(calls))
+	}
+	for _, c := range calls[i+1:] {
+		for _, name := range c.cols {
+			for _, g := range gridCols {
+				if name == g {
+					for _, c := range calls {
+						t.Logf("rows %d..%d cols %v", c.rows[0], c.rows[len(c.rows)-1], c.cols)
+					}
+					t.Fatalf("%s read by both", name)
+				}
+			}
+		}
+	}
+	close(release)
+	h.settle()
+}
+
+// An action waiting for a value the pane's read brings runs when it lands
+// (= on a far column while the pane reads it; the cell read is held).
+func TestDetailReadRunsWaitingActions(t *testing.T) {
+	ds := newFake(3000, 120)
+	h, p := withDetail(t, ds, 160, 48)
+	paneRead := make(chan struct{})
+	cellRead := make(chan struct{})
+	ds.colsHook = func(ctx context.Context, cols []string) error {
+		if len(cols) == 1 {
+			return ds.hold(ctx, cellRead) // the action's own read
+		}
+		return ds.hold(ctx, paneRead)
+	}
+	h.press("d", "tab", "end")
+	name := p.Selected()
+	h.press("=")
+	if h.env.State.View.Where != "" {
+		t.Fatal("applied before the value came")
+	}
+	close(paneRead)
+	h.waitFor("the filter", func() bool { return h.env.State.View.Where != "" })
+	if want := fmt.Sprintf("%s = %v", name, truth(name, 0)); h.env.State.View.Where != want {
+		t.Fatalf("%q, want %q", h.env.State.View.Where, want)
+	}
+	close(cellRead)
+	h.settle()
 }
