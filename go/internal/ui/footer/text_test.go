@@ -83,6 +83,15 @@ func TestWrap(t *testing.T) {
 	if strings.Join(plain, "|") != "abcd|efgh|ij||xy z" {
 		t.Fatalf("%q", plain)
 	}
+	// in a table cell (Rich), the spaces at a break stay as far as they fit
+	got = WrapCell(styled.New("aaa bbb ccc", styled.Style{}), 4)
+	if len(got) != 3 || got[0].Plain != "aaa " || got[2].Plain != "ccc" {
+		t.Fatalf("%+v", got)
+	}
+	got = Wrap(styled.New("aaa bbb ccc", styled.Style{}), 4)
+	if len(got) != 3 || got[0].Plain != "aaa" {
+		t.Fatalf("%+v", got)
+	}
 	// wide characters count two cells
 	got = Wrap(styled.New("漢字漢字", styled.Style{}), 5)
 	if len(got) != 2 || got[0].Plain != "漢字" {
@@ -101,11 +110,10 @@ func TestTable(t *testing.T) {
 	for i, n := range []string{"a", "bbbbbb", "c", "d", "e"} {
 		tb.Add([]styled.Text{{Plain: string(rune('0' + i)), Justify: styled.Right}, styled.New(n, styled.Style{})})
 	}
+	// 6 lines in 3: a scrollbar on the right, its thumb 1.5 cells from the
+	// top (Textual's render_bar: blank thumb, then "▄" for the half)
 	lines := tb.View(plainLook{}, 12, 3, styled.Style{Reverse: true})
-	want := []string{" #  name     ", " 0  a        ", " 1  bbbbbb   "}
-	for i := range want {
-		want[i] = want[i][:12]
-	}
+	want := []string{" #  name    ", " 0  a      ▄", " 1  bbbbbb  "}
 	if strings.Join(lines, "|") != strings.Join(want, "|") {
 		t.Fatalf("%q", lines)
 	}
@@ -125,5 +133,81 @@ func TestTable(t *testing.T) {
 	tb.Key("right", 2, 5)
 	if tb.X != 4 {
 		t.Fatalf("x %d", tb.X)
+	}
+}
+
+// Textual's ScrollBarRender.render_bar for a few cases (textual 8.2.8).
+func TestScrollbar(t *testing.T) {
+	render := func(c []styled.Text) string {
+		var b strings.Builder
+		for _, x := range c {
+			switch {
+			case x.Plain == " " && x.Style.Reverse:
+				b.WriteString("#")
+			case x.Plain == " ":
+				b.WriteString(".")
+			default:
+				b.WriteString(x.Plain)
+				if x.Style.Reverse {
+					b.WriteString("r")
+				}
+			}
+		}
+		return b.String()
+	}
+	for _, c := range []struct {
+		size, virtual, window, pos int
+		vertical                   bool
+		want                       string
+	}{
+		{3, 6, 3, 0, true, "#▄r."},
+		{10, 10, 10, 0, true, ".........."},
+		{10, 20, 10, 10, false, ".....#####"},
+		{10, 30, 10, 5, false, ".▋r###....."},
+		{116, 135, 116, 0, false, strings.Repeat("#", 99) + "▊" + strings.Repeat(".", 16)},
+	} {
+		got := render(scrollbar(c.size, c.virtual, c.window, c.pos, c.vertical, "k"))
+		if got != c.want {
+			t.Errorf("%+v: got %q", c, got)
+		}
+	}
+}
+
+// markLook draws reverse cells as "R", bold ones as "B", dim ones as "d".
+type markLook struct{ plainLook }
+
+func (markLook) Render(t styled.Text) string {
+	r := []rune(t.Plain)
+	for i := range r {
+		st := t.Style
+		for _, sp := range t.Spans {
+			if sp.Start <= i && i < sp.End {
+				st = st.Plus(sp.Style)
+			}
+		}
+		switch {
+		case st.Reverse:
+			r[i] = 'R'
+		case st.Bold:
+			r[i] = 'B'
+		case st.Dim:
+			r[i] = 'd'
+		}
+	}
+	return string(r)
+}
+
+// As Textual's DataTable with pqx's styles: the header bold and the cursor
+// row reverse across the whole width; a right-justified cell's padding in
+// its style, a left-justified one's not.
+func TestTableStyles(t *testing.T) {
+	tb := NewTable([]string{"n", "s"}, []bool{true, false})
+	d := styled.Style{Dim: true}
+	tb.Add([]styled.Text{{Plain: "1", Style: d, Justify: styled.Right}, {Plain: "x", Style: d}},
+		[]styled.Text{{Plain: "22", Style: d, Justify: styled.Right}, {Plain: "y", Style: d}})
+	got := tb.View(markLook{}, 10, 3, styled.Style{Reverse: true})
+	want := []string{"BBBBBBBBBB", "RRRRRRRRRR", " dd  d    "}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("%q", got)
 	}
 }

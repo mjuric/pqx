@@ -75,11 +75,11 @@ func (g *Grid) View(w, h int) string {
 	slots := g.layout()
 	_, _, hl, hr := g.colWindow()
 	bold := styled.Style{Bold: true}
-	dim := g.look.Style("dim")
+	dimBold := g.look.Style("dim").Plus(bold)
 	right := g.right()
 	lab := g.labelSlot()
 
-	// header: names (bold) and types (dim)
+	// header: names, and types dim, all bold (DataTable's header style)
 	for line := 0; line < headerRows; line++ {
 		if line > 0 {
 			b.WriteByte('\n')
@@ -89,24 +89,19 @@ func (g *Grid) View(w, h int) string {
 			edge = g.styledText("‹", bold)
 		}
 		b.WriteString(edge)
-		b.WriteString(spaces(lab.sw))
+		b.WriteString(g.styledText(spaces(lab.sw), bold))
 		x := lab.x + lab.sw
 		for _, s := range slots {
 			c := g.cols[s.col]
 			a, sub := g.header(c)
 			text, st := a, bold
 			if line == 1 {
-				text, st = sub, dim
+				text, st = sub, dimBold
 			}
-			tw := cells.Width(text)
-			jt := just(c)
-			if s.clipped && c.right {
-				jt = styled.Left // its cells are blank: the name must show
-			}
-			g.writeSlot(&b, s, g.styledText(text, st), tw, jt, styled.Style{})
+			g.writeSlot(&b, s, g.styledText(text, st), cells.Width(text), just(c), bold, bold)
 			x += s.sw
 		}
-		b.WriteString(spaces(right - x))
+		b.WriteString(g.styledText(spaces(right-x), bold))
 		edge = " "
 		if line == 0 && hr > 0 {
 			edge = g.styledText("›", bold)
@@ -127,26 +122,15 @@ func (g *Grid) View(w, h int) string {
 			b.WriteString(" ")
 			continue
 		}
-		// row label: its file row (or position), dim, left aligned
-		b.WriteString(spaces(pad))
+		// row label: its file row (or position), dim, left aligned, in a
+		// bold cell (DataTable draws labels in the header style)
+		label := "·"
 		if d.loaded(r) {
-			s := commas(g.labelOf(r))
-			b.WriteString(g.styledText(s, dim))
-			b.WriteString(spaces(lab.w - len(s)))
-		} else {
-			b.WriteString(g.styledText("·", dim))
-			b.WriteString(spaces(lab.w - 1))
+			label = commas(g.labelOf(r))
 		}
-		b.WriteString(spaces(pad))
+		g.writeSlot(&b, lab, g.styledText(label, dimBold), cells.Width(label), styled.Left, bold, bold)
 		x := lab.x + lab.sw
 		for _, s := range slots {
-			if s.clipped && g.cols[s.col].right {
-				// a number cut by the edge would read as another number:
-				// left blank (its header shows which column it is)
-				b.WriteString(spaces(s.sw))
-				x += s.sw
-				continue
-			}
 			t, ok := g.cellText(s.col, r)
 			if !ok {
 				ph := g.placeholder(g.cols[s.col])
@@ -168,7 +152,10 @@ func (g *Grid) View(w, h int) string {
 				out = g.draw(t, extra)
 				t.out = out // (cached cells keep it)
 			}
-			g.writeSlot(&b, s, out, t.w, t.just, extra)
+			// the cell's style covers its width (a dim NULL's padding is
+			// dim too, as Rich justifies); the cursor's and a pinned
+			// cell's the padding around it as well
+			g.writeSlot(&b, s, out, t.w, t.just, extra, t.style.Plus(extra))
 			x += s.sw
 		}
 		b.WriteString(spaces(right - x))
@@ -186,13 +173,13 @@ func (g *Grid) cursorStyle() styled.Style {
 	return styled.Style{Underline: true}
 }
 
-// writeSlot writes one column slot: padding, the text (drawn, tw cells
-// wide) justified in the column width, padding. The cursor cell's padding
-// takes its style too, as DataTable draws it. A clipped slot is cut at the
-// screen's edge.
-func (g *Grid) writeSlot(b *strings.Builder, s slot, out string, tw int, j styled.Justify, extra styled.Style) {
+// writeSlot writes one column slot: padding (in style padSt), the text
+// (drawn, tw cells wide) justified in the column width with the gaps in
+// style gapSt, padding. A clipped slot is cut at the screen's edge, as
+// DataTable crops it.
+func (g *Grid) writeSlot(b *strings.Builder, s slot, out string, tw int, j styled.Justify, padSt, gapSt styled.Style) {
 	full := s.w
-	if s.clipped {
+	if s.clipped && s.col >= 0 {
 		full = g.colWidth(g.cols[s.col].Name)
 	}
 	gap := max(0, full-tw)
@@ -205,25 +192,21 @@ func (g *Grid) writeSlot(b *strings.Builder, s slot, out string, tw int, j style
 	default:
 		r = gap
 	}
+	write := func(b *strings.Builder) {
+		p := g.styledText(spaces(pad), padSt)
+		b.WriteString(p)
+		b.WriteString(g.styledText(spaces(l), gapSt))
+		b.WriteString(out)
+		b.WriteString(g.styledText(spaces(r), gapSt))
+		b.WriteString(p)
+	}
 	if s.clipped {
 		var cell strings.Builder
-		g.writeCell(&cell, out, pad+l, r+pad, extra)
+		write(&cell)
 		b.WriteString(ansi.Truncate(cell.String(), s.sw, ""))
 		return
 	}
-	g.writeCell(b, out, pad+l, r+pad, extra)
-}
-
-func (g *Grid) writeCell(b *strings.Builder, out string, l, r int, extra styled.Style) {
-	if extra.Reverse || extra.Underline {
-		b.WriteString(g.styledText(spaces(l), extra))
-		b.WriteString(out)
-		b.WriteString(g.styledText(spaces(r), extra))
-		return
-	}
-	b.WriteString(spaces(l))
-	b.WriteString(out)
-	b.WriteString(spaces(r))
+	write(b)
 }
 
 var spaceBuf = strings.Repeat(" ", 512)

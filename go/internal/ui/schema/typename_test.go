@@ -9,10 +9,9 @@ import (
 	"github.com/mjuric/pqx/go/internal/golden"
 )
 
-// Where arrow-go's reading of the file differs from PyArrow's: it names a
-// map's entries field "entries" whatever the file says, and reads arrow.json
-// columns as their storage type.
-var arrowNameKnown = map[string]bool{"types.parquet/map": true, "types.parquet/json": true}
+// Where arrow-go's reading of the file differs from PyArrow's: it reads
+// arrow.json columns as their storage type.
+var arrowNameKnown = map[string]bool{"types.parquet/json": true}
 
 // arrowName spells every fixture column's type as PyArrow does.
 func TestArrowNameMatchesPyArrow(t *testing.T) {
@@ -41,7 +40,7 @@ func TestArrowNameMatchesPyArrow(t *testing.T) {
 			want[c.Name] = c.Arrow
 		}
 		for _, c := range ds.Columns() {
-			if got := arrowName(c.Arrow); got != want[c.Name] && !arrowNameKnown[g.Header.Fixture+"/"+c.Name] {
+			if got := typeName(c.Name, c.Arrow); got != want[c.Name] && !arrowNameKnown[g.Header.Fixture+"/"+c.Name] {
 				t.Errorf("%s %q: got %q want %q", g.Header.Fixture, c.Name, got, want[c.Name])
 			}
 			n++

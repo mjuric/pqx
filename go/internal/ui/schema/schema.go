@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/apache/arrow-go/v18/arrow"
 
 	"github.com/mjuric/pqx/go/internal/data"
 	"github.com/mjuric/pqx/go/internal/fmtx"
@@ -185,7 +186,7 @@ func (p *Pane) build(summary []data.ChunkSummary) {
 		rows = append(rows, []styled.Text{
 			right(strconv.Itoa(i), d),
 			styled.New(fmtx.Sanitize(c.Name, false), styled.Style{Bold: true}),
-			styled.New(fmtx.ShortType(c.Arrow), d),
+			styled.New(shortType(c), d),
 			unit, nullN, nullP, mm(mn), mm(mx),
 			right(fmtx.HumanBytes(float64(size)), styled.Style{}),
 			right(ratio, d),
@@ -296,7 +297,7 @@ func (p *Pane) desc() (styled.Text, styled.Text) {
 	inf := p.info[c.Name]
 	S := func(s string) string { return fmtx.Sanitize(s, false) }
 	t.Append(S(c.Name), styled.Style{Bold: true, Fg: "cyan"})
-	t.Append("   "+S(arrowName(c.Arrow)), styled.Style{})
+	t.Append("   "+S(typeName(c.Name, c.Arrow)), styled.Style{})
 	if c.Unit != "" {
 		t.Append("   ["+S(c.Unit)+"]", styled.Style{})
 	}
@@ -375,7 +376,7 @@ func (p *Pane) Panels(w, h int) []kit.Panel {
 	look := p.env.Look
 	tableH, descH := p.split()
 	cur := styled.Style{}
-	if p.built {
+	if p.built && p.focused { // a blurred DataTable shows no cursor
 		cur = look.Style("cursor")
 	}
 	lines := p.table.View(look, max(1, w-4), max(1, tableH-2), cur)
@@ -414,4 +415,14 @@ func (p *Pane) Cell(col, label string) string {
 		}
 	}
 	return ""
+}
+
+// shortType is the type column's text, fmtx.ShortType but for a map column,
+// whose PyArrow name takes the column's name ("map<string, int64 ('mp')>"),
+// which the type alone doesn't carry.
+func shortType(c data.Column) string {
+	if _, ok := c.Arrow.(*arrow.MapType); ok {
+		return fmtx.Sanitize(typeName(c.Name, c.Arrow), false)
+	}
+	return fmtx.ShortType(c.Arrow)
 }

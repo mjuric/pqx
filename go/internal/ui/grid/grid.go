@@ -139,6 +139,7 @@ type saved struct {
 func New(env *kit.Env) *Grid {
 	g := &Grid{
 		env: env, st: env.State, ds: env.DS, look: env.Look,
+		focused:   true, // the root starts with the grid focused
 		cellTasks: map[string]bool{}, lastRow: -1, lastFileRow: -2,
 		sgr: map[styled.Style]sgrPair{},
 	}
