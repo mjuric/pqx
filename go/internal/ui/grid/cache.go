@@ -333,7 +333,7 @@ func (g *Grid) nearNames(screens int) []string {
 }
 
 // missingNames are the names among names with a cell not read yet in a row
-// read in [a, b).
+// read in [a, b), leaving out the cells the details pane's read is bringing.
 func (g *Grid) missingNames(names []string, a, b int64) []string {
 	d := g.v
 	var out []string
@@ -343,7 +343,7 @@ func (g *Grid) missingNames(names []string, a, b int64) []string {
 			if !d.loaded(r) {
 				continue
 			}
-			if _, ok := col[r]; !ok {
+			if _, ok := col[r]; !ok && !g.coming(name, r) {
 				out = append(out, name)
 				break
 			}

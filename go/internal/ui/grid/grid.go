@@ -13,6 +13,7 @@
 package grid
 
 import (
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -109,6 +110,9 @@ type Grid struct {
 	foundEnd      bool   // a short read found the view's end before its count
 	footer        map[string][2]data.Value
 	footerStarted bool
+
+	detail   *detailReq // the details pane's read while it runs (record.go)
+	fromPane bool       // a key from the details pane is being run (FieldKey)
 
 	sgr     map[styled.Style]sgrPair // see render.go
 	formats int                      // values formatted (for tests)
@@ -222,10 +226,14 @@ func (g *Grid) Blur() { g.focused = false }
 
 // Keys implements kit.Pane (Python's KEYS["tab-data"]).
 func (g *Grid) Keys() []kit.KeyHint {
-	return []kit.KeyHint{{Key: "/", Help: "filter"}, {Key: "x", Help: "clear filter"}, {Key: "1-5", Help: "tabs"},
+	keys := []kit.KeyHint{{Key: "/", Help: "filter"}, {Key: "x", Help: "clear filter"}, {Key: "1-5", Help: "tabs"},
 		{Key: "?", Help: "help"}, {Key: "q", Help: "quit"}, {Key: "s", Help: "sort"}, {Key: "=", Help: "match cell"},
 		{Key: "d", Help: "detail"}, {Key: "tab", Help: "into detail"}, {Key: "c", Help: "columns"},
 		{Key: "g", Help: "go to"}, {Key: "e", Help: "export"}, {Key: "< > F", Help: "format"}}
+	if !g.st.DetailOpen { // Tab goes to the filter then
+		keys = slices.DeleteFunc(keys, func(k kit.KeyHint) bool { return k.Key == "tab" })
+	}
+	return keys
 }
 
 // bodyH is the number of body rows on screen.
@@ -269,7 +277,17 @@ func (g *Grid) Update(msg tea.Msg) tea.Cmd {
 	case tea.MouseWheelMsg:
 		return g.onWheel(msg.Mouse())
 	case kit.DoneMsg:
+		if msg.Tag == "detail" {
+			// the pane merges its result after the grid sees it: look
+			// again once it has
+			return func() tea.Msg { return detailDoneMsg{g} }
+		}
 		return g.onDone(msg)
+	case detailDoneMsg:
+		if msg.g == g {
+			return g.onDetailDone()
+		}
+		return nil
 	case kit.CancelledMsg:
 		g.onCancelled(msg.Tags)
 		return nil

@@ -339,7 +339,11 @@ func (g *Grid) stepDigits(delta int) tea.Cmd {
 	if !o.Set {
 		return notice(kit.Warning, fmtx.Sanitize(name, false)+" has no digits to change · F sets a format spec", 3*time.Second)
 	}
-	return g.setFormat(name, o, "")
+	where := ""
+	if g.fromPane { // (the pane always shows full precision: say where the change shows)
+		where = " (grid)"
+	}
+	return g.setFormat(name, o, where)
 }
 
 // formatDialog opens the format dialog for the cursor's column, with a
