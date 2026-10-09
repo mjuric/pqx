@@ -129,6 +129,8 @@ type Env struct {
 	Tasks *Tasks
 	// Dialogs makes dialogs; nil until WP10.
 	Dialogs Dialogs
+	// Grid is the grid's record and cache (WP12 implements it in the grid).
+	Grid RecordSource
 }
 
 // KeyHint is one entry of the key bar: "/ filter".
@@ -276,4 +278,36 @@ type InnerFocus interface {
 // (the Plot drop-down) needs it.
 type Placed interface {
 	Place(x, y int)
+}
+
+// Record is the grid's current record, as the details pane shows it.
+type Record struct {
+	Row     int64 // view row; -1 if there is none (an empty view)
+	FileRow int64 // -1 for SQL views
+	// Values holds the record's loaded values by column name; Missing the
+	// columns not loaded yet, Failed those that couldn't be read.
+	Values  map[string]data.Value
+	Missing []string
+	Failed  map[string]error
+	// Pending is set while a kept record is being looked up after a view
+	// change ("finding record… · file row N"); Values then holds the values
+	// it had in the previous view.
+	Pending bool
+}
+
+// RecordSource is the grid as the details pane sees it (Env.Grid).
+type RecordSource interface {
+	// Record is the record under the cursor.
+	Record() Record
+	// Merge adds a window of columns read by file row elsewhere (the
+	// details pane's background read, task "detail") to the grid's cache,
+	// for the current view only; stale windows are ignored.
+	Merge(view View, w data.Window)
+}
+
+// View is a view as seen by parts: the data view and its generation, which
+// changes with every applied view so stale results can be told apart.
+type View struct {
+	data.View
+	Gen int
 }
