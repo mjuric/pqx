@@ -715,7 +715,7 @@ func (g *Grid) revert(err error) tea.Cmd {
 	g.cancelReads()
 	g.v.setTotal(0)   // nothing more is read for it
 	g.revertErr = err // said once the view is back (a new view clears the status line)
-	return kit.Send(kit.SetViewMsg{View: p.v.view, KeepFileRow: filter.KeepRevert})
+	return g.sendView(kit.SetViewMsg{View: p.v.view, KeepFileRow: filter.KeepRevert})
 }
 
 // cancelReads stops the reads for the view on screen (a new one is coming).

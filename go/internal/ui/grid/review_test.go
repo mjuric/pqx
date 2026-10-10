@@ -819,3 +819,42 @@ func TestQuickSortPresses(t *testing.T) {
 		}
 	}
 }
+
+// The latest view asked for wins, whatever order the messages arrive in:
+// quick s, = and x in a row, and a view from elsewhere (the filter box)
+// while the grid's own are on their way.
+func TestLatestViewWins(t *testing.T) {
+	type step struct {
+		key  string
+		view *data.View // a view from elsewhere
+	}
+	ext := data.View{Where: "id % 2 = 0"}
+	for _, c := range []struct {
+		name  string
+		steps []step
+		want  data.View
+	}{
+		{"s s x", []step{{key: "s"}, {key: "s"}, {key: "x"}}, data.View{}},
+		{"s = x", []step{{key: "s"}, {key: "="}, {key: "x"}}, data.View{}},
+		{"= = x", []step{{key: "="}, {key: "="}, {key: "x"}}, data.View{}},
+		{"s s, then the box", []step{{key: "s"}, {key: "s"}, {view: &ext}}, ext},
+		{"=, then the box", []step{{key: "="}, {view: &ext}}, ext},
+	} {
+		for run := 0; run < 5; run++ {
+			h := newHarness(t, newFake(1000, 5), 120, 30)
+			h.press("right", "right")
+			for _, s := range c.steps {
+				if s.view != nil {
+					h.send(kit.SetViewMsg{View: *s.view, KeepFileRow: -1})
+				} else {
+					h.send(kp(s.key)) // (no settling in between)
+				}
+			}
+			h.settle()
+			if got := h.env.State.View; !sameView(got, c.want) {
+				t.Errorf("%s: view %+v, want %+v", c.name, got, c.want)
+				break
+			}
+		}
+	}
+}

@@ -87,6 +87,15 @@ func (g *Grid) onSetView(m kit.SetViewMsg) tea.Cmd {
 		}
 	} else if g.inflight == nil {
 		g.sent = nil
+	} else {
+		// a view the grid didn't make (the filter box, the details pane's
+		// x) while one of its own is on its way: it is the newest request,
+		// so it goes out again after that one, replacing anything queued
+		// behind it (whatever order the messages arrive in, it wins)
+		mm := m
+		g.after = &mm
+		v := m.View
+		g.sent = &v
 	}
 	g.next = nil
 	v := m.View
