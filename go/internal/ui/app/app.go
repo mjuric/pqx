@@ -162,10 +162,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.broadcast(msg)
 	case kit.OpenDialogMsg:
 		a.dialogs = append(a.dialogs, msg.Dialog)
-		return a, nil
+		return a, a.p.Chrome.Update(msg) // it lays out the toasts over dialogs
 	case kit.CloseDialogMsg:
 		if n := len(a.dialogs); n > 0 {
 			a.dialogs = a.dialogs[:n-1]
+			return a, a.p.Chrome.Update(msg)
 		}
 		return a, nil
 	case kit.SwitchTabMsg:
@@ -444,6 +445,9 @@ func (a *App) View() tea.View {
 		return v
 	}
 	var over []kit.Overlay
+	if b, ok := a.p.Chrome.(interface{ BehindToasts(w, h int) []kit.Overlay }); ok {
+		over = b.BehindToasts(a.w, a.h) // the notices the screen behind still shows
+	}
 	for _, d := range a.dialogs {
 		x, y := a.dialogPos(d)
 		dw, dh := d.Size(a.w, a.h)
