@@ -1,6 +1,9 @@
 package cursorlist
 
 import (
+	"encoding/json"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -117,5 +120,69 @@ func TestItemsWrap(t *testing.T) {
 	l.Highlight(1)
 	if got := l.View(6, 2, plain); got != "[long▄\n[long▄" { // (both lines reversed; the brackets take cells)
 		t.Errorf("highlighted wrapped item %q", got)
+	}
+}
+
+// PgUp and PgDn move by a page of lines (Textual's _move_page): to the item
+// on the line a list's height from the highlighted item's first line.
+func TestPageByLines(t *testing.T) {
+	var l List
+	var items []Item
+	for i := 0; i < 40; i++ {
+		items = append(items, Item{ID: string(rune('A' + i)), Text: styled.New(strings.Repeat("q", 40), styled.Style{})}) // two lines each at 32
+	}
+	l.SetItems(items)
+	pgdn := tea.KeyPressMsg{Code: tea.KeyPgDown}
+	pgup := tea.KeyPressMsg{Code: tea.KeyPgUp}
+	l.Key(pgdn) // nothing highlighted: the last
+	if l.Highlighted() != 39 {
+		t.Fatalf("PgDn with none: %d", l.Highlighted())
+	}
+	l.SetItems(items)
+	l.Key(pgup) // nothing highlighted: the first
+	if l.Highlighted() != 0 {
+		t.Fatalf("PgUp with none: %d", l.Highlighted())
+	}
+	l.View(33, 20, plain) // 20 lines: 10 items a page
+	l.Key(pgdn)
+	if l.Highlighted() != 10 {
+		t.Errorf("PgDn: item %d, want 10", l.Highlighted())
+	}
+	l.Key(pgup)
+	if l.Highlighted() != 0 {
+		t.Errorf("PgUp: item %d, want 0", l.Highlighted())
+	}
+}
+
+// Wrap matches Textual's wrapping (testdata/wrap.json, written by
+// testdata/make_wrap.py from Textual 8.2) for random texts of letters,
+// spaces, CJK, emoji, combining marks and joiners at widths 1–12.
+func TestWrapMatchesTextual(t *testing.T) {
+	raw, err := os.ReadFile("testdata/wrap.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		Text  string
+		Width int
+		Lines []string
+	}
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatal(err)
+	}
+	bad := 0
+	for _, c := range cases {
+		var got []string
+		for _, l := range Wrap(styled.New(c.Text, styled.Style{}), c.Width) {
+			got = append(got, l.Plain)
+		}
+		if !slices.Equal(got, c.Lines) {
+			if bad++; bad <= 10 {
+				t.Errorf("Wrap(%q, %d) = %q, want %q", c.Text, c.Width, got, c.Lines)
+			}
+		}
+	}
+	if bad > 0 {
+		t.Errorf("%d of %d cases differ", bad, len(cases))
 	}
 }
