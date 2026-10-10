@@ -487,3 +487,62 @@ func TestKeyBarUnderDialog(t *testing.T) {
 		t.Fatalf("%q", l)
 	}
 }
+
+// toastChrome shows one toast "T" over everything and one "B" on the screen
+// behind dialogs, and records the dialog messages it gets.
+type toastChrome struct {
+	basicChrome
+	got []tea.Msg
+}
+
+func (c *toastChrome) Update(msg tea.Msg) tea.Cmd {
+	switch msg.(type) {
+	case kit.OpenDialogMsg, kit.CloseDialogMsg:
+		c.got = append(c.got, msg)
+	}
+	return c.basicChrome.Update(msg)
+}
+func (c *toastChrome) Toasts(w, h int) []kit.Overlay {
+	return []kit.Overlay{{X: 40, Y: 14, Content: "TTTT"}}
+}
+func (c *toastChrome) BehindToasts(w, h int) []kit.Overlay {
+	return []kit.Overlay{{X: 43, Y: 14, Content: "BBBBBBBBBB"}, {X: 30, Y: 20, Content: "BB"}}
+}
+
+// Toasts over a dialog: the chrome hears dialogs open and close (it lays
+// them out as Textual does on the dialog's screen), and those the screen
+// behind keeps are drawn under the dialogs, the others over them.
+func TestToastsOverDialogs(t *testing.T) {
+	a, _ := setup(t)
+	ch := &toastChrome{basicChrome: basicChrome{env: a.env}}
+	a.p.Chrome = ch
+	if l := screen(a); !strings.Contains(l[14], "TTTT") || strings.Contains(strings.Join(l, "\n"), "B") {
+		t.Fatalf("no dialog: %q", l[14])
+	}
+	d := &dialog{pane{name: "Zdialog"}}
+	run(a, kit.OpenDialogMsg{Dialog: d})
+	if len(ch.got) != 1 {
+		t.Fatalf("chrome got %v", ch.got)
+	}
+	x, y := a.dialogPos(d) // 45, 13: 10x3
+	if x != 45 || y != 13 {
+		t.Fatalf("dialog at %d,%d", x, y)
+	}
+	l := screen(a)
+	// row 14: the toast at 40-43, the behind toast from 44 (under the dialog
+	// from 45), then the dialog
+	if got := string([]rune(l[14])[40:55]); got != "TTTTBZZZZZZZZZZ" {
+		t.Fatalf("row 14: %q", got)
+	}
+	if got := string([]rune(l[20])[30:32]); got != "BB" {
+		t.Fatalf("row 20: %q", l[20])
+	}
+	run(a, kit.CloseDialogMsg{})
+	if len(ch.got) != 2 {
+		t.Fatalf("chrome got %v", ch.got)
+	}
+	run(a, kit.CloseDialogMsg{}) // none open: nothing to tell
+	if len(ch.got) != 2 {
+		t.Fatalf("chrome got %v", ch.got)
+	}
+}

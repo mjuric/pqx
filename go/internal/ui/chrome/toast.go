@@ -43,22 +43,55 @@ func timeout(m kit.NotifyMsg) time.Duration {
 // (Textual's ToastRack): up to 60 cells wide (half the screen at most), a
 // border coloured by severity, the title bold, the text wrapped. Those that
 // don't fit the screen's height are left out, oldest first.
+//
+// While a dialog is open they are laid out as Textual does on the dialog's
+// screen, which has no side padding: the rack is 2 cells wider and ends a
+// cell further right.
 func (c *Chrome) Toasts(w, h int) []kit.Overlay {
-	if len(c.toasts) == 0 || w < 12 || h < 4 {
+	if c.dialogs == 0 {
+		return c.toastsIn(c.toasts, w, h, 1)
+	}
+	return c.toastsIn(c.toasts, w, h, 0)
+}
+
+// BehindToasts is what the screen behind the dialogs shows of the notices
+// while one is open: Textual keeps there the ones it had when the first
+// dialog opened, in its own layout, until each expires. The root draws them
+// under the dialogs.
+func (c *Chrome) BehindToasts(w, h int) []kit.Overlay {
+	if c.dialogs == 0 {
+		return nil
+	}
+	var behind []toast
+	for _, t := range c.toasts {
+		if c.behind[t.id] {
+			behind = append(behind, t)
+		}
+	}
+	return c.toastsIn(behind, w, h, 1)
+}
+
+// toastsIn lays out toasts in a screen with pad cells of padding on each
+// side.
+func (c *Chrome) toastsIn(toasts []toast, w, h, pad int) []kit.Overlay {
+	if len(toasts) == 0 || w < 12 || h < 4 {
 		return nil
 	}
 	// Textual's ToastRack: the screen less its side padding and a scroll
-	// bar's gutter; toasts 60 wide, at most half of that, right-aligned in it
-	tw := min(60, (w-4)/2)
+	// bar's gutter (2 cells); toasts 60 wide, at most half of that,
+	// right-aligned in it
+	rack := w - 2*pad - 2
+	tw := min(60, rack/2)
+	right := w - pad - 2 // the first column right of the rack
 	var out []kit.Overlay
 	end := h - 1 // the first row below the newest toast: the key bar's
-	for i := len(c.toasts) - 1; i >= 0; i-- {
-		box := c.toastBox(c.toasts[i].msg, tw)
+	for i := len(toasts) - 1; i >= 0; i-- {
+		box := c.toastBox(toasts[i].msg, tw)
 		top := end - (strings.Count(box, "\n") + 1)
 		if top < 0 {
 			break
 		}
-		out = append(out, kit.Overlay{X: max(0, w-3-tw), Y: top, Content: box})
+		out = append(out, kit.Overlay{X: max(0, right-tw), Y: top, Content: box})
 		end = top - 1 // a blank row between toasts
 	}
 	// drawn oldest first, so a newer one would win where they meet
