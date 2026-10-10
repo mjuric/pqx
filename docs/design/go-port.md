@@ -563,6 +563,7 @@ Owner report: under GNU screen (`TERM=screen`, no `COLORTERM`) the Plot tab's sk
   - On a truecolor terminal Python sends the colourmaps as `38;2`, not `38;5`.
   - On a 256-colour terminal the gray colourmap's greys move down the grey ramp (index 188 is sent as 252, 248 as 247).
   - Go now does the same. Paint leaves 256-colour indices alone at 256 colours, as Render has already reduced them; reducing twice moved greys two steps.
+  - A named theme's Paint no longer keeps 256-colour indices it finds in a frame: it reduces them once from their truecolor value, as Textual does (59 → 240, 188 → 252).
 - **Colour system, Python vs Go** (same in every case tested):
 
 | environment | colours |

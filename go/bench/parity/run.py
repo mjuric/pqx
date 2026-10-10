@@ -561,6 +561,14 @@ def selftest():
     ok = scr.display[0] == "a\u2588\u2588\u2588\u2588z  " and row[4].fg == "red" and scr.cursor.x == 6
     print(f"{'ok  ' if ok else 'FAIL'} REP repeats the last character: {scr.display[0]!r}")
     bad += not ok
+    # REP repeats the last character of a chunk drawn at once, and nothing after a
+    # control or a cursor move
+    scr = Screen(8, 2, lambda d: None)
+    st = ByteStream(scr)
+    st.feed(b"abc\x1b[2b\x1b[2;1Hx\r\x1b[3b\x1b[1;8Hy\x1b[1C\x1b[2b")
+    ok = scr.display == ["abccc  y", "x       "]
+    print(f"{'ok  ' if ok else 'FAIL'} REP after a chunk, not after a control: {scr.display!r}")
+    bad += not ok
     # DCH and ICH (CSI n P, CSI n @): the freed and inserted cells get the cursor's
     # background (xterm's background colour erase), nothing else of its style
     scr = Screen(6, 1, lambda d: None)

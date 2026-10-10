@@ -199,6 +199,28 @@ class ByteStream(pyte.ByteStream):
             self.cursor.attrs = self.cursor.attrs._replace(blink=dim)
 
 
+def _ends_rep(name):
+    """Screen method `name`, made to forget the last character drawn first: REP
+    repeats a graphic character only right after it (ECMA-48), not after a control
+    or a cursor move (SGR, which only sets the style, keeps it)."""
+    method = getattr(Screen, name)
+
+    def wrapped(self, *args, **kwargs):
+        self._last_char = None
+        return method(self, *args, **kwargs)
+
+    wrapped.__doc__ = method.__doc__
+    setattr(Screen, name, wrapped)
+
+
+for _name in (set(ByteStream.csi.values()) | set(pyte.ByteStream.basic.values())
+              | set(pyte.ByteStream.escape.values())) - {
+        "select_graphic_rendition", "draw", "repeat_last", "bell", "report_device_attributes",
+        "report_device_status", "set_mode", "reset_mode"}:
+    if hasattr(Screen, _name):
+        _ends_rep(_name)
+
+
 _CSI_PRIVATE = re.compile(rb"\x1b\[[<=>][0-9;:]*[ -/]*[@-~]")
 _STRING_SEQ = re.compile(rb"\x1b[P_^X].*?(?:\x1b\\|\x07)", re.S)
 _SGR_COLON = re.compile(rb"\x1b\[([0-9;]*:[0-9;:]*)m")
