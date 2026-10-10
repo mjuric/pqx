@@ -17,7 +17,7 @@ import (
 // towards the background (Textual's dim); and colours are reduced for the
 // terminal as the rest of the theme's are. Parts that write their own SGR
 // sequences (the grid) are themed this way. Without a named theme the frame
-// is returned as it is.
+// keeps its colours, reduced for the terminal (reduceFrame).
 func (t *Theme) Paint(frame string, w int) string {
 	return t.PaintTinted(frame, w, image.Rectangle{})
 }
@@ -32,7 +32,7 @@ const focusTint = 0.05
 // what its faint text blends to.
 func (t *Theme) PaintTinted(frame string, w int, tint image.Rectangle) string {
 	if !t.named {
-		return frame
+		return t.reduceFrame(frame)
 	}
 	var b strings.Builder
 	b.Grow(len(frame) + len(frame)/4)

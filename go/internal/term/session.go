@@ -54,9 +54,9 @@ func (s *Session) ProgramOptions() []tea.ProgramOption {
 // Run runs the app on the session's terminal. The session handles the
 // signals: SIGINT quits as q does; SIGTERM, SIGHUP and SIGQUIT stop the app
 // (Signal says which); SIGTSTP suspends it, with the terminal restored,
-// until SIGCONT.
-func (s *Session) Run(m tea.Model) (tea.Model, error) {
-	p := tea.NewProgram(m, s.ProgramOptions()...)
+// until SIGCONT. Options are added to the session's.
+func (s *Session) Run(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
+	p := tea.NewProgram(m, append(s.ProgramOptions(), opts...)...)
 	stop := s.handleSignals(p)
 	defer stop()
 	return p.Run()
