@@ -95,6 +95,30 @@ class Screen(pyte.Screen):
     def write_process_input(self, data):
         self._reply(data.encode())
 
+    def scroll_up(self, count=None, *_):
+        """SU (CSI n S): the lines between the margins move up n, blank lines come in
+        at the bottom; the cursor stays. pyte lacks it (and SD), and ignored, a
+        renderer that scrolls (Bubble Tea's) leaves the screen with old lines."""
+        self._scroll(self.delete_lines, count)
+
+    def scroll_down(self, count=None, *_):
+        """SD (CSI n T): the lines between the margins move down n, blank lines come
+        in at the top; the cursor stays."""
+        self._scroll(self.insert_lines, count)
+
+    def _scroll(self, op, count):
+        top = self.margins.top if self.margins else 0
+        x, y = self.cursor.x, self.cursor.y
+        self.cursor.y = top
+        op(count or 1)
+        self.cursor.x, self.cursor.y = x, y
+
+
+class ByteStream(pyte.ByteStream):
+    """pyte's byte stream, with SU and SD (CSI S, CSI T) as well."""
+
+    csi = dict(pyte.ByteStream.csi, S="scroll_up", T="scroll_down")
+
     def select_graphic_rendition(self, *attrs, private=False):
         if private:  # CSI > ... m (xterm modifyOtherKeys etc.): not SGR
             return
@@ -217,7 +241,7 @@ class Session:
         self.cols, self.rows = cols, rows
         self.raw = bytearray()
         self.screen = Screen(cols, rows, self._answer)
-        self.stream = pyte.ByteStream(self.screen)
+        self.stream = ByteStream(self.screen)
         self.filter = TermFilter()
         self.parse_errors = []
         self.t0 = time.perf_counter()
@@ -280,7 +304,7 @@ class Session:
             # a sequence pyte can't take (wrong parameter count, say): note it, start the
             # parser afresh, and carry on; the raw bytes are kept for the checks
             self.parse_errors.append(f"{type(e).__name__}: {e}")
-            self.stream = pyte.ByteStream(self.screen)
+            self.stream = ByteStream(self.screen)
         return True
 
     def _reap(self):

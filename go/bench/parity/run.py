@@ -30,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 GO_ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(GO_ROOT, "bench", "pty"))
 import pyte  # noqa: E402
-from ptydrive import SPINNER, Session, key_bytes, styles_changed  # noqa: E402
+from ptydrive import SPINNER, ByteStream, Screen, Session, key_bytes, styles_changed  # noqa: E402
 
 SCRATCH_DEFAULT = os.environ.get("PQX_PARITY_SCRATCH", os.path.join(tempfile.gettempdir(), "pqx-parity"))
 APPS = {
@@ -500,6 +500,18 @@ def selftest():
         ok = bool(got) == want_masked and bool(d["text"]) != want_masked
         print(f"{'ok  ' if ok else 'FAIL'} python_bug keybar, {name}")
         bad += not ok
+    # SD and SU (CSI T, CSI S), which Bubble Tea scrolls with: between the margins, the
+    # cursor kept (pyte lacks both: ignored, the screen kept old lines beside new ones)
+    scr = Screen(4, 6, lambda d: None)
+    st = ByteStream(scr)
+    st.feed(b"\x1b[1;1H0\r\n1\r\n2\r\n3\r\n4\r\n5\x1b[2;5r\x1b[6;3H\x1b[T")
+    got = [ln.strip() for ln in scr.display]
+    st.feed(b"\x1b[2S")
+    got2 = [ln.strip() for ln in scr.display]
+    ok = (got == ["0", "", "1", "2", "3", "5"] and got2 == ["0", "2", "3", "", "", "5"]
+          and (scr.cursor.y, scr.cursor.x) == (5, 2))
+    print(f"{'ok  ' if ok else 'FAIL'} SD and SU scroll between the margins: {got} {got2}")
+    bad += not ok
     for name, chars, sa, sb, want_c, want_s in cases:
         d = compare_check(cap(chars, sa), cap(chars, sb))
         ok = (d["colour"], d["style"]) == (want_c, want_s)
