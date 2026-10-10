@@ -48,7 +48,7 @@ cd bench/parity
 | `--lenient-colours` | off | colour differences are reported but don't fail (by default they fail) |
 | `--keep-raw` | off | save every run's raw terminal output under `<report>/raw/` |
 | `--timeout-scale X` | 1 | multiply every wait, for slow machines |
-| `--env KEY=VALUE` | | set KEY in every scenario's environment, over the scenario's own `env` (`--env TERM=screen` runs the suite on a 16-colour terminal); `KEY=` unsets it. Repeatable |
+| `--env KEY=VALUE` | | set KEY in every scenario's environment, except where the scenario's own `env` sets it (`--env TERM=screen` runs the suite on a 16-colour terminal, and `colours-term-dumb` keeps its `TERM=dumb`); `KEY=` unsets it. Repeatable |
 | `--write-xfail` | | rewrite `expected_failures.yaml` from this run (keeps the reasons already there) |
 | `--list` | | list the scenarios |
 

@@ -740,7 +740,7 @@ def main(argv=None):
                 raise SystemExit(f"--env {kv!r}: use KEY=VALUE")
             over[k] = v if v else None
         for sc in scen.values():
-            sc["env"] = {**(sc.get("env") or {}), **over}
+            sc["env"] = {**over, **(sc.get("env") or {})}  # a scenario that sets a key keeps it
 
     os.makedirs(a.scratch, exist_ok=True)
     fixtures = os.path.abspath(a.fixtures or os.path.join(a.scratch, "fixtures"))
