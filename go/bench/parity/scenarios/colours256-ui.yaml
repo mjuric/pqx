@@ -1,0 +1,41 @@
+description: |
+  The general UI on a terminal of fewer colours (TERM=xterm-256color without COLORTERM: 256 colours): the data grid with the focus
+  and its cursor, the detail pane, the filter box with a hint and an error, and a dialog,
+  in the colours Python pqx (Rich) reduces its own to.
+covers:
+  - "README Looks: the terminal's own palette by default"
+fixture: demo
+env: {TERM: xterm-256color, COLORTERM: null}
+colours: 256
+sizes: [[120, 40]]
+python_bug:
+  - checks: [after-dialog]
+    region: keybar
+    ref_shows: 'enter apply   esc back'
+    correct: '^\s*/ filter   x clear filter'
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
+steps:
+  - check: grid
+  - keys: down down right
+    wait: 'row 2\b'
+  - check: cursor
+  - keys: d
+    wait: 'row 2 · file row 2'
+  - check: detail
+  - keys: esc
+    wait_gone: 'file row'
+  - keys: g
+    wait: 'Go to row[\s\S]*enter apply'
+  - check: dialog
+  - keys: esc
+    wait_gone: 'Go to row'
+  - check: after-dialog
+  - keys: /
+    wait: 'enter apply'
+  - text: "band = 'r' and"
+  - check: filter-typing
+  - keys: ctrl+u
+  - text: "nosuchcolumn > 1"
+  - keys: enter
+    wait: 'Query failed'
+  - check: filter-error

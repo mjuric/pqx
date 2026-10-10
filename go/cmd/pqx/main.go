@@ -12,7 +12,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/colorprofile"
 
 	"github.com/mjuric/pqx/go/internal/config"
 	"github.com/mjuric/pqx/go/internal/data"
@@ -181,9 +180,13 @@ func runApp(m tea.Model, look *theme.Theme, stderr io.Writer) (code int) {
 		fmt.Fprintf(stderr, "pqx: %v\n", err)
 		return 1
 	}
-	if look != nil && s.Output() != nil {
-		// colours reduced for the terminal as Python pqx (Rich) reduces them
-		look.SetProfile(colorprofile.Detect(s.Output(), os.Environ()))
+	// the colour system Python pqx (Textual) would pick, for the theme to
+	// reduce colours to as Rich reduces them, and for Bubble Tea, which
+	// then has nothing left to reduce (its own detection takes TERM=screen
+	// as 256 colours, Rich as 16)
+	profile := theme.DetectProfile(os.Environ())
+	if look != nil {
+		look.SetProfile(profile)
 	}
 	defer s.Close()
 	data.SetPanicHook(term.RestoreTerminal)
@@ -196,7 +199,7 @@ func runApp(m tea.Model, look *theme.Theme, stderr io.Writer) (code int) {
 			code = 1
 		}
 	}()
-	_, err = s.Run(m)
+	_, err = s.Run(m, tea.WithColorProfile(profile))
 	if sig, ok := s.Signal().(syscall.Signal); ok { // SIGTERM, SIGHUP, SIGQUIT
 		s.Close()
 		return 128 + int(sig)

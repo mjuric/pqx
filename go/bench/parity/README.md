@@ -48,10 +48,15 @@ cd bench/parity
 | `--lenient-colours` | off | colour differences are reported but don't fail (by default they fail) |
 | `--keep-raw` | off | save every run's raw terminal output under `<report>/raw/` |
 | `--timeout-scale X` | 1 | multiply every wait, for slow machines |
+| `--env KEY=VALUE` | | set KEY in every scenario's environment, over the scenario's own `env` (`--env TERM=screen` runs the suite on a 16-colour terminal); `KEY=` unsets it. Repeatable |
 | `--write-xfail` | | rewrite `expected_failures.yaml` from this run (keeps the reasons already there) |
 | `--list` | | list the scenarios |
 
-The apps start in a pty whose size is set before they run; `COLUMNS` and `LINES` are not
+The apps start in a pty with `TERM=xterm-256color` and no `COLORTERM` (removed from the
+inherited environment, with `TEXTUAL_COLOR_SYSTEM`, `CLICOLOR` and `CLICOLOR_FORCE`), so
+both draw in 256 colours unless a scenario's `env` (or `--env`) says otherwise: the
+`colours16-*` scenarios run with `TERM=screen` (16 colours, as in GNU screen), the
+`colours256-*` ones spell out the default. The apps start in a pty whose size is set before they run; `COLUMNS` and `LINES` are not
 set (Python's `shutil.get_terminal_size` reads them before the terminal, so a resize
 would go unseen). A smaller screen loses its bottom lines, as in xterm and VTE (pyte
 drops the top ones).
@@ -152,6 +157,8 @@ args: ["-w", "band = 'g'"]    # more arguments (before the file); {fixture} {fix
 sizes: [[120, 40]]            # default: 120x40 and 200x50
 ready: "✓ [\\d,]+ rows"        # startup regex (default: the fixture's, in fixtures.yaml)
 threads: 1                    # --threads for this scenario (1 makes DuckDB aggregates repeatable)
+env: {TERM: screen, COLORTERM: null}   # the apps' environment, over ptydrive's TERM; null unsets
+colours: 16                   # an error if the app sends colour codes a 16- (or "256"-) colour terminal lacks; truecolor: if it sends none in truecolor
 quiet: 1.0                    # seconds of an unchanged screen that count as settled (default 0.5)
 config: "columns:\n  ra: .2f\n"   # a formats.yaml to start with
 file: false                   # don't open a file (for CLI-only scenarios)
@@ -213,6 +220,41 @@ rows from `pqx.demo`, the tests' `demo_path`), `slow` (2,000,000 rows, for a cou
 enough to cancel), `odd` (the tests' `odd_path`: nested types, NaN/inf, a quoted name),
 `types` (one column per Arrow type, wide decimals, CJK, a long string), `units` (felis
 units, RAJ2000/DEJ2000), `wide` (60 columns), `notparquet` (a text file).
+
+## Colours on smaller terminals
+
+Python pqx draws in the colour system Textual picks (Rich's detection: `TERM`'s last
+part `256color` or `kitty`: 256 colours; `COLORTERM=truecolor` or `24bit`: truecolor;
+`TERM=dumb` or `unknown`: truecolor; anything else, `screen` and `xterm` too: the 16
+standard colours). Textual takes a 256-colour index as its truecolor value, and Rich's
+`Color.downgrade` reduces every colour for the terminal. Go pqx does the same
+(`theme.DetectProfile`, `theme.Theme.Paint`).
+
+| scenarios | `TERM` | colours | what |
+|---|---|---|---|
+| `colours16-plot`, `colours256-plot` | `screen`, `xterm-256color` | 16, 256 | sky map in magma, viridis and gray; xy density; the Stats histogram |
+| `colours16-ui`, `colours256-ui` | `screen`, `xterm-256color` | 16, 256 | grid, cursor, detail pane, a dialog, the filter box and its error |
+| `colours16-theme`, `colours256-theme` | `screen`, `xterm-256color` | 16, 256 | `--theme tokyo-night` |
+| `colours-term-dumb` | `dumb` | truecolor | Textual's fallback; Bubble Tea's own detection would draw no colour |
+| `colours-term-direct` | `xterm-direct` | 16 | Bubble Tea's own detection says truecolor |
+| `colours-term-kitty` | `xterm-kitty` | 256 | Bubble Tea's own detection says truecolor |
+
+`colours: 16` or `256` fails a run that sends a colour code the terminal lacks;
+`colours: truecolor` fails one that sends no truecolor colour. pyte compares colours
+by name (16) or hex (256), so a 256-colour index and the truecolor value of the same
+colour look alike; `colours:` is what tells them apart.
+
+Emulator fixes in `../pty/ptydrive.py` that came with these (`run.py --selftest`
+checks each):
+
+- HPA (``CSI n ` ``): pyte has it under the wrong final. Bubble Tea uses it instead
+  of CHA when `TERM` is `screen`, `linux` or a terminal it takes as modern (kitty and
+  others).
+- REP (`CSI n b`, repeat the last character): pyte lacks it. Bubble Tea uses it for
+  kitty, ghostty, wezterm and others.
+- DCH and ICH (`CSI n P`, `CSI n @`): the cells they free are filled with the
+  current background, as in xterm (background colour erase, which Bubble Tea's
+  renderer assumes); pyte used the default one.
 
 ## Expected failures
 

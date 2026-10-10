@@ -95,6 +95,40 @@ class Screen(pyte.Screen):
     def write_process_input(self, data):
         self._reply(data.encode())
 
+    def draw(self, data):
+        super().draw(data)
+        if data:
+            self._last_char = data[-1]
+
+    def repeat_last(self, count=None, *_):
+        """REP (CSI n b): the last character drawn, n more times (pyte lacks it;
+        Bubble Tea uses it when TERM names kitty, ghostty, wezterm, foot and others)."""
+        if getattr(self, "_last_char", None):
+            self.draw(self._last_char * (count or 1))
+
+    def _blank(self):
+        """A blank cell as xterm makes one when it shifts a line (background colour
+        erase): the cursor's background, nothing else."""
+        return self.default_char._replace(bg=self.cursor.attrs.bg)
+
+    def delete_characters(self, count=None):
+        """DCH (CSI n P): as pyte's, but the cells freed at the right margin get the
+        cursor's background, as in xterm, not the default one."""
+        count = count or 1
+        super().delete_characters(count)
+        line = self.buffer[self.cursor.y]
+        for x in range(max(self.cursor.x, self.columns - count), self.columns):
+            line[x] = self._blank()
+
+    def insert_characters(self, count=None):
+        """ICH (CSI n @): as pyte's, but the inserted blanks get the cursor's
+        background, as in xterm."""
+        count = count or 1
+        super().insert_characters(count)
+        line = self.buffer[self.cursor.y]
+        for x in range(self.cursor.x, min(self.cursor.x + count, self.columns)):
+            line[x] = self._blank()
+
     def scroll_up(self, count=None, *_):
         """SU (CSI n S): the lines between the margins move up n, blank lines come in
         at the bottom; the cursor stays. pyte lacks it (and SD), and ignored, a
@@ -115,9 +149,12 @@ class Screen(pyte.Screen):
 
 
 class ByteStream(pyte.ByteStream):
-    """pyte's byte stream, with SU and SD (CSI S, CSI T) as well."""
+    """pyte's byte stream, with SU and SD (CSI S, CSI T) and REP (CSI b) as well, and
+    HPA (CSI `), which pyte has under the wrong final ("'"); Bubble Tea moves with
+    HPA when TERM is screen, linux, kitty and others."""
 
-    csi = dict(pyte.ByteStream.csi, S="scroll_up", T="scroll_down")
+    csi = dict(pyte.ByteStream.csi, S="scroll_up", T="scroll_down", b="repeat_last",
+               **{"`": "cursor_to_column"})
 
     def select_graphic_rendition(self, *attrs, private=False):
         if private:  # CSI > ... m (xterm modifyOtherKeys etc.): not SGR
@@ -160,6 +197,28 @@ class ByteStream(pyte.ByteStream):
             super().select_graphic_rendition()
         if dim is not None:
             self.cursor.attrs = self.cursor.attrs._replace(blink=dim)
+
+
+def _ends_rep(name):
+    """Screen method `name`, made to forget the last character drawn first: REP
+    repeats a graphic character only right after it (ECMA-48), not after a control
+    or a cursor move (SGR, which only sets the style, keeps it)."""
+    method = getattr(Screen, name)
+
+    def wrapped(self, *args, **kwargs):
+        self._last_char = None
+        return method(self, *args, **kwargs)
+
+    wrapped.__doc__ = method.__doc__
+    setattr(Screen, name, wrapped)
+
+
+for _name in (set(ByteStream.csi.values()) | set(pyte.ByteStream.basic.values())
+              | set(pyte.ByteStream.escape.values())) - {
+        "select_graphic_rendition", "draw", "repeat_last", "bell", "report_device_attributes",
+        "report_device_status", "set_mode", "reset_mode"}:
+    if hasattr(Screen, _name):
+        _ends_rep(_name)
 
 
 _CSI_PRIVATE = re.compile(rb"\x1b\[[<=>][0-9;:]*[ -/]*[@-~]")
@@ -237,7 +296,7 @@ def cell_style(c) -> tuple:
 
 # ------------------------------------------------------------------ the session
 class Session:
-    def __init__(self, argv, cols=120, rows=40, env=None, cwd=None):
+    def __init__(self, argv, cols=120, rows=40, env=None, cwd=None, extra_env=None):
         self.cols, self.rows = cols, rows
         self.raw = bytearray()
         self.screen = Screen(cols, rows, self._answer)
@@ -254,6 +313,12 @@ class Session:
         # shutil.get_terminal_size reads them first), and a resize would go unseen
         for k in ("COLUMNS", "LINES", "NO_COLOR"):
             e.pop(k, None)
+        # extra_env goes on top of these (TERM, NO_COLOR too); a None value unsets
+        for k, v in (extra_env or {}).items():
+            if v is None:
+                e.pop(k, None)
+            else:
+                e[k] = v
         # the size is set on the pty before the app starts, so it never sees another
         master, slave = os.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))

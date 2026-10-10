@@ -368,14 +368,21 @@ func TestScrollbarRole(t *testing.T) {
 	}
 }
 
-// Paint keeps a 256-colour cube grey that Render already reduced (59,
-// #5f5f5f), rather than reducing it again to the grey ramp (240).
-func TestPaintKeepsReducedColours(t *testing.T) {
+// Paint reduces each colour once (#4F4270 → 59), and a 256-colour index in
+// the frame as Textual does: its truecolor value, reduced by Rich (59 →
+// 240, 188 → 252 at 256 colours; Python pqx sends these).
+func TestPaintReducesOnce(t *testing.T) {
 	th, _ := New("blue", "faint", "", "tokyo-night")
 	th.SetProfile(colorprofile.ANSI256)
 	out := th.Paint(th.Render(styled.New("x", th.Style("scrollbar"))), 1)
 	if !strings.Contains(out, "38;5;59") || strings.Contains(out, "38;5;240") {
 		t.Fatalf("%q", out)
+	}
+	out = th.Paint("\x1b[38;5;59mx\x1b[38;5;188my\x1b[48;5;145mz", 3)
+	for _, want := range []string{"38;5;240;", "38;5;252;", "48;5;248m"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q lacks %q", out, want)
+		}
 	}
 }
 

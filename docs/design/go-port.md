@@ -552,3 +552,38 @@ Go 5.33, Python 5.07). The differences found are in the findings.
 | DIFF, XFAIL, ERROR | 0 |
 
 `expected_failures.yaml` is empty.
+
+### Colours on 16- and 256-colour terminals (2026-10-10)
+
+Owner report: under GNU screen (`TERM=screen`, no `COLORTERM`) the Plot tab's sky map legend on SSSource showed magenta, magenta, red, light red, light red, yellow in Go and magenta, magenta, light red, light red, grey, white in Python.
+
+- **Cause.** Go took the colour profile from `colorprofile.Detect` (`cmd/pqx/main.go`), which calls `TERM=screen` (and `tmux*`) a 256-colour terminal; Rich, through Textual's console, calls every `TERM` not ending in `256color` or `kitty` a 16-colour one. Go sent the colourmap as 256-colour indices and GNU screen mapped them to 16 colours its own way. Also, without a named theme `Theme.Paint` returned the frame unchanged, so colours that didn't come through the theme's styles were left to Bubble Tea's downsampling, which picks other neighbours than Rich.
+- **Fix.** `theme.DetectProfile` is Textual's choice of colour system. The profile goes to the theme and to Bubble Tea (`tea.WithColorProfile`), and `Paint` reduces the colours of every frame with Rich's `Color.downgrade` (port in `internal/theme/downgrade.go`). Tests compare 33 environments and 1,223 colours (every 256-colour index, the colourmaps, the named themes, Monokai) at truecolor, 256 and 16 colours with Rich 15.0.0 and Textual 8.2.8 (`internal/theme/testdata/gen_rich_colours.py`).
+- **Textual sends a 256-colour index as truecolor** (`textual.color.Color.from_rich_color`), and Rich reduces that truecolor value. Found by the review round's scenarios:
+  - On a truecolor terminal Python sends the colourmaps as `38;2`, not `38;5`.
+  - On a 256-colour terminal the gray colourmap's greys move down the grey ramp (index 188 is sent as 252, 248 as 247).
+  - Go now does the same. Paint leaves 256-colour indices alone at 256 colours, as Render has already reduced them; reducing twice moved greys two steps.
+  - A named theme's Paint no longer keeps 256-colour indices it finds in a frame: it reduces them once from their truecolor value, as Textual does (59 → 240, 188 → 252).
+- **Colour system, Python vs Go** (same in every case tested):
+
+| environment | colours |
+|---|---|
+| `TERM=screen`, `xterm`, `xterm-color`, `xterm-16color`, `xterm-direct`, `linux`, `vt100`, empty or unset | 16 |
+| `TERM=screen-256color`, `tmux-256color`, `xterm-256color`, `xterm-kitty`, `kitty` | 256 |
+| `COLORTERM=truecolor` or `24bit` (any case) with any `TERM` | truecolor |
+| `TERM=dumb` or `unknown` | truecolor (Textual's fallback when Rich finds no colour) |
+| `TEXTUAL_COLOR_SYSTEM=standard`, `256`, `truecolor` | that system, over everything else |
+
+- **Differences kept** (proposed as intended; integrator's call): with `NO_COLOR` set Go draws no colours (attributes kept), where Python draws everything in grey shades through Textual's monochrome filter, with some black backgrounds; `TEXTUAL_COLOR_SYSTEM=windows` is taken as 16 standard colours (Python matches Windows' palette); an unknown `TEXTUAL_COLOR_SYSTEM` makes Python fail at startup and Go detect as usual.
+- **Harness.**
+  - Scenarios can set `TERM`/`COLORTERM` (`env:`, `run.py --env`).
+  - `colours: 16|256` fails a run that sends colour codes the terminal lacks; `colours: truecolor` fails one that sends no truecolor.
+  - `colours16-*` and `colours256-*` cover:
+    - the sky map (magma, viridis, gray), the xy density and the Stats histogram;
+    - the grid with focus and cursor, the detail pane, a dialog and the filter error;
+    - a named theme.
+  - `colours-term-{dumb,direct,kitty}` cover TERMs where Bubble Tea's own detection differs. Without `tea.WithColorProfile`, `colours-term-dumb` fails.
+  - pyte needed HPA (`` CSI n ` ``), REP (`CSI n b`) and background colour erase for DCH/ICH (`run.py --selftest` covers them).
+  - Results: the nine scenarios pass Python vs Python and Python vs Go. The Go before the fix fails the 16-colour plot and theme scenarios. The whole suite at `--env TERM=screen --size 120x40`: 67 PASS, 12 PYBUG, 7 INTENDED, nothing else. The whole suite as before (256 colours, both sizes; on native-port with #100): 116 PASS, 20 PYBUG, 14 INTENDED, nothing else.
+- **Real data.** SSSource, Plot tab sky mode under `TERM=screen` in the pty: Go's screen has the same colour in every cell as Python's (legend magenta, magenta, bright red, bright red, white, bright white).
+- **GNU screen without `defbce on`.** Bubble Tea's renderer erases and shifts cells (ECH, EL, DCH) assuming background colour erase, which GNU screen has off by default. The integrator's review checked a real screen session with bce off: the theme background is filled in both apps.
