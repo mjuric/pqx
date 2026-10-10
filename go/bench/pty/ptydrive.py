@@ -95,6 +95,17 @@ class Screen(pyte.Screen):
     def write_process_input(self, data):
         self._reply(data.encode())
 
+    def draw(self, data):
+        super().draw(data)
+        if data:
+            self._last_char = data[-1]
+
+    def repeat_last(self, count=None, *_):
+        """REP (CSI n b): the last character drawn, n more times (pyte lacks it;
+        Bubble Tea uses it when TERM names kitty, ghostty, wezterm, foot and others)."""
+        if getattr(self, "_last_char", None):
+            self.draw(self._last_char * (count or 1))
+
     def _blank(self):
         """A blank cell as xterm makes one when it shifts a line (background colour
         erase): the cursor's background, nothing else."""
@@ -138,11 +149,12 @@ class Screen(pyte.Screen):
 
 
 class ByteStream(pyte.ByteStream):
-    """pyte's byte stream, with SU and SD (CSI S, CSI T) as well, and HPA (CSI `),
-    which pyte has under the wrong final ("'"); Bubble Tea moves with HPA when
-    TERM is screen or linux."""
+    """pyte's byte stream, with SU and SD (CSI S, CSI T) and REP (CSI b) as well, and
+    HPA (CSI `), which pyte has under the wrong final ("'"); Bubble Tea moves with
+    HPA when TERM is screen, linux, kitty and others."""
 
-    csi = dict(pyte.ByteStream.csi, S="scroll_up", T="scroll_down", **{"`": "cursor_to_column"})
+    csi = dict(pyte.ByteStream.csi, S="scroll_up", T="scroll_down", b="repeat_last",
+               **{"`": "cursor_to_column"})
 
     def select_graphic_rendition(self, *attrs, private=False):
         if private:  # CSI > ... m (xterm modifyOtherKeys etc.): not SGR

@@ -22,6 +22,14 @@ steps:
   - keys: enter
     wait: 'colour viridis ▾'
   - check: sky-viridis
+  # gray: 256-colour greys, which Textual sends as truecolor and Rich reduces to the
+  # grey ramp (188 → 252)
+  - click: '(?<=colour )viridis ▾'
+    wait: 'type to filter   ↑↓ move|↑↓ move'
+  - keys: down down down
+  - keys: enter
+    wait: 'colour gray ▾'
+  - check: sky-gray
   - click: '(?<=mode )sky ▾'
     wait: 'type to filter   ↑↓ move|↑↓ move'
   - keys: down

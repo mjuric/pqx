@@ -1,0 +1,16 @@
+description: |
+  The colour system for TERM=xterm-direct: Rich's 16 colours (Bubble Tea's own detection says truecolor). The grid and the sky map in the colours Python pqx sends.
+covers:
+  - "Go pqx draws in the colour system Python pqx (Textual) picks from TERM and COLORTERM"
+fixture: demo
+env: {TERM: xterm-direct, COLORTERM: null}
+colours: 16
+threads: 1
+quiet: 1.0
+sizes: [[120, 40]]
+steps:
+  - check: grid
+  - keys: "4"
+    wait: '✓ Binned ra × dec'
+  - check: sky
+    expect: ['mode sky ▾', 'density:']

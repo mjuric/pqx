@@ -290,9 +290,9 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
         if s.exited is not None and not any("exit" in (st if isinstance(st, dict) else {}) for st in sc["steps"]):
             res["errors"].append(f"app exited with status {s.exited}")
         if sc.get("colours"):
-            bad = colour_codes_beyond(bytes(s.raw), str(sc["colours"]))
-            if bad:
-                res["errors"].append(f"colours: {sc['colours']}-colour terminal sent {', '.join(bad)}")
+            err = colour_check(bytes(s.raw), str(sc["colours"]))
+            if err:
+                res["errors"].append(f"colours: {err}")
         if keep_raw:
             with open(os.path.join(keep_raw, f"{sc['name']}.{res['size']}.{app}.raw"), "wb") as fh:
                 fh.write(bytes(s.raw))
@@ -303,19 +303,30 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
     return res
 
 
-def colour_codes_beyond(raw: bytes, system: str) -> list[str]:
-    """The SGR colour forms in raw output that a terminal of `system` colours ("16" or
-    "256") doesn't have: 256-colour (38;5 / 48;5) and truecolor (38;2 / 48;2) codes."""
+def colour_forms(raw: bytes) -> set[str]:
+    """The extended SGR colour forms in raw output: 38;5 / 48;5 (256 colours) and
+    38;2 / 48;2 (truecolor)."""
     found = set()
     for m in re.finditer(rb"\x1b\[([0-9;:]*)m", raw):
         ps = m.group(1).decode().replace(":", ";").split(";")
         for i, p in enumerate(ps[:-1]):
             if p in ("38", "48") and ps[i + 1] in ("2", "5"):
                 found.add(f"{p};{ps[i + 1]}")
+    return found
+
+
+def colour_check(raw: bytes, system: str) -> str | None:
+    """What's wrong with raw output for a terminal of `system` colours, or None: for
+    "16" and "256", colour forms the terminal lacks; for "truecolor", no truecolor
+    colour at all (an app that reduced or dropped its colours)."""
+    found = colour_forms(raw)
+    if system == "truecolor":
+        return None if found & {"38;2", "48;2"} else "a truecolor terminal got no truecolor colour"
     allowed = {"16": set(), "256": {"38;5", "48;5"}}.get(system)
     if allowed is None:
-        return []
-    return sorted(found - allowed)
+        return f"unknown colour system {system!r} (16, 256 or truecolor)"
+    bad = sorted(found - allowed)
+    return f"{system}-colour terminal sent {', '.join(bad)}" if bad else None
 
 
 def plain_text(b: bytes) -> str:
@@ -535,6 +546,51 @@ def selftest():
           and (scr.cursor.y, scr.cursor.x) == (5, 2))
     print(f"{'ok  ' if ok else 'FAIL'} SD and SU scroll between the margins: {got} {got2}")
     bad += not ok
+    # HPA (CSI n `), which Bubble Tea uses for TERM=screen: the column, the row kept
+    scr = Screen(6, 2, lambda d: None)
+    st = ByteStream(scr)
+    st.feed(b"\x1b[2;1Hab\x1b[5`c")
+    ok = scr.display[1] == "ab  c " and (scr.cursor.y, scr.cursor.x) == (1, 5)
+    print(f"{'ok  ' if ok else 'FAIL'} HPA moves to the column: {scr.display[1]!r}")
+    bad += not ok
+    # REP (CSI n b): the last character drawn, n more times, in its style
+    scr = Screen(8, 1, lambda d: None)
+    st = ByteStream(scr)
+    st.feed(b"a\x1b[31m\xe2\x96\x88\x1b[3bz")
+    row = scr.buffer[0]
+    ok = scr.display[0] == "a\u2588\u2588\u2588\u2588z  " and row[4].fg == "red" and scr.cursor.x == 6
+    print(f"{'ok  ' if ok else 'FAIL'} REP repeats the last character: {scr.display[0]!r}")
+    bad += not ok
+    # DCH and ICH (CSI n P, CSI n @): the freed and inserted cells get the cursor's
+    # background (xterm's background colour erase), nothing else of its style
+    scr = Screen(6, 1, lambda d: None)
+    st = ByteStream(scr)
+    st.feed(b"abcdef\x1b[1;2H\x1b[1;31;44m\x1b[2P")
+    row = scr.buffer[0]
+    dch = ("".join(row[x].data for x in range(6)),
+           [(row[x].fg, row[x].bg, row[x].bold) for x in (3, 4, 5)])
+    st.feed(b"\x1b[1;1H\x1b[42m\x1b[1@")
+    ich = ("".join(row[x].data for x in range(6)), (row[0].fg, row[0].bg, row[0].bold), row[1].bg)
+    ok = (dch == ("adef  ", [("default", "default", False), ("default", "blue", False),
+                             ("default", "blue", False)])
+          and ich == (" adef ", ("default", "green", False), "default"))
+    print(f"{'ok  ' if ok else 'FAIL'} DCH and ICH fill with the background: {dch} {ich}")
+    bad += not ok
+    # the colours: check on made-up output
+    for raw, system, want in [
+            (b"\x1b[31;1mx\x1b[m", "16", None),
+            (b"\x1b[0;38;5;200mx", "16", "16-colour terminal sent 38;5"),
+            (b"\x1b[48;2;1;2;3;38;5;9mx", "16", "16-colour terminal sent 38;5, 48;2"),
+            (b"\x1b[38:5:200mx", "16", "16-colour terminal sent 38;5"),
+            (b"\x1b[48;5;17mx", "256", None),
+            (b"\x1b[38;2;1;2;3mx", "256", "256-colour terminal sent 38;2"),
+            (b"\x1b[38;2;1;2;3mx", "truecolor", None),
+            (b"\x1b[38;5;17;1mx\x1b[31m", "truecolor", "a truecolor terminal got no truecolor colour"),
+            (b"\x1b[3m38;2;1;2;3 as text", "16", None)]:
+        got = colour_check(raw, system)
+        ok = got == want
+        print(f"{'ok  ' if ok else 'FAIL'} colours: {system} on {raw!r}: {got}")
+        bad += not ok
     for name, chars, sa, sb, want_c, want_s in cases:
         d = compare_check(cap(chars, sa), cap(chars, sb))
         ok = (d["colour"], d["style"]) == (want_c, want_s)
