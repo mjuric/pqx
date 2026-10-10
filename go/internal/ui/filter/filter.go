@@ -56,12 +56,13 @@ type Filter struct {
 	hint    string
 	hintSet bool
 
-	pending  *kit.SetViewMsg // the view being checked ("validate")
-	own      *data.View      // a SetViewMsg the filter sent itself, on its way
-	typed    bool            // the view on its way was typed (Enter): a failure focuses the box again
-	remember string          // the filter "=" made, for the history once it applies
-	mark     string          // the error to show once the view on its way applies (a revert)
-	noted    bool            // DuckDB can't read the file: said once
+	pending   *kit.SetViewMsg // the view being checked ("validate")
+	own       *data.View      // a SetViewMsg the filter sent itself, on its way
+	typed     bool            // the view on its way was typed (Enter): a failure focuses the box again
+	typedView *data.View      // the view typed (Enter) until checked: still typed when the grid sends it again
+	remember  string          // the filter "=" made, for the history once it applies
+	mark      string          // the error to show once the view on its way applies (a revert)
+	noted     bool            // DuckDB can't read the file: said once
 
 	counts map[string]int64
 	w      int // the input's width
@@ -313,6 +314,11 @@ func (f *Filter) onSetView(m kit.SetViewMsg) tea.Cmd {
 	v := m.View
 	own := f.own != nil && sameView(*f.own, v)
 	f.own = nil
+	if f.typedView != nil && sameView(*f.typedView, v) {
+		// the typed view, sent again by the grid after one of its own
+		// (a quick s): still the filter's own, still typed
+		own, f.typed = true, true
+	}
 	f.remember = ""
 	if !own {
 		f.typed = false
@@ -419,9 +425,11 @@ func (f *Filter) onKey(k tea.KeyPressMsg) tea.Cmd {
 		text := strings.TrimSpace(f.in.Value())
 		f.addHistory(text)
 		f.typed = true
+		v := f.viewFor(text)
+		f.typedView = &v
 		// focus leaves the box at once: keys typed while the query is
 		// checked are commands, not text (it comes back if it fails)
-		return tea.Sequence(kit.Send(kit.FocusMsg{Pane: f.body()}), f.send(f.viewFor(text), -1))
+		return tea.Sequence(kit.Send(kit.FocusMsg{Pane: f.body()}), f.send(v, -1))
 	case "ctrl+x":
 		f.sel = false
 		if f.in.Value() != "" && f.st.View.Plain() {
@@ -519,6 +527,9 @@ func (f *Filter) apply(v data.View, keep int64) tea.Cmd {
 
 func (f *Filter) onValidated(r validated) tea.Cmd {
 	f.pending = nil
+	if f.typedView != nil && sameView(*f.typedView, r.req.View) {
+		f.typedView = nil // checked: whatever comes next wasn't typed
+	}
 	if r.err != nil {
 		if errors.Is(r.err, context.Canceled) {
 			return nil

@@ -839,6 +839,8 @@ func TestLatestViewWins(t *testing.T) {
 		{"= = x", []step{{key: "="}, {key: "="}, {key: "x"}}, data.View{}},
 		{"s s, then the box", []step{{key: "s"}, {key: "s"}, {view: &ext}}, ext},
 		{"=, then the box", []step{{key: "="}, {view: &ext}}, ext},
+		{"s, the box, s", []step{{key: "s"}, {view: &ext}, {key: "s"}}, data.View{Where: ext.Where, OrderBy: []data.Sort{{Column: "c002"}}}},
+		{"s, the box, =", []step{{key: "s"}, {view: &ext}, {key: "="}}, data.View{Where: "id % 2 = 0 and c002 = 2"}},
 	} {
 		for run := 0; run < 5; run++ {
 			h := newHarness(t, newFake(1000, 5), 120, 30)
@@ -855,6 +857,35 @@ func TestLatestViewWins(t *testing.T) {
 				t.Errorf("%s: view %+v, want %+v", c.name, got, c.want)
 				break
 			}
+		}
+	}
+}
+
+// A typed filter that fails gets the box back to edit it, even when it was
+// typed right after a quick s: the grid queues it behind its own view and
+// sends it again, and the filter still knows it as its typed one.
+func TestTypedFilterFailsAfterQuickSort(t *testing.T) {
+	for run := 0; run < 5; run++ {
+		h := newHarness(t, newFake(1000, 5), 120, 30)
+		h.press("right", "right")
+		// one burst: s, /, (oops, Enter (no settling in between)
+		h.send(kp("s"))
+		h.send(kit.FocusMsg{Pane: "filter"}) // what / asks for
+		for _, r := range "(oops" {
+			h.send(tea.KeyPressMsg{Code: r, Text: string(r)})
+		}
+		h.send(kp("enter"))
+		h.settle()
+		if !h.f.TypingFocused() || h.g.focused {
+			t.Fatalf("run %d: box focused %v, grid focused %v", run, h.f.TypingFocused(), h.g.focused)
+		}
+		if !h.f.BorderError() || h.status.Severity != kit.Error {
+			t.Fatalf("run %d: no error shown: border %v, status %+v", run, h.f.BorderError(), h.status)
+		}
+		// (the failed filter isn't shown; whether the sort stays is the
+		// typed filter's base, an issue of its own)
+		if got := h.env.State.View; got.Where != "" {
+			t.Errorf("run %d: view %+v, want no filter", run, got)
 		}
 	}
 }
