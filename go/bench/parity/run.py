@@ -155,16 +155,20 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
     if threads:
         argv += ["--threads", str(threads)]
     env = dict(os.environ, XDG_CONFIG_HOME=os.path.join(work, "config"))
-    for k in ("PQX_ACCENT", "PQX_DIM", "PQX_BORDER"):  # the user's own settings
+    # the user's own settings, and what decides the colour system besides TERM
+    # (ptydrive sets TERM=xterm-256color: 256 colours unless a scenario says otherwise)
+    for k in ("PQX_ACCENT", "PQX_DIM", "PQX_BORDER", "COLORTERM", "TEXTUAL_COLOR_SYSTEM",
+              "CLICOLOR", "CLICOLOR_FORCE"):
         env.pop(k, None)
-    env.update({k: fill(str(v)) for k, v in (sc.get("env") or {}).items()})
+    # the scenario's env (and run.py --env) go on top of ptydrive's TERM; null unsets
+    extra_env = {k: None if v is None else fill(str(v)) for k, v in (sc.get("env") or {}).items()}
     if sc.get("config"):  # a formats.yaml to start from
         os.makedirs(os.path.join(work, "config", "pqx"))
         with open(os.path.join(work, "config", "pqx", "formats.yaml"), "w") as fh:
             fh.write(sc["config"])
     res = {"app": app, "slot": slot, "size": f"{cols}x{rows}", "checks": [], "errors": [], "argv": argv}
     t0 = time.perf_counter()
-    s = Session(argv, cols, rows, env=env, cwd=out_dir)
+    s = Session(argv, cols, rows, env=env, cwd=out_dir, extra_env=extra_env)
     T = timeout_scale
 
     def capture(name):
@@ -285,6 +289,10 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
     finally:
         if s.exited is not None and not any("exit" in (st if isinstance(st, dict) else {}) for st in sc["steps"]):
             res["errors"].append(f"app exited with status {s.exited}")
+        if sc.get("colours"):
+            bad = colour_codes_beyond(bytes(s.raw), str(sc["colours"]))
+            if bad:
+                res["errors"].append(f"colours: {sc['colours']}-colour terminal sent {', '.join(bad)}")
         if keep_raw:
             with open(os.path.join(keep_raw, f"{sc['name']}.{res['size']}.{app}.raw"), "wb") as fh:
                 fh.write(bytes(s.raw))
@@ -293,6 +301,21 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
         if not res["errors"]:
             shutil.rmtree(work, ignore_errors=True)
     return res
+
+
+def colour_codes_beyond(raw: bytes, system: str) -> list[str]:
+    """The SGR colour forms in raw output that a terminal of `system` colours ("16" or
+    "256") doesn't have: 256-colour (38;5 / 48;5) and truecolor (38;2 / 48;2) codes."""
+    found = set()
+    for m in re.finditer(rb"\x1b\[([0-9;:]*)m", raw):
+        ps = m.group(1).decode().replace(":", ";").split(";")
+        for i, p in enumerate(ps[:-1]):
+            if p in ("38", "48") and ps[i + 1] in ("2", "5"):
+                found.add(f"{p};{ps[i + 1]}")
+    allowed = {"16": set(), "256": {"38;5", "48;5"}}.get(system)
+    if allowed is None:
+        return []
+    return sorted(found - allowed)
 
 
 def plain_text(b: bytes) -> str:
@@ -624,6 +647,9 @@ def main(argv=None):
     p.add_argument("--lenient-colours", action="store_true",
                    help="colour differences are reported but don't fail (they fail by default)")
     p.add_argument("--timeout-scale", type=float, default=1.0)
+    p.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
+                   help="set KEY in every scenario's environment, over the scenario's own (TERM=screen; "
+                        "KEY= with no value unsets it)")
     p.add_argument("--keep-raw", action="store_true", help="save each run's raw terminal output")
     p.add_argument("--list", action="store_true", help="list the scenarios and exit")
     p.add_argument("--selftest", action="store_true", help="check the style comparison on made-up cells")
@@ -641,6 +667,16 @@ def main(argv=None):
         if not names:
             raise SystemExit(f"no scenario matches {a.scenarios}")
         scen = {n: scen[n] for n in names}
+
+    if a.env:
+        over = {}
+        for kv in a.env:
+            k, sep, v = kv.partition("=")
+            if not sep or not k:
+                raise SystemExit(f"--env {kv!r}: use KEY=VALUE")
+            over[k] = v if v else None
+        for sc in scen.values():
+            sc["env"] = {**(sc.get("env") or {}), **over}
 
     os.makedirs(a.scratch, exist_ok=True)
     fixtures = os.path.abspath(a.fixtures or os.path.join(a.scratch, "fixtures"))

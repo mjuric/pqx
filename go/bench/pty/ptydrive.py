@@ -95,6 +95,29 @@ class Screen(pyte.Screen):
     def write_process_input(self, data):
         self._reply(data.encode())
 
+    def _blank(self):
+        """A blank cell as xterm makes one when it shifts a line (background colour
+        erase): the cursor's background, nothing else."""
+        return self.default_char._replace(bg=self.cursor.attrs.bg)
+
+    def delete_characters(self, count=None):
+        """DCH (CSI n P): as pyte's, but the cells freed at the right margin get the
+        cursor's background, as in xterm, not the default one."""
+        count = count or 1
+        super().delete_characters(count)
+        line = self.buffer[self.cursor.y]
+        for x in range(max(self.cursor.x, self.columns - count), self.columns):
+            line[x] = self._blank()
+
+    def insert_characters(self, count=None):
+        """ICH (CSI n @): as pyte's, but the inserted blanks get the cursor's
+        background, as in xterm."""
+        count = count or 1
+        super().insert_characters(count)
+        line = self.buffer[self.cursor.y]
+        for x in range(self.cursor.x, min(self.cursor.x + count, self.columns)):
+            line[x] = self._blank()
+
     def scroll_up(self, count=None, *_):
         """SU (CSI n S): the lines between the margins move up n, blank lines come in
         at the bottom; the cursor stays. pyte lacks it (and SD), and ignored, a
@@ -115,9 +138,11 @@ class Screen(pyte.Screen):
 
 
 class ByteStream(pyte.ByteStream):
-    """pyte's byte stream, with SU and SD (CSI S, CSI T) as well."""
+    """pyte's byte stream, with SU and SD (CSI S, CSI T) as well, and HPA (CSI `),
+    which pyte has under the wrong final ("'"); Bubble Tea moves with HPA when
+    TERM is screen or linux."""
 
-    csi = dict(pyte.ByteStream.csi, S="scroll_up", T="scroll_down")
+    csi = dict(pyte.ByteStream.csi, S="scroll_up", T="scroll_down", **{"`": "cursor_to_column"})
 
     def select_graphic_rendition(self, *attrs, private=False):
         if private:  # CSI > ... m (xterm modifyOtherKeys etc.): not SGR
@@ -237,7 +262,7 @@ def cell_style(c) -> tuple:
 
 # ------------------------------------------------------------------ the session
 class Session:
-    def __init__(self, argv, cols=120, rows=40, env=None, cwd=None):
+    def __init__(self, argv, cols=120, rows=40, env=None, cwd=None, extra_env=None):
         self.cols, self.rows = cols, rows
         self.raw = bytearray()
         self.screen = Screen(cols, rows, self._answer)
@@ -254,6 +279,12 @@ class Session:
         # shutil.get_terminal_size reads them first), and a resize would go unseen
         for k in ("COLUMNS", "LINES", "NO_COLOR"):
             e.pop(k, None)
+        # extra_env goes on top of these (TERM, NO_COLOR too); a None value unsets
+        for k, v in (extra_env or {}).items():
+            if v is None:
+                e.pop(k, None)
+            else:
+                e[k] = v
         # the size is set on the pty before the app starts, so it never sees another
         master, slave = os.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))

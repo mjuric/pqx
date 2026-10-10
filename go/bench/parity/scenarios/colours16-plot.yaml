@@ -1,0 +1,39 @@
+description: |
+  Plots on a terminal of fewer colours (TERM=screen without COLORTERM: 16 colours): the sky map's and the xy density's
+  colourmaps, their legends and the Stats histogram reduced as Python pqx (Rich) reduces
+  them; no colour codes the terminal lacks are sent.
+covers:
+  - "Owner report: the sky map's legend colours differ under GNU screen (TERM=screen)"
+  - "README Astronomy: Sky maps. Mollweide maps of any lon/lat pair, with RA/Dec found automatically"
+fixture: demo
+env: {TERM: screen, COLORTERM: null}
+colours: 16
+threads: 1
+quiet: 1.0
+sizes: [[120, 40]]
+steps:
+  - keys: "4"
+    wait: '✓ Binned ra × dec'
+  - check: sky
+    expect: ['mode sky ▾', 'colour magma ▾', 'density:']
+  - click: '(?<=colour )magma ▾'
+    wait: 'type to filter   ↑↓ move'
+  - keys: down
+  - keys: enter
+    wait: 'colour viridis ▾'
+  - check: sky-viridis
+  - click: '(?<=mode )sky ▾'
+    wait: 'type to filter   ↑↓ move|↑↓ move'
+  - keys: down
+  - keys: enter
+    wait: 'mode xy ▾'
+  - wait: '✓ Binned'
+  - check: xy
+  - keys: "1"
+    wait: '│ [✓*] '
+  - keys: right right right right right right right right right right right
+  - keys: i
+    wait: '✓ Profiled snr'
+  - keys: l l
+  - check: stats-histogram
+    expect: ['p50', 'median']
