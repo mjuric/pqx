@@ -21,9 +21,10 @@ type richColours struct {
 		System string
 	}
 	Colours []struct {
-		Spec string
-		C256 string `json:"256"`
-		C16  string `json:"16"`
+		Spec  string
+		CTrue string `json:"truecolor"`
+		C256  string `json:"256"`
+		C16   string `json:"16"`
 	}
 }
 
@@ -55,6 +56,11 @@ func TestDetectProfileAsTextual(t *testing.T) {
 		if got := DetectProfile(env); got != want[c.System] {
 			t.Errorf("%v: %v, want %s (%v)", c.Env, got, c.System, want[c.System])
 		}
+	}
+	// TEXTUAL_COLOR_SYSTEM=windows: Windows' 16-colour palette in Python,
+	// the 16 standard colours here
+	if got := DetectProfile([]string{"TERM=xterm-256color", "COLORTERM=truecolor", "TEXTUAL_COLOR_SYSTEM=windows"}); got != colorprofile.ANSI {
+		t.Errorf("TEXTUAL_COLOR_SYSTEM=windows: %v", got)
 	}
 	// NO_COLOR, set to anything: no colours (Python pqx draws greys instead)
 	for _, env := range [][]string{{"NO_COLOR=", "TERM=xterm-256color"}, {"TERM=screen", "NO_COLOR=1"}} {
@@ -96,7 +102,8 @@ func firstSGR(s string) string {
 }
 
 // Every colour pqx draws (the colourmaps' colours and indices, every
-// 256-colour index, the themes' palettes) is reduced as Rich reduces it,
+// 256-colour index, the themes' palettes) goes out as Python pqx sends it
+// (Textual's colour, reduced by Rich) at truecolor, 256 and 16 colours,
 // whether it comes through the theme's styles (Render) or a frame's own SGR
 // (Paint without a named theme).
 func TestReduceAsRich(t *testing.T) {
@@ -104,7 +111,7 @@ func TestReduceAsRich(t *testing.T) {
 	for _, sys := range []struct {
 		p    colorprofile.Profile
 		name string
-	}{{colorprofile.ANSI256, "256"}, {colorprofile.ANSI, "16"}} {
+	}{{colorprofile.TrueColor, "truecolor"}, {colorprofile.ANSI256, "256"}, {colorprofile.ANSI, "16"}} {
 		th := mustNew(t, "", "", "", "")
 		th.SetProfile(sys.p)
 		bad := 0
@@ -114,15 +121,18 @@ func TestReduceAsRich(t *testing.T) {
 			}
 		}
 		for _, c := range rc.Colours {
-			want := c.C256
-			if sys.p == colorprofile.ANSI {
-				want = c.C16
-			}
+			want := map[colorprofile.Profile]string{
+				colorprofile.TrueColor: c.CTrue, colorprofile.ANSI256: c.C256, colorprofile.ANSI: c.C16,
+			}[sys.p]
 			if got := firstSGR(th.Render(styled.New("x", styled.Style{Fg: styled.Color(c.Spec)}))); got != want {
 				fail("Render fg %s: %q, want %q", c.Spec, got, want)
 			}
 			if got := firstSGR(th.Render(styled.New("x", styled.Style{Bg: styled.Color(c.Spec)}))); got != background(want) {
 				fail("Render bg %s: %q, want %q", c.Spec, got, background(want))
+			}
+			// Paint over Render (what the root does) changes nothing more
+			if got := firstSGR(th.Paint(th.Render(styled.New("x", styled.Style{Fg: styled.Color(c.Spec)})), 1)); got != want {
+				fail("Paint(Render) fg %s: %q, want %q", c.Spec, got, want)
 			}
 			var raw string
 			if strings.HasPrefix(c.Spec, "#") {
@@ -130,8 +140,11 @@ func TestReduceAsRich(t *testing.T) {
 				raw = "38;2;" + strconv.Itoa(int(h.r)) + ";" + strconv.Itoa(int(h.g)) + ";" + strconv.Itoa(int(h.b))
 			} else {
 				n, _ := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(c.Spec, "color("), ")"))
-				if n < 16 && sys.p == colorprofile.ANSI256 {
-					continue // kept as 38;5;N, the same colour as Rich's 3x/9x
+				if n < 16 && sys.p != colorprofile.ANSI || sys.p == colorprofile.ANSI256 {
+					// Paint keeps 38;5;N on a 256-colour terminal (Render has
+					// reduced it already), and below 16 on a truecolor one (the
+					// same colour as Rich's 3x/9x)
+					continue
 				}
 				raw = "38;5;" + strconv.Itoa(n)
 			}
@@ -183,10 +196,26 @@ func TestReduceFrameKeeps(t *testing.T) {
 	if got, want := th.Paint(frame, 2), "\x1b[30m\x1b[35;44mx\x1b[31;2m\x1b[?25ly\x1b[m"; got != want {
 		t.Errorf("16: %q, want %q", got, want)
 	}
-	// a cut-off or malformed sequence passes as it is
-	for _, f := range []string{"x\x1b[38;2;1;2", "\x1b[38;2;1;2;999mx", "\x1b[38;5mx"} {
-		if got := th.Paint(f, 1); got != f {
-			t.Errorf("%q: %q", f, got)
+	// a cut-off or malformed sequence passes as it is, at 256 and 16 colours
+	for _, p := range []colorprofile.Profile{colorprofile.ANSI256, colorprofile.ANSI} {
+		th.SetProfile(p)
+		for _, f := range []string{
+			"x\x1b[38;2;1;2", "\x1b[38;2;1;2;999mx", "\x1b[38;5mx",
+			"\x1b[38;2;1;2mx", "\x1b[48;2;1;2mx", "\x1b[38;2;1mx", "\x1b[48;2mx", "\x1b[38;2mx",
+			"\x1b[38;5;300mx", "\x1b[48;5;256mx", "\x1b[38;5;-1mx", "\x1b[38;2;256;0;0mx",
+		} {
+			if got := th.Paint(f, 1); got != f {
+				t.Errorf("%v %q: %q", p, f, got)
+			}
 		}
+	}
+	// a cut-off truecolor colour with parameters after it: 38;2;1;2 takes
+	// the 1 as its blue; parameters are read as far as there are five
+	th.SetProfile(colorprofile.ANSI)
+	if got, want := th.Paint("\x1b[38;2;1;2;1mx", 1), "\x1b[30mx"; got != want {
+		t.Errorf("38;2;1;2;1: %q, want %q", got, want)
+	}
+	if got, want := th.Paint("\x1b[1;48;2;255;0;0;4mx", 1), "\x1b[1;41;4mx"; got != want { // Rich: #ff0000 is red (41)
+		t.Errorf("bg with params around: %q, want %q", got, want)
 	}
 }

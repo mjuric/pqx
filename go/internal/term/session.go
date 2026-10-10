@@ -1,7 +1,6 @@
 package term
 
 import (
-	"io"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -25,15 +24,6 @@ type Session struct {
 }
 
 var active atomic.Pointer[Session]
-
-// Output is what pqx draws on (for colorprofile.Detect); nil where Bubble
-// Tea picks it.
-func (s *Session) Output() io.Writer {
-	if s.out == nil {
-		return nil
-	}
-	return s.out
-}
 
 // ProgramOptions are the options that make Bubble Tea use the session's
 // input and output; signals are the session's (Run).

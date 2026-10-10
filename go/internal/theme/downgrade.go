@@ -91,9 +91,18 @@ func (t *Theme) out(c color.Color) color.Color {
 	return t.reduce(c)
 }
 
-// reduce is c for a terminal of the theme's profile.
+// reduce is c for a terminal of the theme's profile. A 256-colour index
+// beyond the 16 ANSI colours is first its xterm truecolor value, as Textual
+// takes it (textual.color.Color.from_rich_color), so on a 256-colour
+// terminal the cube's greys move to the grey ramp (188 → 252) and on a
+// truecolor one it is sent as truecolor, as Python pqx sends it.
 func (t *Theme) reduce(c color.Color) color.Color {
+	if ic, ok := c.(ansi.IndexedColor); ok && ic >= 16 && t.profile >= colorprofile.ANSI256 {
+		c = xterm(int(ic)).color()
+	}
 	switch t.profile {
+	case colorprofile.TrueColor:
+		return c
 	case colorprofile.ANSI256:
 		if rgb, ok := c.(color.RGBA); ok {
 			return ansi.IndexedColor(rich256(rgb.R, rgb.G, rgb.B))
@@ -116,13 +125,18 @@ func (t *Theme) reduce(c color.Color) color.Color {
 // the terminal's profile (reduce), the rest as it is: the colours of a frame
 // without a named theme that didn't come from the theme's styles (a part's
 // own SGR, a colourmap) are reduced here, so none is left to Bubble Tea,
-// which reduces them its own way. A 256-colour index stays as it is on a
-// 256-colour terminal, as Rich keeps it.
+// which reduces them its own way. On a 256-colour terminal a 256-colour
+// index is left as it is: it comes from Render, already reduced.
 func (t *Theme) reduceFrame(frame string) string {
-	if t.profile != colorprofile.ANSI && t.profile != colorprofile.ANSI256 {
+	switch t.profile {
+	case colorprofile.ANSI, colorprofile.ANSI256, colorprofile.TrueColor:
+	default:
 		return frame
 	}
-	if !strings.Contains(frame, "8;2;") && !(t.profile == colorprofile.ANSI && strings.Contains(frame, "8;5;")) {
+	switch {
+	case t.profile == colorprofile.ANSI256 && !strings.Contains(frame, "8;2;"),
+		t.profile == colorprofile.TrueColor && !strings.Contains(frame, "8;5;"),
+		!strings.Contains(frame, "8;2;") && !strings.Contains(frame, "8;5;"):
 		return frame
 	}
 	var b strings.Builder
@@ -162,7 +176,9 @@ func (t *Theme) reduceSGR(params string) string {
 		var c color.Color
 		n := 0
 		switch {
-		case ps[i+1] == "5" && i+2 < len(ps):
+		case ps[i+1] == "5" && i+2 < len(ps) && t.profile != colorprofile.ANSI256:
+			// (on a 256-colour terminal an index is one Render has already
+			// reduced: reducing it again moves greys a step down the ramp)
 			v, err := strconv.Atoi(ps[i+2])
 			if err != nil || v < 0 || v > 255 {
 				break

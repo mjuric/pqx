@@ -9,7 +9,9 @@ Run with the reference venv (Rich, Textual and pqx importable):
   renders with it (no system: truecolor).
 - "colours": colours pqx draws (every 256-colour index, the colourmaps' colours and
   their 256-colour indices, the named themes' palettes, Textual's ANSI palette) with
-  Rich's SGR parameters for them on a 256- and a 16-colour terminal.
+  the SGR parameters Python pqx sends for them on a truecolor, a 256- and a 16-colour
+  terminal: Textual takes each colour as its own Color (a 256-colour index beyond the
+  16 ANSI colours becomes its xterm truecolor value), and Rich reduces that.
 """
 import json
 import os
@@ -17,6 +19,7 @@ import subprocess
 import sys
 
 from rich.color import Color, ColorSystem
+from textual.color import Color as TextualColor
 
 from pqx import plots
 
@@ -57,7 +60,8 @@ def detect(env):
 
 
 def codes(spec, system):
-    return ";".join(Color.parse(spec).downgrade(system).get_ansi_codes())
+    colour = TextualColor.from_rich_color(Color.parse(spec)).rich_color
+    return ";".join(colour.downgrade(system).get_ansi_codes())
 
 
 def colour_specs():
@@ -86,7 +90,8 @@ def colour_specs():
 
 def main():
     detect_cases = [{"env": env, "system": detect(env)} for env in ENVS]
-    colours = [{"spec": s, "256": codes(s, ColorSystem.EIGHT_BIT), "16": codes(s, ColorSystem.STANDARD)}
+    colours = [{"spec": s, "truecolor": codes(s, ColorSystem.TRUECOLOR), "256": codes(s, ColorSystem.EIGHT_BIT),
+                "16": codes(s, ColorSystem.STANDARD)}
                for s in colour_specs()]
     json.dump({"detect": detect_cases, "colours": colours}, sys.stdout, indent=0)
     sys.stdout.write("\n")
