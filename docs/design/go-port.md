@@ -530,3 +530,25 @@ Go 5.33, Python 5.07). The differences found are in the findings.
    Ctrl+U in the export dialog's path field doesn't always clear it before
    typing, so the Python exports in this walk went to a mangled path and
    failed (and were not compared).
+
+### After the real-data run (2026-10-10)
+
+- **Findings 5 and 6 fixed (#95, independent review, 2 rounds).** `s`, `=`, `x` and the revert queue their views in the grid, and the latest view asked for wins, including over a filter from the box arriving in between. The Stats column list and the Plot drop-down wrap, page and scroll as Textual's OptionList does. Wrapping is a port of Rich's `divide_line`, checked against 7,500 cases generated from Textual 8.2.8 with no differences.
+- **Harness: SD and SU (#97).** pyte ignores `CSI n T` and `CSI n S`, which Bubble Tea's renderer uses to scroll part of the screen. Under load, this left the details pane's field names two rows away from their values on the emulated screen. Go's output was right: replaying the same bytes with SD and SU added gives Python's screen. `ptydrive.py` now implements both.
+- **Follow-ups (issues):**
+  - #93: rg2000's first screen waits for DuckDB's bind.
+  - #94: `g` to the middle of mpc_orbits is at the 150 ms limit.
+  - #96: a filter typed right after a quick `s` loses the sort; it only happens with typeahead and predates #95.
+
+### Final parity run (2026-10-10)
+
+`run.py --no-xfail -j 4 --timeout-scale 2` on `native-port` c22b33a (Go built with `make build VERSION=0.1.0`), against Python pqx at `master`. Both screen sizes, every scenario:
+
+| result | count |
+|---|---|
+| PASS | 109 |
+| PYBUG (Python's screen is the wrong one; the harness checks the correct one) | 18 |
+| INTENDED (listed under "Decisions taken during the work") | 12 |
+| DIFF, XFAIL, ERROR | 0 |
+
+`expected_failures.yaml` is empty.
