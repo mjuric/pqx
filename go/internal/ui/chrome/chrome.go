@@ -50,6 +50,11 @@ type Chrome struct {
 
 	toasts []toast
 	nextID int
+	// dialogs is how many dialogs are open (the root forwards OpenDialogMsg
+	// and CloseDialogMsg), and behind the toasts that showed when the first
+	// one opened: Textual keeps them on the screen behind the dialog.
+	dialogs int
+	behind  map[int]bool
 }
 
 // New makes the chrome.
@@ -118,6 +123,18 @@ func (c *Chrome) Update(msg tea.Msg) tea.Cmd {
 		// a task may report with a notice (the export does)
 		if n, ok := m.Msg.(kit.NotifyMsg); ok {
 			cmd = c.notify(n)
+		}
+	case kit.OpenDialogMsg:
+		if c.dialogs == 0 {
+			c.behind = map[int]bool{}
+			for _, t := range c.toasts {
+				c.behind[t.id] = true
+			}
+		}
+		c.dialogs++
+	case kit.CloseDialogMsg:
+		if c.dialogs > 0 {
+			c.dialogs--
 		}
 	case expireMsg:
 		for i, t := range c.toasts {

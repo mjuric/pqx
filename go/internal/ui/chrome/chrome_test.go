@@ -453,3 +453,48 @@ func TestASortKeepsTheCountTime(t *testing.T) {
 		t.Errorf("filter sorted: %q", got)
 	}
 }
+
+// While a dialog is open, the toasts are laid out on the dialog's screen
+// (no side padding: a rack 2 cells wider, ending a cell further right), and
+// the screen behind keeps those it had when the first dialog opened.
+func TestToastsOverDialogs(t *testing.T) {
+	c, _, _ := setup(demo())
+	c.Update(kit.NotifyMsg{Text: "first"})
+	if c.BehindToasts(120, 40) != nil {
+		t.Fatal("behind toasts with no dialog")
+	}
+	ts := c.Toasts(120, 40)
+	if len(ts) != 1 || ts[0].X != 120-3-58 || ansi.StringWidth(strings.Split(ts[0].Content, "\n")[0]) != 58 {
+		t.Fatalf("%+v", ts)
+	}
+	c.Update(kit.OpenDialogMsg{})
+	for _, tc := range []struct{ w, x, tw int }{{120, 59, 59}, {200, 138, 60}} {
+		ts := c.Toasts(tc.w, 40)
+		if len(ts) != 1 || ts[0].X != tc.x || ansi.StringWidth(strings.Split(ts[0].Content, "\n")[0]) != tc.tw {
+			t.Fatalf("%d: %+v", tc.w, ts)
+		}
+		b := c.BehindToasts(tc.w, 40)
+		if len(b) != 1 || b[0].X != tc.w-3-min(60, (tc.w-4)/2) {
+			t.Fatalf("%d: behind %+v", tc.w, b)
+		}
+	}
+	// a notice that arrives now shows only over the dialog
+	c.Update(kit.NotifyMsg{Text: "second"})
+	c.Update(kit.OpenDialogMsg{}) // a dialog over the dialog doesn't change what is behind
+	if len(c.Toasts(120, 40)) != 2 || len(c.BehindToasts(120, 40)) != 1 {
+		t.Fatal("second")
+	}
+	// the one behind expires there too
+	c.Update(expireMsg{1})
+	if ts := c.Toasts(120, 40); len(ts) != 1 || c.BehindToasts(120, 40) != nil {
+		t.Fatalf("%+v", ts)
+	}
+	c.Update(kit.CloseDialogMsg{})
+	if c.Toasts(200, 40)[0].X != 138 {
+		t.Fatal("one dialog still open")
+	}
+	c.Update(kit.CloseDialogMsg{})
+	if ts := c.Toasts(200, 40); len(ts) != 1 || ts[0].X != 137 || c.BehindToasts(200, 40) != nil {
+		t.Fatalf("closed: %+v", ts)
+	}
+}
