@@ -1,6 +1,9 @@
 package cursorlist
 
 import (
+	"encoding/json"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -75,5 +78,111 @@ func TestHighlightBeforeDrawn(t *testing.T) {
 	l.Highlight(5)
 	if v := l.View(4, 3, plain); !strings.HasPrefix(v, "d") {
 		t.Fatalf("view %q", v)
+	}
+}
+
+// Items wrap as OptionList wraps its prompts (Rich's word wrap, long words
+// folded): the Stats list's "midpointMjdTai_flag_degraded  bool" puts bool
+// on the next line.
+func TestItemsWrap(t *testing.T) {
+	for _, c := range []struct {
+		text  string
+		lines []string
+	}{
+		{"midpointMjdTai_flag_degraded  bool", []string{"midpointMjdTai_flag_degraded", "bool"}},
+		{"a_very_long_column_name_that_needs_two_lines_or_more_x  f64", []string{"a_very_long_column_name_that_nee", "ds_two_lines_or_more_x  f64"}},
+		{"id                  i64", []string{"id                  i64"}},
+	} {
+		var got []string
+		for _, l := range Wrap(styled.New(c.text, styled.Style{}), 32) {
+			got = append(got, l.Plain)
+		}
+		if strings.Join(got, "|") != strings.Join(c.lines, "|") {
+			t.Errorf("Wrap(%q) = %q, want %q", c.text, got, c.lines)
+		}
+	}
+	// styles follow the text onto the next line
+	tx := styled.Text{Plain: "ab cd"}
+	tx.Spans = []styled.Span{{Start: 3, End: 5, Style: styled.Style{Bold: true}}}
+	if ls := Wrap(tx, 3); len(ls) != 2 || ls[1].Plain != "cd" || ls[1].Spans[0].Start != 0 || ls[1].Spans[0].End != 2 {
+		t.Errorf("styled wrap %+v", ls)
+	}
+	// a list of wrapped items: lines, highlight, At, scrolling
+	var l List
+	l.Width = 6
+	l.SetItems([]Item{{ID: "a", Text: styled.New("a", styled.Style{})}, {ID: "long", Text: styled.New("long long", styled.Style{})}, {ID: "c", Text: styled.New("c", styled.Style{})}})
+	if got := l.View(6, 4, plain); got != "a     \nlong  \nlong  \nc     " { // ("long " loses its space)
+		t.Fatalf("view %q", got)
+	}
+	if l.At(1) != 1 || l.At(2) != 1 || l.At(3) != 2 {
+		t.Errorf("At %d %d %d", l.At(1), l.At(2), l.At(3))
+	}
+	l.Highlight(1)
+	if got := l.View(6, 2, plain); got != "[long▄\n[long▄" { // (both lines reversed; the brackets take cells)
+		t.Errorf("highlighted wrapped item %q", got)
+	}
+}
+
+// PgUp and PgDn move by a page of lines (Textual's _move_page): to the item
+// on the line a list's height from the highlighted item's first line.
+func TestPageByLines(t *testing.T) {
+	var l List
+	var items []Item
+	for i := 0; i < 40; i++ {
+		items = append(items, Item{ID: string(rune('A' + i)), Text: styled.New(strings.Repeat("q", 40), styled.Style{})}) // two lines each at 32
+	}
+	l.SetItems(items)
+	pgdn := tea.KeyPressMsg{Code: tea.KeyPgDown}
+	pgup := tea.KeyPressMsg{Code: tea.KeyPgUp}
+	l.Key(pgdn) // nothing highlighted: the last
+	if l.Highlighted() != 39 {
+		t.Fatalf("PgDn with none: %d", l.Highlighted())
+	}
+	l.SetItems(items)
+	l.Key(pgup) // nothing highlighted: the first
+	if l.Highlighted() != 0 {
+		t.Fatalf("PgUp with none: %d", l.Highlighted())
+	}
+	l.View(33, 20, plain) // 20 lines: 10 items a page
+	l.Key(pgdn)
+	if l.Highlighted() != 10 {
+		t.Errorf("PgDn: item %d, want 10", l.Highlighted())
+	}
+	l.Key(pgup)
+	if l.Highlighted() != 0 {
+		t.Errorf("PgUp: item %d, want 0", l.Highlighted())
+	}
+}
+
+// Wrap matches Textual's wrapping (testdata/wrap.json, written by
+// testdata/make_wrap.py from Textual 8.2) for random texts of letters,
+// spaces, CJK, emoji, combining marks and joiners at widths 1–12.
+func TestWrapMatchesTextual(t *testing.T) {
+	raw, err := os.ReadFile("testdata/wrap.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		Text  string
+		Width int
+		Lines []string
+	}
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatal(err)
+	}
+	bad := 0
+	for _, c := range cases {
+		var got []string
+		for _, l := range Wrap(styled.New(c.Text, styled.Style{}), c.Width) {
+			got = append(got, l.Plain)
+		}
+		if !slices.Equal(got, c.Lines) {
+			if bad++; bad <= 10 {
+				t.Errorf("Wrap(%q, %d) = %q, want %q", c.Text, c.Width, got, c.Lines)
+			}
+		}
+	}
+	if bad > 0 {
+		t.Errorf("%d of %d cases differ", bad, len(cases))
 	}
 }

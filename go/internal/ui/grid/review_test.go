@@ -796,3 +796,96 @@ func TestMapHeaderNamesItsEntries(t *testing.T) {
 		t.Errorf("header %q", sub)
 	}
 }
+
+// s pressed again before the first press's view is applied cycles on from
+// the sort it asked for, and the views arrive in order.
+func TestQuickSortPresses(t *testing.T) {
+	for _, c := range []struct {
+		presses int
+		want    []data.Sort
+	}{
+		{2, []data.Sort{{Column: "c002", Desc: true}}},
+		{3, nil},
+		{4, []data.Sort{{Column: "c002"}}},
+	} {
+		h := newHarness(t, newFake(1000, 5), 120, 30)
+		h.press("right", "right")
+		for i := 0; i < c.presses; i++ {
+			h.send(kp("s")) // (no settling in between)
+		}
+		h.settle()
+		if got := h.env.State.View.OrderBy; len(got) != len(c.want) || (len(got) > 0 && got[0] != c.want[0]) {
+			t.Errorf("%d presses: order %+v, want %+v", c.presses, got, c.want)
+		}
+	}
+}
+
+// The latest view asked for wins, whatever order the messages arrive in:
+// quick s, = and x in a row, and a view from elsewhere (the filter box)
+// while the grid's own are on their way.
+func TestLatestViewWins(t *testing.T) {
+	type step struct {
+		key  string
+		view *data.View // a view from elsewhere
+	}
+	ext := data.View{Where: "id % 2 = 0"}
+	for _, c := range []struct {
+		name  string
+		steps []step
+		want  data.View
+	}{
+		{"s s x", []step{{key: "s"}, {key: "s"}, {key: "x"}}, data.View{}},
+		{"s = x", []step{{key: "s"}, {key: "="}, {key: "x"}}, data.View{}},
+		{"= = x", []step{{key: "="}, {key: "="}, {key: "x"}}, data.View{}},
+		{"s s, then the box", []step{{key: "s"}, {key: "s"}, {view: &ext}}, ext},
+		{"=, then the box", []step{{key: "="}, {view: &ext}}, ext},
+		{"s, the box, s", []step{{key: "s"}, {view: &ext}, {key: "s"}}, data.View{Where: ext.Where, OrderBy: []data.Sort{{Column: "c002"}}}},
+		{"s, the box, =", []step{{key: "s"}, {view: &ext}, {key: "="}}, data.View{Where: "id % 2 = 0 and c002 = 2"}},
+	} {
+		for run := 0; run < 5; run++ {
+			h := newHarness(t, newFake(1000, 5), 120, 30)
+			h.press("right", "right")
+			for _, s := range c.steps {
+				if s.view != nil {
+					h.send(kit.SetViewMsg{View: *s.view, KeepFileRow: -1})
+				} else {
+					h.send(kp(s.key)) // (no settling in between)
+				}
+			}
+			h.settle()
+			if got := h.env.State.View; !sameView(got, c.want) {
+				t.Errorf("%s: view %+v, want %+v", c.name, got, c.want)
+				break
+			}
+		}
+	}
+}
+
+// A typed filter that fails gets the box back to edit it, even when it was
+// typed right after a quick s: the grid queues it behind its own view and
+// sends it again, and the filter still knows it as its typed one.
+func TestTypedFilterFailsAfterQuickSort(t *testing.T) {
+	for run := 0; run < 5; run++ {
+		h := newHarness(t, newFake(1000, 5), 120, 30)
+		h.press("right", "right")
+		// one burst: s, /, (oops, Enter (no settling in between)
+		h.send(kp("s"))
+		h.send(kit.FocusMsg{Pane: "filter"}) // what / asks for
+		for _, r := range "(oops" {
+			h.send(tea.KeyPressMsg{Code: r, Text: string(r)})
+		}
+		h.send(kp("enter"))
+		h.settle()
+		if !h.f.TypingFocused() || h.g.focused {
+			t.Fatalf("run %d: box focused %v, grid focused %v", run, h.f.TypingFocused(), h.g.focused)
+		}
+		if !h.f.BorderError() || h.status.Severity != kit.Error {
+			t.Fatalf("run %d: no error shown: border %v, status %+v", run, h.f.BorderError(), h.status)
+		}
+		// (the failed filter isn't shown; whether the sort stays is the
+		// typed filter's base, an issue of its own)
+		if got := h.env.State.View; got.Where != "" {
+			t.Errorf("run %d: view %+v, want no filter", run, got)
+		}
+	}
+}

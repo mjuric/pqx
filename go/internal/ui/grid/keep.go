@@ -87,6 +87,15 @@ func (g *Grid) onSetView(m kit.SetViewMsg) tea.Cmd {
 		}
 	} else if g.inflight == nil {
 		g.sent = nil
+	} else {
+		// a view the grid didn't make (the filter box, the details pane's
+		// x) while one of its own is on its way: it is the newest request,
+		// so it goes out again after that one, replacing anything queued
+		// behind it (whatever order the messages arrive in, it wins)
+		mm := m
+		g.after = &mm
+		v := m.View
+		g.sent = &v
 	}
 	g.next = nil
 	v := m.View
@@ -416,22 +425,34 @@ func (g *Grid) filterValue(name string, v data.Value) tea.Cmd {
 	if !ok {
 		return notice(kit.Warning, "Can't filter on this value type", 0)
 	}
-	base := g.st.View
-	switch {
-	case g.sent != nil:
-		base = *g.sent // an "=" a moment ago, its view not yet seen
-	case g.onTheWay != nil && g.env.Tasks.Running("validate"):
-		base = *g.onTheWay // a view being checked: the condition adds to it
-	}
+	base := g.pendingView()
 	nv := data.View{Where: sqllit.And(base.Where, cond), OrderBy: base.OrderBy}
 	if base.IsSQL() {
 		nv = data.View{Where: cond}
 	}
+	return g.sendView(kit.SetViewMsg{View: nv, KeepFileRow: g.fileRowAt(g.curRow)})
+}
+
+// pendingView is the view a key that changes it ("=", s) builds on: one it
+// asked for a moment ago and hasn't seen yet, or one being checked, else
+// the view shown.
+func (g *Grid) pendingView() data.View {
+	switch {
+	case g.sent != nil:
+		return *g.sent // asked for a moment ago, not yet seen
+	case g.onTheWay != nil && g.env.Tasks.Running("validate"):
+		return *g.onTheWay // being checked
+	}
+	return g.st.View
+}
+
+// sendView sends a view the grid makes ("=", s), in order: if one it sent
+// is still on its way, this one (made on it) follows when that arrives
+// (two commands' messages can arrive in either order).
+func (g *Grid) sendView(m kit.SetViewMsg) tea.Cmd {
+	nv := m.View
 	g.sent = &nv
-	m := kit.SetViewMsg{View: nv, KeepFileRow: g.fileRowAt(g.curRow)}
 	if g.inflight != nil {
-		// an earlier "=" view is on its way: this one, made on it, follows
-		// it (two commands' messages can arrive in either order)
 		g.after = &m
 		return nil
 	}

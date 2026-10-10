@@ -149,7 +149,7 @@ func (g *Grid) sortBy(name string) tea.Cmd {
 	if name == "" {
 		return nil
 	}
-	v := g.st.View
+	v := g.pendingView() // (an s a moment ago: cycle on from the sort it asked for)
 	if v.IsSQL() {
 		return notice(kit.Warning, "Sort SQL results with ORDER BY in the query", 0)
 	}
@@ -167,14 +167,15 @@ func (g *Grid) sortBy(name string) tea.Cmd {
 	case !v.OrderBy[cur].Desc:
 		order = []data.Sort{{Column: name, Desc: true}}
 	}
-	return tea.Batch(drop, kit.Send(kit.SetViewMsg{View: data.View{Where: v.Where, OrderBy: order}, KeepFileRow: -1}))
+	return tea.Batch(drop, g.sendView(kit.SetViewMsg{View: data.View{Where: v.Where, OrderBy: order}, KeepFileRow: -1}))
 }
 
 // clearFilter goes back to the whole file, the cursor on the same record
 // (the one on its way, if one is looked for), and empties the filter box
 // (Python's action_clear_filter; the sort goes with the filter).
 func (g *Grid) clearFilter() tea.Cmd {
-	return kit.Send(kit.SetViewMsg{View: data.View{}, KeepFileRow: g.keptFileRow()})
+	// (through the grid's queue: after a quick s or =, x still wins)
+	return g.sendView(kit.SetViewMsg{View: data.View{}, KeepFileRow: g.keptFileRow()})
 }
 
 // hideColumn hides the cursor's column, never the last one (Python's
