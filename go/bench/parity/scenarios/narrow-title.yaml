@@ -1,0 +1,10 @@
+description: |
+  At 80 and 60 columns the title bar drops the version first, then other parts.
+covers:
+  - "native-port.md: Title bar shows the full version, which is dropped first when space is short."
+fixture: demo
+sizes: [[80, 24], [60, 20], [100, 30]]
+same_version: true  # what fits depends on the version's length
+steps:
+  - check: first
+    expect: '^  pqx'

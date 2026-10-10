@@ -1,0 +1,41 @@
+name: Go
+
+on:
+  push:
+    branches: [master, native-port]
+    paths: ["go/**", ".github/workflows/go.yml"]
+  pull_request:
+    paths: ["go/**", ".github/workflows/go.yml"]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: make vet
+      - name: staticcheck
+        # pinned; its settings are in go/staticcheck.conf
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.1 -tags duckdb_arrow ./...
+      - run: make test
+      - name: Build (time and size)
+        if: runner.os == 'Linux'
+        run: |
+          go clean -cache
+          time make build
+          ls -l bin/pqx
+          bin/pqx --version

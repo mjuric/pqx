@@ -1,0 +1,46 @@
+description: |
+  `F` sets the cursor column's format: a Python spec or a digit count; the dialog
+  opens with the current format; an empty entry resets it. A bad spec is refused.
+covers:
+  - "README Column formats: F takes a Python format spec (.2f, .3e, ,d, .1%); an empty entry goes back to automatic."
+  - "help: **F** | set the cursor column's format: a Python spec (.2f, .3e, ,d) or a number of digits; empty resets it"
+fixture: demo
+python_bug:
+  - checks: [sci, percent, reset]
+    region: keybar
+    ref_shows: 'enter apply   esc back'   # Python shows the filter box's keys
+    correct: '^\s*/ filter   x clear filter'   # what the key bar should show there
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
+steps:
+  - keys: right right
+  - keys: F
+    wait: 'Format of[\s\S]*enter apply'
+  - check: dialog
+  - text: ".3e"
+  - keys: enter
+    toast: "✓ ra: .3e"
+    check: sci
+    expect: ['f64·deg·\.3e', '3\.332e\+02']
+  - keys: right right right right right right right right right right
+  - keys: F
+    wait: 'Format of[\s\S]*enter apply'
+  - text: ".1%"
+  - keys: enter
+    toast: "✓ trailLength"
+    check: percent
+  - keys: F
+    wait: 'Format of[\s\S]*enter apply'
+  - text: "zz"
+  - keys: enter
+  - check: bad-spec
+    expect: "✗ Unknown format code 'z'"
+  - keys: esc
+  - keys: left left left left left left left left left left
+  - keys: F
+    wait: 'Format of[\s\S]*enter apply'
+  - check: prefilled
+    expect: '│  \.3e '
+  - keys: ctrl+u enter
+    toast: "✓ ra"
+    check: reset
+    expect: '333\.152881 '

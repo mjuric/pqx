@@ -1,0 +1,11 @@
+description: |
+  A file that isn't Parquet: pqx says what's wrong (and exits, or shows the error).
+covers:
+  - "native-port.md: DuckDB can't read this file"
+fixture: notparquet
+sizes: [[120, 30]]
+ready: null
+steps:
+  - exit: 15
+  - check: output
+    expect: '(?i)parquet'

@@ -1,0 +1,12 @@
+description: |
+  Metadata tab: the file overview, key-value metadata and the row-group table.
+covers:
+  - "README Keys: 1–5 | Data, Schema, Stats, Plot, Metadata"
+fixture: demo
+steps:
+  - keys: "5"
+    wait: 'Footer read'
+  - check: meta
+    expect: ['rows +20,000', 'row groups +8', 'pqx\.demo|DiaSource']
+  - keys: pgdn
+  - check: meta-pgdn

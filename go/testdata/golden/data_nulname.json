@@ -1,0 +1,83 @@
+{
+"header":{"file":"data_nulname.json","generator":"go/testdata/golden/make_golden.py","encoding":"typed values, see README.md","versions":{"pqx_git":"v0.2.0rc3-27-gf5924d0","python":"3.12.13","pyarrow":"25.0.1","duckdb":"1.5.6","numpy":"2.5.3","rich":"15.0.0","textual":"8.2.8"},"fixture":"nulname.parquet","duckdb_threads":1},
+"file":[
+{"id":"file/0","num_rows":2,"num_row_groups":1,"num_columns":2,"num_leaf_columns":2,"created_by":"parquet-cpp-arrow version 25.0.1","setup_error":null,"has_file_row_number":true}
+],
+"columns":[
+{"id":"columns/0","name":"a\u0000b","arrow_type":"int64","nullable":true,"unit":"","description":"","short_type":"i64","kind":"int","is_numeric":true,"is_float":false,"is_temporal":false,"is_nested":false,"sql_name":"a\u0000b","duckdb_type":"BIGINT"},
+{"id":"columns/1","name":"b","arrow_type":"int64","nullable":true,"unit":"","description":"","short_type":"i64","kind":"int","is_numeric":true,"is_float":false,"is_temporal":false,"is_nested":false,"sql_name":"b","duckdb_type":"BIGINT"}
+],
+"validate":[
+{"id":"validate/0","view":{"where":"","order_by":[],"sql":""},"error":"ValueError: column a␀b has a NUL character in its name, which SQL can't refer to"},
+{"id":"validate/1","view":{"where":"b > 0","order_by":[],"sql":""},"error":"ValueError: column a␀b has a NUL character in its name, which SQL can't refer to"},
+{"id":"validate/2","view":{"where":"nosuchcolumn > 3","order_by":[],"sql":""},"error":"ValueError: column a␀b has a NUL character in its name, which SQL can't refer to"},
+{"id":"validate/3","view":{"where":"mag <","order_by":[],"sql":""},"error":"ValueError: column a␀b has a NUL character in its name, which SQL can't refer to"}
+],
+"count":[
+{"id":"count/0","view":{"where":"","order_by":[],"sql":""},"out":2},
+{"id":"count/1","view":{"where":"b > 0","order_by":[],"sql":""},"out":2}
+],
+"fetch":[
+{"id":"fetch/0","view":{"where":"","order_by":[],"sql":""},"offset":0,"limit":10,"columns":null,"error":"ValueError: column a␀b has a NUL character in its name, which SQL can't refer to"},
+{"id":"fetch/1","view":{"where":"b > 0","order_by":[],"sql":""},"offset":0,"limit":10,"columns":null,"error":"ValueError: column a␀b has a NUL character in its name, which SQL can't refer to"},
+{"id":"fetch/2","view":{"where":"b > 0","order_by":[],"sql":""},"offset":0,"limit":10,"columns":null,"error":"ValueError: column a␀b has a NUL character in its name, which SQL can't refer to"},
+{"id":"fetch/3","view":{"where":"b > 0","order_by":[],"sql":""},"offset":0,"limit":10,"columns":null,"error":"ValueError: column a␀b has a NUL character in its name, which SQL can't refer to"}
+],
+"fetch_columns":[
+{"id":"fetch_columns/0","file_rows":[0],"columns":["b"],"out":{"offset":0,"columns":["b"],"types":["int64"],"row_numbers":[0],"rows":[[{"t":"int","v":"1"}]]}}
+],
+"find_row":[
+{"id":"find_row/0","view":{"where":"","order_by":[],"sql":""},"file_row":1,"out":1},
+{"id":"find_row/1","view":{"where":"b > 0","order_by":[],"sql":""},"file_row":1,"out":1}
+],
+"fetch_around":[
+],
+"column_stats":[
+{"id":"column_stats/0","view":{"where":"","order_by":[],"sql":""},"column":"b","sample":null,"error":"ValueError: column a␀b has a NUL character in its name, which SQL can't refer to"},
+{"id":"column_stats/1","view":{"where":"b > 0","order_by":[],"sql":""},"column":"b","sample":null,"error":"ValueError: column a␀b has a NUL character in its name, which SQL can't refer to"}
+],
+"histogram":[
+],
+"sky_counts":[
+],
+"xy_counts":[
+],
+"column_chunk_summary":[
+{"id":"column_chunk_summary/0","path":"a\u0000b","physical":"INT64","compression":"SNAPPY","compressed":106,"uncompressed":102,"min":{"t":"int","v":"1"},"max":{"t":"int","v":"2"},"nulls":0,"has_stats":true,"logical":"None"},
+{"id":"column_chunk_summary/1","path":"b","physical":"INT64","compression":"SNAPPY","compressed":106,"uncompressed":102,"min":{"t":"int","v":"1"},"max":{"t":"int","v":"2"},"nulls":0,"has_stats":true,"logical":"None"}
+],
+"row_groups":[
+{"id":"row_groups/0","index":0,"start":0,"rows":2,"compressed":212,"uncompressed":204}
+],
+"column_encodings":[
+{"id":"column_encodings/0","path":"a\u0000b","out":["PLAIN","RLE","RLE_DICTIONARY"]},
+{"id":"column_encodings/1","path":"b","out":["PLAIN","RLE","RLE_DICTIONARY"]}
+],
+"key_value_metadata":[
+{"id":"key_value_metadata/0","key":"ARROW:schema","value":"/////6gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABEAAAABAAAANT///8AAAECEAAAABQAAAAEAAAAAAAAAAEAAABiAAAAxP///wAAAAFAAAAAEAAUAAgABgAHAAwAAAAQABAAAAAAAAECEAAAABwAAAAEAAAAAAAAAAMAAABhAGIACAAMAAgABwAIAAAAAAAAAUAAAAA="}
+],
+"sample_condition":[
+{"id":"sample_condition/0","sample":null,"slices":16,"out":""},
+{"id":"sample_condition/1","sample":null,"slices":4,"out":""},
+{"id":"sample_condition/2","sample":0,"slices":16,"out":""},
+{"id":"sample_condition/3","sample":0,"slices":4,"out":""},
+{"id":"sample_condition/4","sample":10,"slices":16,"out":""},
+{"id":"sample_condition/5","sample":10,"slices":4,"out":""},
+{"id":"sample_condition/6","sample":1000,"slices":16,"out":""},
+{"id":"sample_condition/7","sample":1000,"slices":4,"out":""},
+{"id":"sample_condition/8","sample":5000,"slices":16,"out":""},
+{"id":"sample_condition/9","sample":5000,"slices":4,"out":""},
+{"id":"sample_condition/10","sample":1,"slices":16,"out":"((__pqx_row >= 0 AND __pqx_row < 1))"},
+{"id":"sample_condition/11","sample":1,"slices":4,"out":"((__pqx_row >= 0 AND __pqx_row < 1))"},
+{"id":"sample_condition/12","sample":2,"slices":16,"out":""},
+{"id":"sample_condition/13","sample":2,"slices":4,"out":""},
+{"id":"sample_condition/14","sample":1000000000,"slices":16,"out":""},
+{"id":"sample_condition/15","sample":1000000000,"slices":4,"out":""}
+],
+"filter_placeholder":[
+{"id":"filter_placeholder/0","error":"ValueError: column a␀b has a NUL character in its name, which SQL can't refer to"}
+],
+"guess_sky_columns":[
+{"id":"guess_sky_columns/0","names":["a\u0000b","b"],"out":[null,null]}
+]
+}

@@ -1,0 +1,17 @@
+description: |
+  A column hidden in the grid and chosen in Schema: back on Data the grid stays put and
+  the status line says the column is hidden.
+covers:
+  - "help: If the column is hidden in the grid, the grid stays put and the status line says so; c brings it back."
+fixture: demo
+steps:
+  - keys: right right
+  - keys: "-"
+    toast: 'Hid ra'
+  - keys: "2"
+    wait: 'null %'
+  - keys: up
+  - keys: "1"
+    wait: '(?i)hidden'
+  - check: data
+    expect: '! ra is hidden · c to show'

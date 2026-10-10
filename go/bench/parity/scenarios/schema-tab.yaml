@@ -1,0 +1,17 @@
+description: |
+  Schema tab: every column with type, unit, nulls, min/max, size and compression from
+  the footer, and the selected column's description; the column is linked with Data.
+covers:
+  - "README Schema: Every column with its type, unit, nulls, min/max, size on disk and compression"
+  - "README All keys: Data, Schema and Stats stay on the same column"
+fixture: demo
+steps:
+  - keys: right right right
+  - keys: "2"
+    wait: 'null %'
+  - check: schema
+    expect: ['diaSourceId +i64', 'ssObjectId .*13,934 +69\.7%', 'Declination coordinate']
+  - keys: down down
+  - keys: "1"
+    wait: '/ filter'
+  - check: data-follows

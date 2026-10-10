@@ -1,0 +1,20 @@
+description: |
+  A filter that removes half the rows, with the cursor on a record the filter keeps
+  (row 30) and the grid scrolled right. native-port.md says the leftmost column and the
+  record's screen row are kept; Python pqx 0.1.0 goes to row 0 and moves the leftmost
+  column by one here (reported), so the checkpoint compares, without asserting that.
+covers:
+  - "native-port.md: Keep the viewport. Filtering ... keeps the leftmost column, and a record still in the view keeps its screen row (PR #23)."
+fixture: wide
+steps:
+  - keys: pgdn down down down
+    wait_gone: 'row 0\b'
+  - keys: right right right right right right right right right right right right right right
+  - check: before
+    expect@120x40: ['‹ +c05', 'row 30\b']
+  - keys: /
+    wait: 'enter apply'
+  - text: "id % 2 = 0"
+  - keys: enter
+    wait: '✓ 1,500 rows'
+  - check: filtered

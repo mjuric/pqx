@@ -1,0 +1,231 @@
+name: Go release
+
+# Builds the Go pqx for every release platform (D6), smoke-tests each binary and
+# wheel, and keeps the wheels and the GitHub Release archives as artifacts. Uploads
+# to TestPyPI only when dispatched with publish: testpypi; this workflow never
+# uploads to PyPI and never creates a GitHub Release (docs/runbooks/release.md).
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "PEP 440 version to build, e.g. 0.3.0rc1"
+        required: true
+      publish:
+        description: "Upload the wheels to TestPyPI"
+        type: choice
+        options: [none, testpypi]
+        default: none
+  # Release tags, enabled at the cutover with the owner's approval (D5):
+  # push:
+  #   tags: ["v0.3.*"]
+  pull_request:
+    paths: ["go/packaging/**", ".github/workflows/go-release.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        env:
+          INPUT: ${{ inputs.version }}
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch) v="$INPUT" ;;
+            push) v="${GITHUB_REF_NAME#v}" ;;              # tag v0.3.0rc1 -> 0.3.0rc1
+            *) v="0.3.0.dev${GITHUB_RUN_NUMBER}" ;;         # pull requests: a dev version
+          esac
+          # normalized PEP 440: N.N.N[{a|b|rc}N][.postN][.devN]
+          echo "$v" | grep -Eq '^[0-9]+(\.[0-9]+)*((a|b|rc)[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$' \
+            || { echo "::error::'$v' is not a normalized PEP 440 version"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "version $v"
+
+  build:
+    needs: version
+    name: build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            runner: ubuntu-24.04
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            plat: manylinux_2_28_x86_64
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
+            plat: manylinux_2_28_aarch64
+          - target: darwin-arm64
+            runner: macos-14
+            plat: macosx_13_0_arm64
+          - target: darwin-amd64
+            runner: macos-15-intel   # macos-13, the last other Intel image, is retired
+            plat: macosx_13_0_x86_64
+          - target: windows-amd64
+            runner: windows-2022
+            plat: win_amd64
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      EXE: ${{ startsWith(matrix.target, 'windows') && 'pqx.exe' || 'pqx' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Container setup
+        if: matrix.container
+        run: |
+          git config --global --add safe.directory '*'
+          # the manylinux images keep each CPython under /opt/python
+          echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        if: ${{ !matrix.container }}
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: MinGW-w64 gcc 14.2 UCRT (the toolchain DuckDB's Windows libraries are built with)
+        # DuckDB's prebuilt libraries come from MinGW-Builds 14.2.0 (posix, seh, UCRT); a
+        # newer gcc (MSYS2's 16.x) fails to link them (undefined __emutls_v symbols)
+        if: runner.os == 'Windows'
+        env:
+          URL: https://github.com/niXman/mingw-builds-binaries/releases/download/14.2.0-rt_v12-rev0/x86_64-14.2.0-release-posix-seh-ucrt-rt_v12-rev0.7z
+          SHA256: 0f1afc3b48f66dda68fbfb7b8b0f1d22b831396fbe1e3dea776745f32d930b24
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/mingw.7z" "$URL"
+          echo "$SHA256  $RUNNER_TEMP/mingw.7z" | sha256sum -c -
+          7z x -y -o"$RUNNER_TEMP" "$RUNNER_TEMP/mingw.7z" > /dev/null
+          echo "$(cygpath -w "$RUNNER_TEMP/mingw64/bin")" >> "$GITHUB_PATH"
+      - name: Toolchain
+        run: |
+          go version
+          ${CC:-gcc} --version | head -1
+          python --version
+
+      - name: Build
+        run: |
+          mkdir -p out
+          time go/packaging/build.sh "$VERSION" "out/$EXE"
+
+      - name: Inspect the binary
+        run: |
+          ls -l "out/$EXE"
+          case "$RUNNER_OS" in
+            Linux)
+              objdump -p out/pqx | grep NEEDED
+              newest=$(objdump -T out/pqx | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+              echo "newest glibc symbol version: $newest"
+              allowed='^(libc|libm|libresolv|libpthread|libdl|librt)\.so\.[0-9]+$|^ld-linux'
+              if objdump -p out/pqx | awk '/NEEDED/ {print $2}' | grep -Ev "$allowed"; then
+                echo "::error::the binary needs libraries beyond glibc's"; exit 1
+              fi
+              # a sort -V comparison: the newest version must not be above 2.28
+              [ "$(printf '%s\n' "$newest" GLIBC_2.28 | sort -V | tail -1)" = GLIBC_2.28 ] \
+                || { echo "::error::needs $newest, newer than manylinux_2_28 allows"; exit 1; }
+              ;;
+            macOS)
+              otool -L out/pqx
+              otool -l out/pqx | grep -A4 LC_BUILD_VERSION
+              minos=$(otool -l out/pqx | awk '/LC_BUILD_VERSION/ {f=1} f && $1=="minos" {print $2; exit}')
+              [ "$minos" = 13.0 ] || { echo "::error::minos is $minos, not 13.0"; exit 1; }
+              ;;
+            Windows)
+              objdump -p out/pqx.exe | grep 'DLL Name' || true
+              ;;
+          esac
+
+      - name: Smoke test the binary
+        run: |
+          out/$EXE --version
+          out/$EXE --version | head -1 | grep -qx "pqx $VERSION"
+          out/$EXE --help > /dev/null
+          if [ "$RUNNER_OS" = Windows ]; then python -m pip install -q pywinpty; fi
+          python go/packaging/smoke.py "out/$EXE" go/testdata/fixtures/demo.parquet \
+            --expect "20,000 rows" --expect diaSourceId
+
+      - name: Wheel and archive
+        run: |
+          python go/packaging/make_wheel.py --binary "out/$EXE" --version "$VERSION" --plat "${{ matrix.plat }}" --out-dir dist
+          python go/packaging/make_archive.py --binary "out/$EXE" --version "$VERSION" --target "${{ matrix.target }}" --out-dir dist
+          python -m zipfile -l dist/*.whl
+          ls -l dist
+
+      - name: Install the wheel (pip and uvx)
+        run: |
+          python go/packaging/check_install.py dist/*.whl "$VERSION"
+          python -m pip install -q uv
+          python -m uv tool run --from "$(ls dist/*.whl)" pqx --version | head -1 | grep -qx "pqx $VERSION"
+          echo "uvx OK"
+
+      - name: auditwheel
+        if: matrix.container
+        run: |
+          auditwheel show dist/*.whl 2>&1 | tee audit.txt
+          # auditwheel names the most compatible tag the wheel meets; it must be
+          # manylinux_2_28 or older, with no ISA extensions beyond the baseline
+          glibc=$(grep -o '"manylinux_2_[0-9]*_' audit.txt | head -1 | tr -dc 0-9 | cut -c2-)
+          if [ -z "$glibc" ] || [ "$glibc" -gt 28 ] || grep -qi 'unsupported ISA\|instruction set' audit.txt; then
+            echo "::error::the wheel doesn't meet ${{ matrix.plat }}"; exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pqx-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  check:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pqx-*
+          path: dist
+          merge-multiple: true
+      - name: Check the wheels
+        run: |
+          ls -l dist
+          python -m pip install -q twine check-wheel-contents
+          twine check --strict dist/*.whl
+          # W007 ("library is empty") is expected: the wheel holds only the binary
+          check-wheel-contents --ignore W007 dist/*.whl
+          test "$(ls dist/*.whl | wc -l)" = 5
+          test "$(ls dist/*.tar.gz dist/*.zip | wc -l)" = 5
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels
+          path: dist/*.whl
+
+  testpypi:
+    # only on an explicit dispatch with publish: testpypi; never PyPI here
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == 'testpypi'
+    needs: check
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write   # OIDC for TestPyPI trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/

@@ -1,0 +1,13 @@
+description: |
+  `--accent magenta --dim bright-black --border white`: the focus colour, the dimmed
+  text and the unfocused borders change (compare with --strict-colours).
+covers:
+  - "README Looks: --accent, --dim, --border"
+fixture: demo
+args: ["--accent", "magenta", "--dim", "bright-black", "--border", "white"]
+sizes: [[120, 40]]
+steps:
+  - check: first
+  - keys: d
+    wait: "file row"
+  - check: detail

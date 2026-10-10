@@ -1,0 +1,25 @@
+description: |
+  With columns pinned, moving the cursor left into a pinned column doesn't scroll the
+  grid back.
+covers:
+  - "native-port.md: A cursor in a pinned column doesn't scroll the grid left."
+fixture: wide
+threads: 1   # stats quantiles repeat only with one DuckDB thread
+steps:
+  - keys: right right
+  - keys: p
+    wait: '3 pinned'
+  - keys: right right right right right right right right right right right right right right right right right right right right
+  - check: scrolled
+  - keys: home
+  - check: home
+  - keys: right
+  # → from the pinned id column moves the cursor to c00 (README: arrows move). Python pqx
+  # does move it (i below shows c00) but leaves the highlight drawn on id while the grid
+  # is scrolled: a drawing bug, so there is no checkpoint right after →; i shows which
+  # column the cursor is on
+  - keys: i
+    wait: '✓ Profiled c00'
+  # Python pqx sometimes draws the first histogram at a stale width; l l redraws it
+  - keys: l l
+  - check: stats-of-cursor

@@ -1,0 +1,17 @@
+description: |
+  `--no-sample`: stats scan every row; `m` still turns sampling on.
+covers:
+  - "pqx -h: --no-sample  always scan every row for stats/plots"
+fixture: demo
+sizes: [[120, 40]]
+args: ["--no-sample"]
+threads: 1
+steps:
+  - keys: "3"
+    wait: '✓ Profiled diaSourceId'
+  # Python pqx sometimes draws the first histogram at a stale width; l l redraws it
+  - keys: l l
+  - check: stats
+    expect_not: 'sampled'
+  - keys: m
+    toast: 'Sampling on'

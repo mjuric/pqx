@@ -1,0 +1,28 @@
+description: |
+  Esc leaves the filter box without applying what was typed; Ctrl+X clears the box,
+  even while typing.
+covers:
+  - "help: **Esc** returns to the grid"
+  - "README All keys: x / Ctrl+X | clear filter (Ctrl+X also works while typing in the filter box)"
+fixture: demo
+steps:
+  - keys: /
+    wait: 'enter apply'
+  - text: "band = 'u'"
+    expect: 'enter apply'   # the box has focus before Esc
+  - keys: esc
+    wait: '/ filter'
+  - check: left-box
+    expect: ["› band = 'u'", '✓ 20,000 rows']
+  - keys: /
+    wait: 'enter apply'
+  - check: back-in-box
+  - keys: enter
+    wait: '✓ 3,3\d\d rows'
+  - check: applied
+  - keys: /
+    wait: 'enter apply'
+  - keys: ctrl+x
+    wait: '✓ 20,000 rows'
+  - check: ctrl-x
+    expect: '› SQL WHERE'
