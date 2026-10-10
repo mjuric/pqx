@@ -192,6 +192,11 @@ func TestReduceFrameKeeps(t *testing.T) {
 	if got, want := th.Paint(frame, 2), "\x1b[38;5;16m\x1b[38;5;200;48;5;17mx\x1b[31;2m\x1b[?25ly\x1b[m"; got != want {
 		t.Errorf("256: %q, want %q", got, want)
 	}
+	// at 256 colours an index stays when the frame has truecolor to reduce:
+	// Rich's 256-colour reduction isn't idempotent (188 → 252 → 251)
+	if got, want := th.Paint("\x1b[38;2;1;2;3mA\x1b[38;5;252mB\x1b[48;5;248mC", 3), "\x1b[38;5;16mA\x1b[38;5;252mB\x1b[48;5;248mC"; got != want {
+		t.Errorf("256, indices with truecolor: %q, want %q", got, want)
+	}
 	th.SetProfile(colorprofile.ANSI)
 	if got, want := th.Paint(frame, 2), "\x1b[30m\x1b[35;44mx\x1b[31;2m\x1b[?25ly\x1b[m"; got != want {
 		t.Errorf("16: %q, want %q", got, want)
