@@ -1,0 +1,14 @@
+description: |
+  `pqx -h` prints the usage, every option with its env variable, examples and the
+  bug-report address, and exits.
+covers:
+  - "README Looks: the option / env table"
+  - "pqx -h"
+fixture: demo
+file: false
+args: ["-h"]
+ready: null
+sizes: [[120, 60]]
+steps:
+  - exit: 10
+  - check: output

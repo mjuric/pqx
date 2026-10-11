@@ -1,0 +1,33 @@
+description: |
+  `e` exports the current view (filter, sort, visible columns) to CSV, a path
+  relative to the working directory.
+covers:
+  - "README Export: Press e to write the current view (filter, sort and visible columns) to Parquet, CSV or JSON."
+fixture: demo
+python_bug:
+  - checks: [done]
+    region: keybar
+    ref_shows: 'enter apply   esc back'   # Python shows the filter box's keys
+    correct: '^\s*/ filter   x clear filter'   # what the key bar should show there
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
+steps:
+  - keys: /
+    wait: 'enter apply'
+  - text: "detector = 7 and band = 'r'"
+  - keys: enter
+    wait: '✓ 23 rows'
+  - keys: right right right right right right right right right right
+  - keys: s
+    wait: 'sorted mag ↑'
+  - keys: e
+    wait: 'Export current view[\s\S]*enter apply'
+  - check: dialog
+    expect: "where detector = 7 and band = 'r' · sorted by mag · 23 rows · 16 visible"
+  - keys: ctrl+u
+  - text: "view.csv"
+  - keys: tab down space
+  - check: csv-chosen
+  - keys: shift+tab enter
+    toast: 'Wrote 23 rows'
+    check: done
+  - file: "{out}/view.csv"

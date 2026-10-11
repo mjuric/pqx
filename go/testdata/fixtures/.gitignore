@@ -1,0 +1,2 @@
+# The repository ignores *.parquet; these fixtures are checked in.
+!*.parquet

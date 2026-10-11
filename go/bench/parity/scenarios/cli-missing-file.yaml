@@ -1,0 +1,13 @@
+description: |
+  A file that doesn't exist: pqx says so and exits.
+covers:
+  - "pqx -h: path  Parquet file to open"
+fixture: demo
+file: false
+args: ["{fixtures}/no-such-file.parquet"]
+sizes: [[120, 30]]
+ready: null
+steps:
+  - exit: 15
+  - check: output
+    expect: 'no-such-file'

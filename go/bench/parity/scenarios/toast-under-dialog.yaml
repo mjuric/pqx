@@ -1,0 +1,111 @@
+description: |
+  Notifications over a dialog: Textual draws them on the dialog's screen, which has
+  no side padding, so they sit a column further right (and may be a column wider)
+  than over the grid; the screen behind keeps the ones it had when the dialog
+  opened, until they expire. Checked with the go-to, columns, export, format and
+  help dialogs, and with a notice that arrives while a dialog is open.
+covers:
+  - "go-port.md WP10: toasts (laid out as Textual does over a dialog)"
+fixture: demo
+intended:
+  - checks: [help]
+    region: scrollbar
+    anchor: 'Written by .*https://github[.]com/mjuric/pqx'   # the help dialog's header (always shown)
+    ref_shows: 'Written by .*https://github[.]com/mjuric/pqx'
+    other_shows: 'Written by .*https://github[.]com/mjuric/pqx'
+    note: "D2: no command palette, so the help is one line shorter (#88) and its scrollbar thumb differs"
+steps:
+  - keys: /
+    wait: 'enter apply'
+  - keys: ctrl+u
+  - text: "nosuchcolumn > 3"
+  - keys: enter
+    wait: 'Binder Error'
+  - keys: esc
+    wait: '/ filter'
+  - check: toast
+  - keys: g
+    wait: 'Go to row[\s\S]*enter apply'
+    check: goto
+    expect: 'Binder Error'
+  - wait_gone: 'Binder Error'   # it expires with the dialog open
+    check: goto-expired
+  - keys: esc
+    wait_gone: 'Go to row'
+  - keys: /
+    wait: 'enter apply'
+  - keys: ctrl+u
+  - text: "nosuchcolumn > 3"
+  - keys: enter
+    wait: 'Binder Error'
+  - keys: esc
+    wait: '/ filter'
+  - keys: "c"
+    wait: 'Visible columns[\s\S]*enter apply'
+    check: columns
+    expect: 'Binder Error'
+  - keys: esc
+    wait_gone: 'Visible columns'
+  - wait_gone: 'Binder Error'   # one notice at a time
+  - keys: /
+    wait: 'enter apply'
+  - keys: ctrl+u
+  - text: "nosuchcolumn > 3"
+  - keys: enter
+    wait: 'Binder Error'
+  - keys: esc
+    wait: '/ filter'
+  - keys: "e"
+    wait: 'Export current view[\s\S]*enter apply'
+    check: export
+    expect: 'Binder Error'
+  - keys: esc
+    wait_gone: 'Export current view'
+  - wait_gone: 'Binder Error'   # one notice at a time
+  - keys: /
+    wait: 'enter apply'
+  - keys: ctrl+u
+  - text: "nosuchcolumn > 3"
+  - keys: enter
+    wait: 'Binder Error'
+  - keys: esc
+    wait: '/ filter'
+  - keys: "F"
+    wait: 'Format of[\s\S]*enter apply'
+    check: format
+    expect: 'Binder Error'
+  - keys: esc
+    wait_gone: 'Format of'
+  - wait_gone: 'Binder Error'   # one notice at a time
+  - keys: /
+    wait: 'enter apply'
+  - keys: ctrl+u
+  - text: "nosuchcolumn > 3"
+  - keys: enter
+    wait: 'Binder Error'
+  - keys: esc
+    wait: '/ filter'
+  - keys: "?"
+    wait: 'Parquet explorer'
+    check: help
+    expect: 'Binder Error'
+  - keys: esc
+    wait_gone: 'Parquet explorer'
+  - wait_gone: 'Binder Error'   # one notice at a time
+  - keys: /
+    wait: 'enter apply'
+  - keys: ctrl+u
+  - text: "nosuchcolumn > 3"
+  - keys: enter
+    wait: 'Binder Error'
+  - keys: esc
+    wait: '/ filter'
+  # a notice that arrives while the dialog is open, over one from before it
+  - keys: e
+    wait: 'Export current view[\s\S]*enter apply'
+  - keys: ctrl+u enter
+    wait: 'Enter a file name'
+    check: export-warning
+    expect: 'Binder Error'
+  - keys: esc
+    wait_gone: 'Export current view'

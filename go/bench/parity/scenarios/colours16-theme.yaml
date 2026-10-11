@@ -1,0 +1,28 @@
+description: |
+  A named theme (--theme tokyo-night) on a terminal of fewer colours (TERM=screen without COLORTERM: 16 colours): Textual
+  draws it in truecolor and Rich reduces every colour, the theme's, the dimmed text and
+  the focused grid's tinted background among them.
+covers:
+  - "README Looks: --theme NAME (tokyo-night, dracula, catppuccin-mocha, nord, gruvbox)"
+fixture: demo
+args: ["--theme", "tokyo-night"]
+env: {TERM: screen, COLORTERM: null}
+colours: 16
+threads: 1
+quiet: 1.0
+sizes: [[120, 40]]
+steps:
+  - check: grid
+  - keys: d
+    wait: 'row 0 · file row 0'
+  - check: detail
+  - keys: esc
+    wait_gone: 'file row'
+  - keys: "4"
+    wait: '✓ Binned ra × dec'
+  - check: sky
+  - keys: "3"
+    wait: '✓ Profiled'
+  # Python pqx can draw the first histogram at a stale width; l l redraws it
+  - keys: l l
+  - check: stats

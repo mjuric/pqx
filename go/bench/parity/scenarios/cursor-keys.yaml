@@ -1,0 +1,31 @@
+description: |
+  Moving the cursor: arrows, PgDn/PgUp, Home/End (first/last column), Ctrl+End/Ctrl+Home
+  (last/first row).
+covers:
+  - "README Keys: arrows, PgUp/PgDn, Home/End | move around; Ctrl+Home/End for first/last row"
+  - "help: Home / End | first / last column"
+fixture: demo
+steps:
+  - keys: down down right right
+    wait: 'row 2\b'
+  - check: arrows
+  - keys: pgdn
+    wait_gone: 'row 2\b'
+  - check: pgdn
+  - keys: pgup
+    wait: '  ·  row 2\b'
+  - check: pgup
+  - keys: end
+  - check: end
+    expect: 'ingestTime'
+  - keys: home
+  - check: home
+    expect: 'diaSourceId'
+  - keys: ctrl+end
+    wait: 'row 19,999\b'
+  - check: ctrl-end
+    expect: '19,999 +170000000000019999'
+  - keys: ctrl+home
+    wait: 'row 0\b'
+  - check: ctrl-home
+    expect: '^ │   0 +170000000000000000'

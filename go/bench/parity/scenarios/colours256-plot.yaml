@@ -1,0 +1,47 @@
+description: |
+  Plots on a terminal of fewer colours (TERM=xterm-256color without COLORTERM: 256 colours): the sky map's and the xy density's
+  colourmaps, their legends and the Stats histogram reduced as Python pqx (Rich) reduces
+  them; no colour codes the terminal lacks are sent.
+covers:
+  - "Owner report: the sky map's legend colours differ under GNU screen (TERM=screen)"
+  - "README Astronomy: Sky maps. Mollweide maps of any lon/lat pair, with RA/Dec found automatically"
+fixture: demo
+env: {TERM: xterm-256color, COLORTERM: null}
+colours: 256
+threads: 1
+quiet: 1.0
+sizes: [[120, 40]]
+steps:
+  - keys: "4"
+    wait: '✓ Binned ra × dec'
+  - check: sky
+    expect: ['mode sky ▾', 'colour magma ▾', 'density:']
+  - click: '(?<=colour )magma ▾'
+    wait: 'type to filter   ↑↓ move'
+  - keys: down
+  - keys: enter
+    wait: 'colour viridis ▾'
+  - check: sky-viridis
+  # gray: 256-colour greys, which Textual sends as truecolor and Rich reduces to the
+  # grey ramp (188 → 252)
+  - click: '(?<=colour )viridis ▾'
+    wait: 'type to filter   ↑↓ move|↑↓ move'
+  - keys: down down down
+  - keys: enter
+    wait: 'colour gray ▾'
+  - check: sky-gray
+  - click: '(?<=mode )sky ▾'
+    wait: 'type to filter   ↑↓ move|↑↓ move'
+  - keys: down
+  - keys: enter
+    wait: 'mode xy ▾'
+  - wait: '✓ Binned'
+  - check: xy
+  - keys: "1"
+    wait: '│ [✓*] '
+  - keys: right right right right right right right right right right right
+  - keys: i
+    wait: '✓ Profiled snr'
+  - keys: l l
+  - check: stats-histogram
+    expect: ['p50', 'median']

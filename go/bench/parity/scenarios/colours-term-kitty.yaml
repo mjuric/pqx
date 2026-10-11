@@ -1,0 +1,16 @@
+description: |
+  The colour system for TERM=xterm-kitty without COLORTERM: Rich's 256 colours (Bubble Tea's own detection says truecolor). The grid and the sky map in the colours Python pqx sends.
+covers:
+  - "Go pqx draws in the colour system Python pqx (Textual) picks from TERM and COLORTERM"
+fixture: demo
+env: {TERM: xterm-kitty, COLORTERM: null}
+colours: 256
+threads: 1
+quiet: 1.0
+sizes: [[120, 40]]
+steps:
+  - check: grid
+  - keys: "4"
+    wait: '✓ Binned ra × dec'
+  - check: sky
+    expect: ['mode sky ▾', 'density:']

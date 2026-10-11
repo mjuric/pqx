@@ -1,0 +1,31 @@
+description: |
+  ↑/↓ in the filter box browse earlier filters.
+covers:
+  - "help: **↑/↓** browse history"
+fixture: demo
+steps:
+  - keys: /
+    wait: 'enter apply'
+  - text: "band = 'g'"
+  - keys: enter
+    wait: '✓ 3,354 rows'
+  - keys: /
+    wait: 'enter apply'
+  - keys: ctrl+u
+  - text: "band = 'g' and mag < 20"
+  - keys: enter
+    wait: '✓ 153 rows'
+  - check: second
+  - keys: /
+    wait: 'enter apply'
+  - keys: ctrl+u
+    wait: '› SQL WHERE'
+  - keys: up
+    wait: "› band = 'g' and mag < 20"
+  - check: up-1
+  - keys: up
+    wait: "› band = 'g' *$|› band = 'g' +│"
+  - check: up-2
+  - keys: down
+    wait: "› band = 'g' and mag < 20"
+  - check: down-1

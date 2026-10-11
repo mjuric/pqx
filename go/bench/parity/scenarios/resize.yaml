@@ -1,0 +1,15 @@
+description: |
+  The screen follows a terminal resize: smaller, then larger.
+covers:
+  - "README Install: pqx runs in any modern terminal"
+fixture: demo
+sizes: [[120, 40]]
+steps:
+  - keys: pgdn down
+    wait: 'row 28\b'
+  - resize: [100, 30]
+  - check: smaller
+    expect: 'row 28\b'
+  - resize: [160, 45]
+  - check: larger
+    expect: 'row 28\b'

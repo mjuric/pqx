@@ -1,0 +1,38 @@
+description: |
+  `<`, `>` and `F` in the detail panel change the selected field's column format in the
+  grid (the panel itself keeps full precision).
+covers:
+  - "README Keys: d · Esc | row detail panel (= y i F < > work there too, on the selected field)"
+fixture: demo
+python_bug:
+  - checks: [fewer, more, dialog, set]
+    sizes: [[200, 50]]
+    region: readout
+    ref_shows: 'columns 1–11 of 16'      # stale: Python doesn't redraw it after a format change
+    correct: 'columns 1–10 of 16'        # recomputed for the narrower column
+    note: "Python pqx doesn't redraw the column readout after a format change (_set_format never calls _render_hscroll)"
+  - checks: [set]
+    region: keybar
+    ref_shows: 'enter apply   esc back'   # Python shows the filter box's keys
+    correct: '^\s*↑↓ column'   # what the key bar should show there
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
+steps:
+  - keys: d
+    wait: "file row"
+  - keys: tab down down
+  - keys: "<"
+    toast: "✓ ra:"
+  - keys: "<"
+    toast: "✓ ra:"
+    check: fewer
+    expect: ['f64·deg·\.4f', 'ra +333\.1528812003216']   # the panel keeps full precision
+  - keys: ">"
+    toast: "✓ ra:"
+    check: more
+  - keys: F
+    wait: 'Format of[\s\S]*enter apply'
+  - check: dialog
+  - text: ".1f"
+  - keys: enter
+    toast: "✓ ra:"
+    check: set

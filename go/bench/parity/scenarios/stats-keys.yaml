@@ -1,0 +1,24 @@
+description: |
+  Stats tab keys: l log counts, L log values, [ ] fewer / more bins.
+covers:
+  - "README All keys: l L [ ] | Stats: log counts, log values, fewer/more bins"
+fixture: demo
+threads: 1
+quiet: 1.0
+steps:
+  - keys: right right right right right right right right
+  - keys: "3"
+    wait: '✓ Profiled psfFlux'
+  # Python pqx sometimes draws the first histogram at a stale width (seen at 120x40);
+  # toggling log counts twice redraws it at the panel's width
+  - keys: l l
+  - check: psfFlux
+  - keys: l
+  - check: log-counts
+  - keys: L
+  - check: log-values
+  - keys: "["
+  - check: fewer-bins
+  - keys: "]"
+  - keys: "]"
+  - check: more-bins

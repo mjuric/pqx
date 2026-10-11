@@ -1,0 +1,891 @@
+package grid
+
+// Tests from the independent review of WP7: text from the file never
+// reaches the terminal raw; actions waiting on rows; memory; notices; and
+// the behaviours the design lists as "carry over exactly".
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"math/rand/v2"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strings"
+	"testing"
+	"unicode/utf8"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/mjuric/pqx/go/internal/cells"
+	"github.com/mjuric/pqx/go/internal/data"
+	"github.com/mjuric/pqx/go/internal/fmtx"
+	"github.com/mjuric/pqx/go/internal/ui/kit"
+)
+
+// sgr matches the style sequences the screen is drawn with.
+var sgr = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
+
+// raw reports what in s would reach the terminal as a control: ESC (once
+// style sequences are taken out), BEL, other C0 controls, C1 controls.
+func rawControls(s string) []string {
+	var out []string
+	for i, r := range sgr.ReplaceAllString(s, "") {
+		if r == '\n' {
+			continue
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || (r == utf8.RuneError && !strings.HasPrefix(s[i:], "\uFFFD")) {
+			out = append(out, string(r))
+		}
+	}
+	return out
+}
+
+const hostile = "\x1b]0;PWN\x07f\u009b31m\x1b[2J\tx\ny"
+
+func hostileFake() *fakeDS {
+	ds := newFake(200, 4)
+	st := arrow.StructOf(arrow.Field{Name: hostile, Type: arrow.PrimitiveTypes.Int64})
+	ds.cols = append(ds.cols,
+		data.Column{Name: "s" + hostile, Type: "STRUCT", Arrow: st, Unit: "u" + hostile},
+		data.Column{Name: "txt", Type: "VARCHAR", Arrow: arrow.BinaryTypes.String, Unit: hostile})
+	ds.special = func(name string, fr int64) (data.Value, bool) {
+		switch name {
+		case "s" + hostile:
+			return data.Struct{{Name: hostile, Value: fr}}, true
+		case "txt":
+			return "v" + hostile, true
+		}
+		return nil, false
+	}
+	return ds
+}
+
+func TestHostileTextNeverReachesTheScreen(t *testing.T) {
+	ds := hostileFake()
+	h := newHarness(t, ds, 220, 30, hopts{page: 1})
+	check := func(what string) {
+		t.Helper()
+		if bad := rawControls(h.raw()); len(bad) > 0 {
+			t.Errorf("%s: the screen holds %q", what, bad)
+		}
+		for _, l := range h.gridRaw() {
+			if bad := rawControls(l); len(bad) > 0 {
+				t.Errorf("%s: the grid holds %q in %q", what, bad, l)
+			}
+		}
+		if s := h.g.Subtitle().Plain; len(rawControls(s)) > 0 {
+			t.Errorf("%s: subtitle %q", what, s)
+		}
+		for _, n := range h.notes {
+			if len(rawControls(n.Text+n.Title)) > 0 && !strings.Contains(n.Text, "\n") {
+				t.Errorf("%s: notice %q", what, n.Text)
+			}
+			if strings.ContainsAny(n.Text+n.Title, "\x1b\x07\u009b") {
+				t.Errorf("%s: notice %q", what, n.Text)
+			}
+		}
+		if strings.ContainsAny(h.status.Text, "\x1b\x07\u009b\n\t") {
+			t.Errorf("%s: status %q", what, h.status.Text)
+		}
+	}
+	check("first screen")
+	h.press("end")
+	check("end")
+	h.press("f")
+	check("raw")
+	h.press("y", "-", "left", "-")
+	check("copy and hide")
+	h.env.State.Current = "s" + hostile
+	h.send(kit.ColumnChangedMsg{From: "schema"})
+	h.settle()
+	check("hidden hint")
+	h.send(kit.SetViewMsg{View: data.View{Where: "txt = 'v" + hostile + "'"}, KeepFileRow: -1})
+	h.settle()
+	check("a filter holding controls")
+	ds.failFrom = 150
+	h.send(kit.GotoMsg{Row: 199})
+	h.settle()
+	check("a read error holding controls")
+	if !h.noted("broken") {
+		t.Errorf("no read error shown: %+v", h.notes)
+	}
+}
+
+// A waiter for a row whose read was cancelled or failed must not fire when
+// the row arrives later for another reason.
+func TestWaiterDroppedWhenItsReadStops(t *testing.T) {
+	ds := newFake(100_000, 4)
+	h := newHarness(t, ds, 120, 30)
+	ds.gate = make(chan struct{})
+	h.send(kit.GotoMsg{Row: 50_000})
+	h.send(kp("y"))
+	h.send(kp("esc"))
+	h.settle()
+	close(ds.gate)
+	ds.gate = nil
+	h.press("down")
+	h.settle()
+	if len(h.copies) != 0 {
+		t.Errorf("a copy happened after Esc: %q", h.copies)
+	}
+
+	// a failed read
+	ds2 := newFake(100_000, 4)
+	h2 := newHarness(t, ds2, 120, 30)
+	ds2.failFrom = 60_000
+	h2.send(kit.GotoMsg{Row: 70_000})
+	h2.send(kp("y"))
+	h2.settle()
+	ds2.failFrom = 0
+	h2.press("up", "down")
+	if len(h2.copies) != 0 {
+		t.Errorf("a copy happened after a failed read: %q", h2.copies)
+	}
+}
+
+// y pressed again while the row loads copies once.
+func TestRepeatedActionWhileLoadingHappensOnce(t *testing.T) {
+	ds := newFake(100_000, 4)
+	h := newHarness(t, ds, 120, 30)
+	ds.gate = make(chan struct{})
+	h.send(kit.GotoMsg{Row: 50_000})
+	for i := 0; i < 4; i++ {
+		h.send(kp("y"))
+	}
+	close(ds.gate)
+	h.settle()
+	n := 0
+	for _, x := range h.notes {
+		if strings.Contains(x.Text, "Copied") {
+			n++
+		}
+	}
+	if len(h.copies) != 1 || n != 1 {
+		t.Errorf("%d copies, %d notices", len(h.copies), n)
+	}
+}
+
+func heap() uint64 {
+	runtime.GC()
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.HeapAlloc
+}
+
+// The cache stays bounded whatever the jumps; eviction rebuilds the maps.
+func TestEvictionKeepsMemoryBounded(t *testing.T) {
+	ds := newFake(10_000_000, 79)
+	h := newHarness(t, ds, 300, 60)
+	g := h.g
+	before := heap()
+	peak := before
+	jumps := 2 * cacheLimit / (3 * g.bodyH()) // twice the rows the cache keeps
+	for i := 0; i < jumps; i++ {
+		h.send(kit.GotoMsg{Row: int64(i) * 20_011})
+		h.settle()
+		if i%10 == 9 {
+			peak = max(peak, heap())
+		}
+	}
+	bound := 5_000 // rows; the old limit (50,000) kept them all
+	n := len(g.v.fileRow)
+	if n > bound {
+		t.Errorf("%d rows cached after %d jumps", n, jumps)
+	}
+	for name, col := range g.v.vals {
+		if len(col) > bound {
+			t.Errorf("%s holds %d values", name, len(col))
+		}
+	}
+	for name, col := range g.v.text {
+		if len(col) > bound {
+			t.Errorf("%s holds %d formatted cells", name, len(col))
+		}
+	}
+	t.Logf("heap %d MB before, %d MB at the peak, %d rows cached after %d jumps", before>>20, peak>>20, n, jumps)
+	if peak > before+50<<20 {
+		t.Errorf("heap grew by %d MB", (peak-before)>>20)
+	}
+}
+
+// A column that fails says so once per view, not on every page.
+func TestFailedColumnsNoticeOnce(t *testing.T) {
+	ds := newFake(100_000, 120)
+	h := newHarness(t, ds, 150, 42)
+	ds.colsHook = func(context.Context, []string) error { return errors.New("boom") }
+	h.press("end")
+	for i := 0; i < 5; i++ {
+		h.press("pgdown")
+	}
+	n := 0
+	for _, x := range h.notes {
+		if x.Title == "✗ Columns" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d column notices, want 1", n)
+	}
+}
+
+// --format formats are used, never written to formats.yaml.
+func TestSessionFormatsAreNeverSaved(t *testing.T) {
+	ds := openFixture(t, "demo")
+	h := newHarness(t, ds, 150, 42, hopts{session: map[string]fmtx.Override{"dec": {Digits: 2, Set: true}}})
+	h.env.State.Current = "dec"
+	h.send(kit.ColumnChangedMsg{From: "schema"})
+	h.settle()
+	h.press(">", "<")
+	h.send(kit.FormatSetMsg{Column: "dec", Override: fmtx.Override{Spec: ".1f", Set: true}})
+	h.settle()
+	_ = filepath.WalkDir(h.cfg, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			t.Errorf("a session format wrote %s", p)
+		}
+		return nil
+	})
+}
+
+// A new view of the same columns keeps the leftmost column; clearing keeps
+// the record on its screen row.
+func TestViewportKeptAcrossViews(t *testing.T) {
+	ds := newFake(10_000, 60)
+	h := newHarness(t, ds, 150, 42)
+	g := h.g
+	for i := 0; i < 30; i++ {
+		h.send(kp("right"))
+	}
+	for i := 0; i < 6; i++ { // (off the right edge: wider rows don't push it off)
+		h.send(kp("left"))
+	}
+	h.settle()
+	left := g.cols[leftmost(g)].Name
+	if g.sx == 0 {
+		t.Fatal("not scrolled")
+	}
+	h.filterWith("id % 3 = 0")
+	if g.cols[leftmost(g)].Name != left {
+		t.Errorf("leftmost column %q after a filter, want %q", g.cols[leftmost(g)].Name, left)
+	}
+	// the record on screen row 5 stays there when the filter is cleared
+	h.send(kit.GotoMsg{Row: 700})
+	h.settle()
+	for g.curRow-g.top != 5 {
+		if g.curRow-g.top > 5 {
+			h.press("up")
+		} else {
+			h.press("down")
+		}
+	}
+	fr := g.fileRowAt(g.curRow)
+	h.press("x")
+	if !h.env.State.View.Plain() || g.curRow != fr || g.curRow-g.top != 5 {
+		t.Errorf("after x: row %d (want file row %d), screen row %d", g.curRow, fr, g.curRow-g.top)
+	}
+	if g.cols[leftmost(g)].Name != left {
+		t.Errorf("leftmost column %q after clearing, want %q", g.cols[leftmost(g)].Name, left)
+	}
+}
+
+// A jump near the end leaves no empty rows at the bottom.
+func TestNoEmptyRowsAtTheBottom(t *testing.T) {
+	h := newHarness(t, newFake(1000, 4), 120, 30)
+	h.send(kit.GotoMsg{Row: 997})
+	h.settle()
+	g := h.g
+	if g.top != 997-int64(g.bodyH())+1 { // (in the window: scrolled just enough, as Python)
+		t.Errorf("top %d, want %d", g.top, 997-int64(g.bodyH())+1)
+	}
+	gl := h.grid()
+	if strings.TrimSpace(gl[len(gl)-1]) == "" {
+		t.Error("an empty row at the bottom")
+	}
+}
+
+// A binary column (widest not guessable) that widens only when drawn, past
+// the screen's edge with the cursor on it: the draw scrolls it back.
+func TestFitVisibleScrollsTheCursorBack(t *testing.T) {
+	ds := newFake(1000, 30)
+	ds.cols = append(ds.cols, data.Column{Name: "blob", Type: "BLOB", Arrow: arrow.BinaryTypes.Binary})
+	ds.special = func(name string, fr int64) (data.Value, bool) {
+		if name != "blob" {
+			return nil, false
+		}
+		if fr == 7 {
+			return []byte(strings.Repeat("z", 40)), true
+		}
+		return []byte{}, true
+	}
+	h := newHarness(t, ds, 150, 42)
+	g := h.g
+	h.press("end")
+	h.grid()
+	if !g.cursorInView() {
+		t.Errorf("cursor off screen: scroll %d, blob %d wide", g.sx, g.colWidth("blob"))
+	}
+	drawnCellsFit(t, h, "binary")
+}
+
+// Widths come from a sample of the rows read when the widest can't be
+// guessed: rows read below the screen widen the column before they show.
+func TestSampledWidthsForUnguessableColumns(t *testing.T) {
+	ds := newFake(1000, 3)
+	ds.cols = append(ds.cols, data.Column{Name: "blob", Type: "BLOB", Arrow: arrow.BinaryTypes.Binary})
+	h0 := newHarness(t, newFake(1000, 3), 120, 30)
+	n := int64(h0.g.bodyH())
+	ds.special = func(name string, fr int64) (data.Value, bool) {
+		if name != "blob" {
+			return nil, false
+		}
+		if fr >= n {
+			return []byte(strings.Repeat("q", 30)), true
+		}
+		return []byte{1}, true
+	}
+	h := newHarness(t, ds, 120, 30)
+	long := cells.Width(fmtx.Format([]byte(strings.Repeat("q", 30)), fmtx.KindBinary, fmtx.Opts{Width: fmtx.DefaultWidth}))
+	if got := h.g.colWidth("blob"); got < long {
+		t.Errorf("blob %d wide, want %d from the rows read below the screen", got, long)
+	}
+}
+
+// A column cut by the right edge counts as hidden, and is drawn cut, its
+// numbers in place (right-justified).
+func TestClippedColumn(t *testing.T) {
+	ds := newFake(1000, 40)
+	h := newHarness(t, ds, 100, 30)
+	g := h.g
+	h.grid()
+	slots := g.layout()
+	last := slots[len(slots)-1]
+	if !last.clipped {
+		t.Skip("no column cut at this width")
+	}
+	_, lastFull, _, hr := g.colWindow()
+	if lastFull != last.col-1 || hr != len(g.cols)-last.col {
+		t.Errorf("last visible %d, hidden right %d; clipped column %d", lastFull, hr, last.col)
+	}
+	c := g.cols[last.col]
+	tx, _ := g.cellText(last.col, g.top)
+	full := " " + tx.plain + strings.Repeat(" ", g.colWidth(c.Name)-tx.w+pad)
+	if c.right { // cropped as Python does, numbers too (parity decision 1)
+		full = strings.Repeat(" ", pad+g.colWidth(c.Name)-tx.w) + tx.plain + " "
+	}
+	line := h.grid()[headerRows]
+	got := ansi.Cut(line, last.x, last.x+last.sw)
+	if got != full[:last.sw] {
+		t.Errorf("clipped cell %q, want %q", got, full[:last.sw])
+	}
+}
+
+// A read that failed isn't retried for the same rows; a short read isn't
+// read again either.
+func TestFailedAndShortReadsAreNotRetried(t *testing.T) {
+	ds := newFake(1000, 4)
+	h := newHarness(t, ds, 120, 30)
+	ds.failFrom = 500
+	h.send(kit.GotoMsg{Row: 600})
+	h.settle()
+	n := len(ds.fetches())
+	h.press("down", "up", "down")
+	if len(ds.fetches()) != n {
+		t.Errorf("a failed read was retried: %d -> %d reads", n, len(ds.fetches()))
+	}
+
+	ds2 := newFake(1000, 4)
+	ds2.shortAt = 900 // the view says 1,000 rows but has 900
+	h2 := newHarness(t, ds2, 120, 30)
+	h2.send(kit.GotoMsg{Row: 990})
+	h2.settle()
+	n = len(ds2.fetches())
+	h2.press("up", "down")
+	if len(ds2.fetches()) != n {
+		t.Errorf("a short read was read again: %d -> %d reads", n, len(ds2.fetches()))
+	}
+}
+
+// Columns read for rows evicted (or renumbered) meanwhile aren't stored;
+// a failure marks only rows read.
+func TestColumnResultsAreCheckedAgainstTheCache(t *testing.T) {
+	h := newHarness(t, newFake(1000, 4), 120, 30, hopts{page: 1})
+	g := h.g
+	gen := g.v.gen
+	w := data.Window{Len: 2, FileRows: []int64{900, 901}, Cols: map[string][]data.Value{"zz": {int64(1), int64(2)}}}
+	g.byName["zz"] = 0
+	g.onCols(colsResult{req: colsReq{gen: gen, tag: "cols", rows: []int64{0, 1}, fileRows: []int64{900, 901}, cols: []string{"zz"}}, win: w})
+	if _, ok := g.v.cell("zz", 0); ok {
+		t.Error("values for other file rows were stored")
+	}
+	delete(g.byName, "zz")
+	g.markFailed(colsReq{rows: []int64{0, 999}}, map[string]error{"q": nil})
+	if _, ok := g.v.cell("q", 999); ok {
+		t.Error("a row not read was marked failed")
+	}
+	if v, _ := g.v.cell("q", 0); v != (failedCell{}) {
+		t.Error("a row read wasn't marked failed")
+	}
+}
+
+// After a jump past the end of a view of unknown size the cursor goes back
+// to the rows known; the end found is announced.
+func TestJumpPastTheEnd(t *testing.T) {
+	ds := newFake(1000, 3)
+	ds.countGate = make(chan struct{})
+	h := newHarness(t, ds, 80, 20, hopts{page: 1})
+	h.filterWith("id % 2 = 0")
+	known := h.g.v.known
+	h.send(kit.GotoMsg{Row: 5000})
+	h.settle()
+	if h.g.v.hope != 0 || h.g.curRow != known-1 {
+		t.Errorf("hope %d, row %d (known %d)", h.g.v.hope, h.g.curRow, known)
+	}
+	totals := h.totals
+	h.send(kit.GotoMsg{Row: 490})
+	h.settle()
+	if h.env.State.Total != 500 || h.totals == totals {
+		t.Errorf("end found: total %d, TotalMsg %d -> %d", h.env.State.Total, totals, h.totals)
+	}
+	close(ds.countGate)
+	h.settle()
+}
+
+// The lazy columns read reaches two screens right of the view.
+func TestColumnsReadTwoScreensAhead(t *testing.T) {
+	ds := newFake(lazyRows, lazyCols)
+	h := newHarness(t, ds, 150, 42)
+	var cols []string
+	for _, c := range ds.log() {
+		cols = append(cols, c.cols...)
+	}
+	two := h.g.nearNames(2)
+	for _, n := range two {
+		if !strings.Contains(strings.Join(cols, ","), n) {
+			t.Errorf("%s (within two screens) not read", n)
+		}
+	}
+	if len(h.g.nearNames(1)) >= len(two) {
+		t.Error("two screens hold no more columns than one")
+	}
+}
+
+// Reserved widths are at most reserveCap.
+func TestReservedWidthCap(t *testing.T) {
+	h := newHarness(t, newFake(100, 3), 120, 30)
+	g := h.g
+	h.env.State.Raw = true
+	g.footer = map[string][2]data.Value{"name": {strings.Repeat("w", 100), "a"}}
+	if w := g.reservedWidth(g.cols[g.byName["name"]]); w != reserveCap {
+		t.Errorf("reserved %d, want %d", w, reserveCap)
+	}
+}
+
+// A click on ‹ pages left so the old first column is the last one shown;
+// a click below the last row does nothing.
+func TestPageLeftAndClickBelowTheRows(t *testing.T) {
+	h := newHarness(t, newFake(5, 60), 120, 30)
+	g := h.g
+	h.press("end")
+	sx := g.sx
+	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: g.x, Y: g.y + 3})
+	h.settle()
+	if want := max(0, sx-(g.w-2*edgeCells)); g.sx != want {
+		t.Errorf("after ‹: scroll %d, want %d (a table's width less)", g.sx, want)
+	}
+	row, col := g.curRow, g.curCol
+	h.send(tea.MouseClickMsg{Button: tea.MouseLeft, X: g.x + g.layout()[0].x + 1, Y: g.y + headerRows + 8})
+	h.settle()
+	if g.curRow != row || g.curCol != col || h.env.State.DetailOpen {
+		t.Errorf("a click below the rows moved the cursor to (%d,%d)", g.curRow, g.curCol)
+	}
+}
+
+// Whatever the widths, cursor and scrolling, View fits every cell it draws
+// before drawing (fitVisible, including its second round after scrolling
+// the cursor back): nothing widens while the frame is drawn.
+func TestNothingWidensWhileDrawing(t *testing.T) {
+	rng := rand.New(rand.NewPCG(7, 7))
+	for trial := 0; trial < 25; trial++ {
+		ds := newFake(500, 2)
+		ncols := 10 + rng.IntN(30)
+		long := map[string]int{}
+		for j := 0; j < ncols; j++ {
+			name := fmt.Sprintf("b%02d", j)
+			ds.cols = append(ds.cols, data.Column{Name: name, Arrow: arrow.BinaryTypes.Binary})
+			long[name] = rng.IntN(18)
+		}
+		row := int64(1 + rng.IntN(15))
+		ds.special = func(name string, fr int64) (data.Value, bool) {
+			n, ok := long[name]
+			if !ok {
+				return nil, false
+			}
+			if fr == row { // (rows read are sampled every few: this one may not be)
+				return make([]byte, n), true
+			}
+			return []byte{}, true
+		}
+		h := newHarness(t, ds, 60+rng.IntN(100), 30)
+		g := h.g
+		for k := 0; k < 6; k++ {
+			switch rng.IntN(4) {
+			case 0:
+				h.press("end")
+			case 1:
+				h.press("home")
+			default:
+				for i := rng.IntN(12); i > 0; i-- {
+					h.send(kp([]string{"left", "right"}[rng.IntN(2)]))
+				}
+				h.settle()
+			}
+			if g.lateGrowth != 0 {
+				t.Fatalf("trial %d: %d columns widened while drawing", trial, g.lateGrowth)
+			}
+		}
+	}
+}
+
+// fitVisible's second round: widening the cursor's neighbours pushes it off
+// screen; scrolling it back drops a wide column on the left, which brings
+// columns right of the cursor into view that were never drawn with the
+// widening row. They must be fitted before the frame is drawn.
+func TestFitVisibleSecondRound(t *testing.T) {
+	scrolled := 0
+	for _, width := range []int{100, 110, 120, 130, 140} {
+		for size := 1; size <= 6; size++ {
+			if secondRound(t, width, size) {
+				scrolled++
+			}
+		}
+	}
+	if scrolled == 0 {
+		t.Error("no case scrolled the cursor back")
+	}
+}
+
+func secondRound(t *testing.T, width, size int) bool {
+	t.Helper()
+	ds := newFake(500, 1) // id, name
+	ds.cols = append(ds.cols, data.Column{Name: "wide", Arrow: arrow.BinaryTypes.String})
+	for j := 0; j < 30; j++ {
+		ds.cols = append(ds.cols, data.Column{Name: fmt.Sprintf("b%02d", j), Arrow: arrow.BinaryTypes.Binary})
+	}
+	h0 := newHarness(t, newFake(10, 2), width, 30)
+	n := int64(h0.g.bodyH())
+	row := n + 1 // below the first screen, not among the rows sampled for widths
+	for row%max(1, 2*n/widthSampleRows) == 0 || row%max(1, 3*n/widthSampleRows) == 0 {
+		row++
+	}
+	ds.special = func(name string, fr int64) (data.Value, bool) {
+		switch {
+		case name == "wide":
+			return strings.Repeat("w", 36), true
+		case name[0] == 'b' && fr == row:
+			return make([]byte, size), true
+		case name[0] == 'b':
+			return []byte{}, true
+		}
+		return nil, false
+	}
+	h := newHarness(t, ds, width, 30)
+	g := h.g
+	h.grid()
+	_, last, _, _ := g.colWindow()
+	h.env.State.Current = g.cols[last].Name
+	h.send(kit.ColumnChangedMsg{From: "schema"})
+	h.settle()
+	before := g.lateGrowth
+	h.send(kp("pgdown"))
+	h.settle()
+	if g.lateGrowth != before {
+		t.Errorf("width %d, %d bytes: %d columns widened while drawing", width, size, g.lateGrowth-before)
+	}
+	if !g.cursorInView() {
+		t.Errorf("width %d, %d bytes: cursor off screen", width, size)
+	}
+	return g.sx > 0
+}
+
+// A grid that gets wider scrolls back left so no space is left empty at the
+// right (demo 120x30: d, 30 x right, d).
+func TestWiderGridFillsTheSpace(t *testing.T) {
+	ds := openFixture(t, "demo")
+	h := newHarness(t, ds, 120, 30)
+	g := h.g
+	h.press("d")
+	for i := 0; i < 30; i++ {
+		h.send(kp("right"))
+	}
+	h.settle()
+	h.press("d")
+	h.grid()
+	n := len(g.cols)
+	if g.sx > g.maxSX() {
+		t.Errorf("scroll %d leaves room (at most %d, %d columns)", g.sx, g.maxSX(), n)
+	}
+	if !g.cursorInView() {
+		t.Error("cursor off screen")
+	}
+	// a larger terminal likewise
+	h.send(tea.WindowSizeMsg{Width: 80, Height: 30})
+	h.press("end")
+	h.send(tea.WindowSizeMsg{Width: 200, Height: 30})
+	h.settle()
+	h.grid()
+	if g.sx > g.maxSX() {
+		t.Errorf("after growing the terminal: scroll %d leaves room", g.sx)
+	}
+}
+
+// Row labels are as wide as the widest label of Python pqx's window around
+// the cursor: 1,000 rows of a 16-column file from the top, its last 1,000
+// at the end, and back.
+func TestRowLabelsSizedForPythonsWindow(t *testing.T) {
+	h := newHarness(t, newFake(20_000, 16), 150, 42)
+	g := h.g
+	if w := g.pageRows(); w != 1000 {
+		t.Fatalf("window %d rows", w)
+	}
+	if lw := g.labelWidth(); lw != len("999") {
+		t.Errorf("first screen: labels %d wide", lw)
+	}
+	h.press("ctrl+end")
+	if lw := g.labelWidth(); lw != len("19,999") || g.v.pageOff != 19_000 {
+		t.Errorf("at the end: labels %d wide, window at %d", lw, g.v.pageOff)
+	}
+	h.press("ctrl+home")
+	if lw := g.labelWidth(); lw != len("999") {
+		t.Errorf("back at the top: labels %d wide", lw)
+	}
+	h.send(kit.GotoMsg{Row: 5000})
+	h.settle()
+	if lw := g.labelWidth(); g.v.pageOff != 4500 || lw != len("5,499") {
+		t.Errorf("after g 5000: window at %d, labels %d wide", g.v.pageOff, lw)
+	}
+	if gl := h.grid(); !strings.HasPrefix(gl[headerRows+5], "  5,000 ") && !strings.Contains(gl[headerRows], " 4,9") {
+		t.Logf("%q", gl[headerRows])
+	}
+}
+
+// The by-position fallback of readColumns refuses rows that moved.
+func TestReadColumnsByPositionChecksTheRows(t *testing.T) {
+	ds := newFake(1000, 4)
+	ds.noColumnsAPI = true
+	v := data.View{Where: "id % 2 = 0"}
+	ok := colsReq{rows: []int64{0, 1, 2}, fileRows: []int64{0, 2, 4}, cols: []string{"c002"}}
+	w, err := readColumns(t.Context(), ds, v, ok)
+	if err != nil || w.Cols["c002"][2] != truth("c002", 4) {
+		t.Fatalf("by position: %v %+v", err, w.Cols)
+	}
+	moved := colsReq{rows: []int64{0, 1, 2}, fileRows: []int64{0, 3, 4}, cols: []string{"c002"}}
+	if _, err := readColumns(t.Context(), ds, v, moved); err == nil {
+		t.Error("rows that moved were read by position")
+	}
+}
+
+// leftmost is the first scrollable column wholly on screen.
+func leftmost(g *Grid) int {
+	first, last, _, _ := g.colWindow()
+	if last < first {
+		return g.pinned()
+	}
+	return first
+}
+
+// Reads take Python's window of rows around the cursor, and widths fit all
+// of it: a long value 900 rows down widens its column on the first screen.
+func TestWidthsFitPythonsWindow(t *testing.T) {
+	ds := newFake(5000, 4)
+	long := strings.Repeat("z", 30)
+	ds.special = func(name string, fr int64) (data.Value, bool) {
+		if name == "name" && fr == 900 {
+			return long, true
+		}
+		return nil, false
+	}
+	h := newHarness(t, ds, 120, 30)
+	if c := ds.fetches()[0]; c.start != 0 || c.n != 1000 {
+		t.Errorf("first read %+v, want Python's window [0, 1000)", c)
+	}
+	if w := h.g.colWidth("name"); w != len(long) {
+		t.Errorf("name %d wide on the first screen, want %d", w, len(long))
+	}
+}
+
+// A small plain file is read whole (Python's window_cost and
+// LAZY_MIN_SAVING_MS); a big one lazily.
+func TestSmallPlainFilesLoadWhole(t *testing.T) {
+	h := newHarness(t, openFixture(t, "demo"), 120, 40)
+	if c := h.ds.(interface{ Columns() []data.Column }); c == nil {
+		t.Fatal()
+	}
+	if !h.g.wholeIsCheap(0, 1000, 8) {
+		t.Error("demo's first window isn't read whole")
+	}
+	for _, n := range []string{"ingestTime", "detector"} {
+		if _, ok := h.g.v.cell(n, 0); !ok {
+			t.Errorf("%s not read with the first window", n)
+		}
+	}
+	big := newHarness(t, newFake(10_000, 120), 120, 40)
+	if big.g.wholeIsCheap(0, 1000, 8) {
+		t.Error("a big file's window is read whole")
+	}
+}
+
+// A column chosen on another tab (Schema, Stats) goes to the left edge of
+// the hidden table, as DataTable scrolls a table that isn't shown.
+func TestColumnChosenElsewhereGoesToTheLeftEdge(t *testing.T) {
+	h := newHarness(t, newFake(1000, 60), 150, 42)
+	g := h.g
+	h.env.State.Tab = kit.TabSchema
+	h.env.State.Current = "c030"
+	h.send(kit.ColumnChangedMsg{From: "schema"})
+	h.settle()
+	if g.curName() != "c030" || g.sx != min(g.colStart(g.curCol), g.maxSX()) {
+		t.Errorf("cursor on %q, scroll %d, want the column's start %d", g.curName(), g.sx, g.colStart(g.curCol))
+	}
+	// on the Data tab (the details pane) it scrolls only as far as needed
+	h.env.State.Tab = kit.TabData
+	h.press("home")
+	h.env.State.Current = "c030"
+	h.send(kit.ColumnChangedMsg{From: "detail"})
+	h.settle()
+	if _, last, _, _ := g.colWindow(); last != g.curCol {
+		t.Errorf("from the details pane: last shown %d, cursor %d", last, g.curCol)
+	}
+}
+
+// g places the row as Python's _seek_to does: a row in the window the grid
+// holds is scrolled to as little as shows it; another loads a window
+// around it, shown from its top and scrolled just enough (the row on the
+// last screen row), or where it is in that window's first screen.
+func TestGotoPlacesTheRowAsPython(t *testing.T) {
+	h := newHarness(t, newFake(2_000_000, 16), 120, 40) // window 1,000 rows
+	g := h.g
+	n := int64(g.bodyH())
+	for _, c := range []struct{ row, top int64 }{
+		{1234, 1234 - n + 1},     // a new window: at the bottom
+		{1240, 1234 - n + 1 + 6}, // in it, below the screen: scrolled 6
+		{1000, 1000},             // in it, above: at the top
+		{1_499_986, 1_499_986 - n + 1},
+		{5, 0}, // a window from the top: where it is
+	} {
+		h.send(kit.GotoMsg{Row: c.row})
+		h.settle()
+		if g.curRow != c.row || g.top != c.top {
+			t.Errorf("g %d: row %d, top %d, want top %d", c.row, g.curRow, g.top, c.top)
+		}
+	}
+}
+
+// A top-level map's header names its entries after the column, as PyArrow
+// does reading a Parquet file (and the Schema tab shows).
+func TestMapHeaderNamesItsEntries(t *testing.T) {
+	ds := newFake(10, 2)
+	ds.cols = append(ds.cols, data.Column{Name: "mp", Arrow: arrow.MapOf(arrow.BinaryTypes.String, arrow.PrimitiveTypes.Int64)})
+	h := newHarness(t, ds, 120, 30)
+	g := h.g
+	if _, sub := g.header(g.cols[g.byName["mp"]]); sub != "map<string, int64 ('mp')>" {
+		t.Errorf("header %q", sub)
+	}
+}
+
+// s pressed again before the first press's view is applied cycles on from
+// the sort it asked for, and the views arrive in order.
+func TestQuickSortPresses(t *testing.T) {
+	for _, c := range []struct {
+		presses int
+		want    []data.Sort
+	}{
+		{2, []data.Sort{{Column: "c002", Desc: true}}},
+		{3, nil},
+		{4, []data.Sort{{Column: "c002"}}},
+	} {
+		h := newHarness(t, newFake(1000, 5), 120, 30)
+		h.press("right", "right")
+		for i := 0; i < c.presses; i++ {
+			h.send(kp("s")) // (no settling in between)
+		}
+		h.settle()
+		if got := h.env.State.View.OrderBy; len(got) != len(c.want) || (len(got) > 0 && got[0] != c.want[0]) {
+			t.Errorf("%d presses: order %+v, want %+v", c.presses, got, c.want)
+		}
+	}
+}
+
+// The latest view asked for wins, whatever order the messages arrive in:
+// quick s, = and x in a row, and a view from elsewhere (the filter box)
+// while the grid's own are on their way.
+func TestLatestViewWins(t *testing.T) {
+	type step struct {
+		key  string
+		view *data.View // a view from elsewhere
+	}
+	ext := data.View{Where: "id % 2 = 0"}
+	for _, c := range []struct {
+		name  string
+		steps []step
+		want  data.View
+	}{
+		{"s s x", []step{{key: "s"}, {key: "s"}, {key: "x"}}, data.View{}},
+		{"s = x", []step{{key: "s"}, {key: "="}, {key: "x"}}, data.View{}},
+		{"= = x", []step{{key: "="}, {key: "="}, {key: "x"}}, data.View{}},
+		{"s s, then the box", []step{{key: "s"}, {key: "s"}, {view: &ext}}, ext},
+		{"=, then the box", []step{{key: "="}, {view: &ext}}, ext},
+		{"s, the box, s", []step{{key: "s"}, {view: &ext}, {key: "s"}}, data.View{Where: ext.Where, OrderBy: []data.Sort{{Column: "c002"}}}},
+		{"s, the box, =", []step{{key: "s"}, {view: &ext}, {key: "="}}, data.View{Where: "id % 2 = 0 and c002 = 2"}},
+	} {
+		for run := 0; run < 5; run++ {
+			h := newHarness(t, newFake(1000, 5), 120, 30)
+			h.press("right", "right")
+			for _, s := range c.steps {
+				if s.view != nil {
+					h.send(kit.SetViewMsg{View: *s.view, KeepFileRow: -1})
+				} else {
+					h.send(kp(s.key)) // (no settling in between)
+				}
+			}
+			h.settle()
+			if got := h.env.State.View; !sameView(got, c.want) {
+				t.Errorf("%s: view %+v, want %+v", c.name, got, c.want)
+				break
+			}
+		}
+	}
+}
+
+// A typed filter that fails gets the box back to edit it, even when it was
+// typed right after a quick s: the grid queues it behind its own view and
+// sends it again, and the filter still knows it as its typed one.
+func TestTypedFilterFailsAfterQuickSort(t *testing.T) {
+	for run := 0; run < 5; run++ {
+		h := newHarness(t, newFake(1000, 5), 120, 30)
+		h.press("right", "right")
+		// one burst: s, /, (oops, Enter (no settling in between)
+		h.send(kp("s"))
+		h.send(kit.FocusMsg{Pane: "filter"}) // what / asks for
+		for _, r := range "(oops" {
+			h.send(tea.KeyPressMsg{Code: r, Text: string(r)})
+		}
+		h.send(kp("enter"))
+		h.settle()
+		if !h.f.TypingFocused() || h.g.focused {
+			t.Fatalf("run %d: box focused %v, grid focused %v", run, h.f.TypingFocused(), h.g.focused)
+		}
+		if !h.f.BorderError() || h.status.Severity != kit.Error {
+			t.Fatalf("run %d: no error shown: border %v, status %+v", run, h.f.BorderError(), h.status)
+		}
+		// (the failed filter isn't shown; whether the sort stays is the
+		// typed filter's base, an issue of its own)
+		if got := h.env.State.View; got.Where != "" {
+			t.Errorf("run %d: view %+v, want no filter", run, got)
+		}
+	}
+}

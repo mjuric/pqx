@@ -1,0 +1,28 @@
+description: |
+  Esc while user-started work runs (statistics over a slow filter) cancels it; the
+  detail panel stays open.
+covers:
+  - "native-port.md Esc: It cancels first only while user-started work runs: the lookup, stats, a plot or an export."
+fixture: slow
+sizes: [[120, 40]]
+threads: 1
+args: ["-w", "levenshtein(repeat(band, 100), repeat(cast(detector as varchar), 60)) > 5"]
+ready: '› levenshtein'
+steps:
+  - keys: d
+    wait: 'file row'
+  - keys: i
+    settle: false
+    wait: '(?i)profiling'
+  - keys: esc
+    settle: false
+    toast: 'Cancelled running queries'
+    toast_gone: false
+    check: cancelled
+  - keys: "1"
+    wait: '/ filter|↑↓ column'
+    # the toast lasts 2 s in both; whether it still shows at the checkpoint
+    # depends only on how long each app takes to settle after the switch
+    wait_gone: 'Cancelled running queries'
+  - check: data
+    expect: 'file row'

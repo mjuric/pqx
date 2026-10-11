@@ -1,0 +1,24 @@
+description: |
+  `g` with a suffixed count (1.5M) on a 2,000,000-row file, then Ctrl+Home back.
+covers:
+  - "README Keys: g | go to a row: 1234, 1.5M, 50%, -1"
+  - "README Big files: Jumps anywhere."
+fixture: slow
+sizes: [[120, 40]]
+python_bug:
+  - checks: [row-1.5M, first]
+    region: keybar
+    ref_shows: 'enter apply   esc back'   # Python shows the filter box's keys
+    correct: '^\s*/ filter   x clear filter'   # what the key bar should show there
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
+steps:
+  - keys: g
+    wait: 'Go to row[\s\S]*enter apply'
+  - text: "1.5M"
+  - keys: enter
+    wait: 'row 1,500,000\b'
+  - check: row-1.5M
+    expect: '1,500,000 +170000000001500000'
+  - keys: ctrl+home
+    wait: 'row 0\b'
+  - check: first

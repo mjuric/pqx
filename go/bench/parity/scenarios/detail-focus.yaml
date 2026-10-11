@@ -1,0 +1,35 @@
+description: |
+  Tab goes into the detail panel; ↑/↓ pick a field and the grid follows on the same
+  row; Enter returns to the grid on that column; a click on a field goes into the panel
+  on it; Tab returns; Esc from inside closes the panel.
+covers:
+  - "README All keys: tab / click | into the open detail panel"
+  - "README All keys: ↑ ↓ · enter tab · esc | detail panel: pick a column (the grid follows on the same row) · back to the grid on that column · the same, closing the panel"
+fixture: demo
+steps:
+  - keys: d
+    wait: 'file row'
+  - keys: tab
+    wait: '↑↓ column'
+  - check: focused
+  - keys: down down down down down down down
+  - check: field-8
+  - keys: enter
+    wait: '/ filter'
+  - check: back-to-grid
+  - click: 'psfFluxErr +1346\.6697'
+    wait: '↑↓ column'
+  - check: clicked-field
+  - keys: tab
+    wait: '/ filter'
+  - check: tab-back
+  - keys: tab
+    wait: '↑↓ column'
+  - keys: down
+  - keys: esc
+    wait_gone: 'file row'
+  # Python pqx doesn't always redraw the column readout when the grid widens; a cursor
+  # move there and back does
+  - keys: right
+  - keys: left
+  - check: esc-closes

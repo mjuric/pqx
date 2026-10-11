@@ -1,0 +1,5 @@
+# Known gaps of Go pqx against Python pqx, per scenario and size: the status, the
+# checkpoints that fail, and why. A run fails on anything not listed here: a new
+# failing checkpoint, a changed status, or a listed entry that now passes (XPASS).
+# Regenerate with `run.py --write-xfail`; reasons already here are kept.
+xfail: {}

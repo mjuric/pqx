@@ -1,0 +1,27 @@
+description: |
+  Plot settings: tab moves between fields, ← → step a field, Enter opens a drop-down
+  that narrows as you type.
+covers:
+  - "README All keys: click · enter | Plot: open a settings field's drop-down (type to narrow the column list)"
+  - "README All keys: tab · ← → | Plot: move between settings fields · step the field's value"
+fixture: demo
+threads: 1
+quiet: 1.0
+steps:
+  - keys: "4"
+    wait: '✓ Binned ra × dec'
+  - keys: right
+    wait: 'mode xy ▾'
+  - check: stepped-mode
+  - click: '(?<=x )ra ▾'
+    dx: 1
+    wait: 'type to filter   ↑↓ move'   # the key bar; the drop-down's box says it too
+  - check: dropdown
+    expect: ['diaSourceId', 'midpointMjdTai']
+  - text: "mag"
+  - check: narrowed
+    expect_not: 'midpointMjdTai'
+  - keys: enter
+    wait: 'Binned mag'
+  - check: chosen
+    expect: 'x mag ▾'

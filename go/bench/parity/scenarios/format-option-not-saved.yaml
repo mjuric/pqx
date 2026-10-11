@@ -1,0 +1,15 @@
+description: |
+  `--format COL=SPEC` changes the column for the session only: nothing is written to
+  formats.yaml.
+covers:
+  - "README Column formats: --format COL=SPEC sets a format for one session without saving it."
+fixture: demo
+sizes: [[120, 40]]
+args: ["--format", "ra=.2f"]
+steps:
+  - check: first
+    expect: 'f64·deg·\.2f'
+  - keys: q
+    settle: false
+  - exit: 10
+  - file: "{config}/pqx/formats.yaml"

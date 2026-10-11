@@ -1,0 +1,79 @@
+name: Go
+
+on:
+  push:
+    branches: [master, native-port]
+    paths: ["go/**", "tools/**", "ruff.toml", ".github/workflows/**"]
+  pull_request:
+    paths: ["go/**", "tools/**", "ruff.toml", ".github/workflows/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: make vet
+      - name: staticcheck
+        # pinned; its settings are in go/staticcheck.conf
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.1 -tags duckdb_arrow ./...
+      - run: make test
+      - name: Build (time and size)
+        if: runner.os == 'Linux'
+        run: |
+          go clean -cache
+          time make build
+          ls -l bin/pqx
+          bin/pqx --version
+
+  scripts:
+    # the repository's Python (tools/, the test-data generators, the pty harness,
+    # packaging) and the workflows; none of it needs Python pqx
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go/go.mod
+          cache: false
+      - name: ruff
+        run: uvx ruff@0.16.9 check .
+      - name: actionlint
+        # pinned; uses the runner's shellcheck for the run: scripts
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Parity harness selftests
+        run: |
+          w=(--no-project --with pyte==0.8.2 --with pyyaml --with pyarrow --with numpy)
+          uv run "${w[@]}" python go/bench/parity/run.py --selftest
+          uv run "${w[@]}" python go/bench/parity/security.py --selftest
+      - name: The fixtures come out the same without Python pqx
+        # byte for byte, but demo.parquet and units.parquet by layout and value
+        # (go/testdata/check_fixtures.py)
+        run: |
+          w=(--no-project --with pyarrow==25.0.1 --with numpy==2.5.3)
+          uv run "${w[@]}" python go/testdata/make_fixtures.py "$RUNNER_TEMP/fixtures"
+          uv run "${w[@]}" python go/testdata/check_fixtures.py go/testdata/fixtures "$RUNNER_TEMP/fixtures"
+      - name: tools/ scripts run with uv
+        run: |
+          uv run tools/make_demo.py "$RUNNER_TEMP/demo.parquet" --rows 10000
+          uv run tools/make_trips.py "$RUNNER_TEMP/trips.parquet" 10000

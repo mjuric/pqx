@@ -1,0 +1,27 @@
+description: |
+  `<` and `>` drop or add a digit for the cursor column (decimals for angles and MJD,
+  significant digits otherwise); each change is confirmed in a notification.
+covers:
+  - "help: **<** / **>** | one digit fewer / more for the cursor column"
+  - "README Column formats: < and > drop or add a digit"
+fixture: demo
+steps:
+  - keys: right right
+  - keys: "<"
+    toast: "✓ ra:"
+  - keys: "<"
+    toast: "✓ ra:"
+    check: ra-fewer
+    expect: ['✓ ra: \.4f', 'f64·deg·\.4f', '333\.1529 ']
+  - keys: right right right right
+  - keys: ">"
+    toast: "✓ midpointMjdTai:"
+  - keys: ">"
+    toast: "✓ midpointMjdTai:"
+    check: mjd-more
+    expect: '✓ midpointMjdTai: \.9f'
+  - keys: right right right right
+  - keys: "<"
+    toast: "✓ mag:"
+    check: mag-fewer
+    expect: '✓ mag: '

@@ -1,0 +1,15 @@
+description: |
+  `--sample` makes stats and plots sample even on a small file; `--no-sample` never.
+covers:
+  - "pqx -h: --sample  sample rows for stats/plots (default: on above 200M rows or 8 GiB); --no-sample"
+fixture: demo
+sizes: [[120, 40]]
+args: ["--sample"]
+threads: 1
+steps:
+  - keys: "3"
+    wait: 'Profiled diaSourceId'
+  # a random sample: the numbers differ between runs, so only the label is checked
+    expect: '! Profiled diaSourceId, sampled'
+  - keys: m
+    toast: 'Sampling off'

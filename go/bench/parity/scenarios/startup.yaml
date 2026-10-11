@@ -1,0 +1,15 @@
+description: |
+  The first screen: title bar, filter box with its hint, tab strip, grid headers with
+  type and unit, the status line once the count is in, and the key bar.
+covers:
+  - "README Browse: Headers show each column's type and unit."
+  - "native-port.md: Filter hint is built from the file's own columns."
+fixture: demo
+steps:
+  - check: first
+    expect:
+      - 'pqx <VER>  ·  demo\.parquet  ·  20,000 rows  ·  16 columns  ·  1\.4 MiB  ·  8 row groups'
+      - 'e\.g\. ssObjectId > 1000133 and band = .r.'
+      - 'f64·deg'
+      - '✓ 20,000 rows  ·  row 0'
+      - '/ filter   x clear filter'

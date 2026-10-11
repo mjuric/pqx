@@ -1,0 +1,22 @@
+description: |
+  `-` hides the cursor column; `p` pins the columns up to the cursor, which then stay
+  when scrolling right.
+covers:
+  - "help: **-** hides the cursor column"
+  - "help: **p** | pin columns up to the cursor (stay visible when scrolling right)"
+fixture: wide
+steps:
+  - keys: right right
+  - keys: "-"
+    toast: 'Hid c01'
+    check: hidden
+    expect: 'Hid c01 · c brings it back'
+  - keys: p
+    wait: '3 pinned'
+  - check: pinned
+  - keys: end
+  - check: end-with-pin
+    expect: ['^ │ ‹? +id +c00 +c02 ', 'c58']
+  - keys: home
+  - check: home
+    expect: ['c58', '3 pinned']   # the cursor goes to a pinned column: no scrolling

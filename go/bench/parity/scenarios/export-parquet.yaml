@@ -1,0 +1,30 @@
+description: |
+  `e` with the default format (Parquet) after hiding a column: the export has the
+  visible columns and the filtered rows.
+covers:
+  - "README Export: write the current view (filter, sort and visible columns) to Parquet"
+fixture: demo
+python_bug:
+  - checks: [done]
+    region: keybar
+    ref_shows: 'enter apply   esc back'   # Python shows the filter box's keys
+    correct: '^\s*/ filter   x clear filter'   # what the key bar should show there
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
+steps:
+  - keys: "-"
+    toast: 'Hid diaSourceId'
+  - keys: /
+    wait: 'enter apply'
+  - text: "mag < 18"
+  - keys: enter
+    wait: '✓ 11 rows'
+  - keys: e
+    wait: 'Export current view[\s\S]*enter apply'
+  - check: dialog
+    expect: '15 visible'
+  - keys: ctrl+u
+  - text: "view.parquet"
+  - keys: enter
+    toast: 'Wrote 11 rows'
+    check: done
+  - file: "{out}/view.parquet"

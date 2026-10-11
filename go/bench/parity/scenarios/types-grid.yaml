@@ -1,0 +1,26 @@
+description: |
+  The grid on a file with one column per type: integers, floats, bools, strings with
+  wide characters, binary, dates, timestamps (UTC), durations, decimals (also wider
+  than 38 digits), lists, structs, maps, nulls (∅).
+covers:
+  - "native-port.md: UTC; wide decimals; emoji and CJK widths"
+fixture: types
+intended:
+  - checks: [detail-null-row]
+    region: pane
+    ref_shows: 'wide +1e\+46'           # Python widens the decimal256 to a float in the pane
+    other_shows: 'wide +10{20}'          # the exact 47-digit value (wraps over more lines)
+    note: "exact wide decimals in the details pane (go-port.md: Progress), as in detail-wrap; every later pane line moves down one, and the map type name ('mp') is fmtx's, as in #84"
+steps:
+  - check: first
+    expect: '∅'
+  - keys: right right right right right right right right right right right
+  - check: middle
+  - keys: end
+  - check: end
+  - keys: down down down
+    wait: 'row 3\b'
+  - keys: d
+    wait: 'row 3 · file row 3'
+  - check: detail-null-row
+    expect: '∅'

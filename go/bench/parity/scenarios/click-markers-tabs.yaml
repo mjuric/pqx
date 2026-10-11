@@ -1,0 +1,18 @@
+description: |
+  A click on › beside the header pages the columns; a click on a tab's name in the
+  tab strip switches to it.
+covers:
+  - "README All keys: ‹ › beside the header mark hidden columns (click to page)"
+  - "help: a click on a number or name switches too"
+fixture: wide
+sizes: [[120, 40]]
+steps:
+  - click: '›(?= │ *$)'
+    wait: '‹ \d+  ·  columns'
+  - check: paged
+  - click: 'Schema'
+    wait: 'null %'
+  - check: schema
+  - click: 'Data'
+    wait: '/ filter'
+  - check: data

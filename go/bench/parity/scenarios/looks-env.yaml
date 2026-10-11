@@ -1,0 +1,9 @@
+description: |
+  PQX_ACCENT, PQX_DIM and PQX_BORDER set the same as the options.
+covers:
+  - "README Looks: env PQX_ACCENT, PQX_DIM, PQX_BORDER"
+fixture: demo
+env: {PQX_ACCENT: green, PQX_DIM: bright-black, PQX_BORDER: blue}
+sizes: [[120, 40]]
+steps:
+  - check: first

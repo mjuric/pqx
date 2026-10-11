@@ -1,0 +1,29 @@
+description: |
+  A dialog over the grid doesn't shift the screen behind it: the rows and columns
+  around the dialog stay where they were.
+covers:
+  - "native-port.md: Dialogs don't shift the screen behind them (PR #25)."
+fixture: demo
+python_bug:
+  - checks: [after]
+    region: keybar
+    ref_shows: 'enter apply   esc back'   # Python shows the filter box's keys
+    correct: '^\s*/ filter   x clear filter'   # what the key bar should show there
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
+steps:
+  - keys: pgdn down down right right right
+    wait_gone: 'row 0\b'
+  - check: before
+  - keys: g
+    wait: 'Go to row[\s\S]*enter apply'
+  - check: goto
+    expect@120x40: '^ │   27 +17000000000000'   # the rows above the dialog are where they were
+  - keys: esc
+    wait_gone: 'Go to row'
+  - keys: F
+    wait: 'Format of[\s\S]*enter apply'
+  - check: format
+    expect@120x40: '^ │   27 +17000000000000'
+  - keys: esc
+    wait_gone: 'Format of'
+  - check: after

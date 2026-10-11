@@ -1,0 +1,28 @@
+description: |
+  Formats set with < > F are saved by column name in formats.yaml, in the format the
+  README shows.
+covers:
+  - "README Column formats: pqx remembers your formats by column name, for every file, in ~/.config/pqx/formats.yaml"
+fixture: demo
+sizes: [[120, 40]]
+python_bug:
+  - checks: [set]
+    region: keybar
+    ref_shows: 'enter apply   esc back'   # Python shows the filter box's keys
+    correct: '^\s*/ filter   x clear filter'   # what the key bar should show there
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
+steps:
+  - keys: right right
+  - keys: "<"
+    toast: '✓ ra: \.5f'
+  - keys: right right right right right right right right right right
+  - keys: F
+    wait: 'Format of[\s\S]*enter apply'
+  - keys: ctrl+u
+  - text: "3"
+  - keys: enter
+    toast: '✓ trailLength'
+    check: set
+  # compared byte for byte, Python's header comment included: the Go version writes the
+  # same header, so the file stays the same both ways
+  - file: "{config}/pqx/formats.yaml"

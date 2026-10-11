@@ -1,0 +1,20 @@
+description: |
+  The filter applies everywhere: grid, stats and plots count the filtered rows.
+covers:
+  - "README Filter: The filter applies everywhere: grid, stats, plots and export."
+fixture: demo
+args: ["-w", "band = 'g'"]
+ready: '✓ 3,354 rows'
+threads: 1
+quiet: 1.0
+steps:
+  - keys: "3"
+    wait: '✓ Profiled diaSourceId'
+  # Python pqx sometimes draws the first histogram at a stale width; l l redraws it
+  - keys: l l
+  - check: stats
+    expect: 'rows +3,354'
+  - keys: "4"
+    wait: '✓ Binned'
+  - check: plot
+    expect: ['3\.35k rows', "where band = 'g'"]

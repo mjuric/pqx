@@ -1,0 +1,17 @@
+description: |
+  `y` copies the cursor cell to the clipboard with OSC 52 (full precision), and says so.
+covers:
+  - "README Keys: y · i · e | copy cell · stats for this column · export"
+fixture: demo
+steps:
+  - keys: down right right
+  - keys: y
+    clipboard: "^322\\.99696"
+    toast: "Copied"
+    check: copied-ra
+    expect: '✓ Copied ra = 322\.99696'
+  - keys: right right right right right
+  - keys: y
+    clipboard: "^r$"
+    toast: "Copied"
+    check: copied-band

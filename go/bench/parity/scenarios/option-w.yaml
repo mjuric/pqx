@@ -1,0 +1,13 @@
+description: |
+  `-w` opens the file with a filter already applied.
+covers:
+  - "README tour: pqx trips.parquet -w \"payment_type = 'card'\"   # open with a filter"
+  - "pqx -h: -w WHERE, --where WHERE  initial filter"
+fixture: demo
+args: ["-w", "band = 'g'"]
+ready: '✓ 3,354 rows'
+steps:
+  - check: first
+    expect: ["› band = 'g'", '✓ 3,354 rows  ·  16\.8% of 20k']
+  - keys: pgdn
+  - check: pgdn

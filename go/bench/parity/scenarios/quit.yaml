@@ -1,0 +1,10 @@
+description: |
+  q quits (from the grid).
+covers:
+  - "README Keys: Esc · q | cancel running queries · quit"
+fixture: demo
+sizes: [[120, 40]]
+steps:
+  - keys: q
+    settle: false
+  - exit: 10

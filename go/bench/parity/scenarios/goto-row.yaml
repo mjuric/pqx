@@ -1,0 +1,37 @@
+description: |
+  `g` opens the go-to-row dialog (it shows the row count); 1234, 50% and -1 jump there.
+covers:
+  - "README Keys: g | go to a row: 1234, 1.5M, 50%, -1"
+  - "help: **g** | go to row — 1234, 1.5M, 50%, -1"
+fixture: demo
+python_bug:
+  - checks: [row-1234, half, last]
+    region: keybar
+    ref_shows: 'enter apply   esc back'   # Python shows the filter box's keys
+    correct: '^\s*/ filter   x clear filter'   # what the key bar should show there
+    note: "Python pqx's key bar can keep the filter box's keys after a dialog with an input closes (racy)"
+steps:
+  - keys: g
+    wait: 'Go to row[\s\S]*enter apply'   # the key bar can follow late
+  - check: dialog
+    expect: 'of 20,000'
+  - text: "1234"
+  - keys: enter
+    wait: 'row 1,234$|row 1,234 '
+  - check: row-1234
+    expect: '1,234 +170000000000001234'
+    expect_not: 'Go to row'
+  - keys: g
+    wait: 'Go to row[\s\S]*enter apply'
+  - text: "50%"
+  - keys: enter
+    wait: 'row 10,000\b'
+  - check: half
+    expect: '10,000 +170000000000010000'
+  - keys: g
+    wait: 'Go to row[\s\S]*enter apply'
+  - text: "-1"
+  - keys: enter
+    wait: 'row 19,999\b'
+  - check: last
+    expect: '19,999 +170000000000019999'

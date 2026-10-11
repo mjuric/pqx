@@ -1,0 +1,5 @@
+# Python tools for go-release.yml's platform build jobs, pinned with hashes in build.txt.
+# Regenerate: cd go/packaging/requirements &&
+#   uv pip compile --universal --python-version 3.12 --generate-hashes build.in -o build.txt
+uv
+pywinpty ; sys_platform == "win32"

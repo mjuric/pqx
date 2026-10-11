@@ -1,0 +1,10 @@
+description: |
+  `-w` with a full query opens on the query's result.
+covers:
+  - "README tour: pqx trips.parquet -w \"select vendor, count(*) from t group by 1\""
+fixture: demo
+args: ["-w", "select band, count(*) from t group by 1 order by 1"]
+ready: '✓ 6 rows'
+steps:
+  - check: first
+    expect: ['✓ 6 rows', 'count_star\(\)|count\(\*\)']
