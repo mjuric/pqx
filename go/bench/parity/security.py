@@ -131,7 +131,10 @@ SCRIPT = [
     ("down down down down down down", None, "the ESC[2J, C1, tab and bidi rows"),
     ("end", None, "last columns: hostile names, binary, invalid UTF-8"),
     ("home", None, "back"),
-    ("2", r"null %", "Schema: hostile names, units, descriptions"),
+    # (the key bar, not the table's "null %": the hostile column name is as long as
+    # the path of the test's directory, and pushes the table's later columns off a
+    # 200-column screen once its statistics are read, as Textual's DataTable does)
+    ("2", r"↑↓ column +enter stats", "Schema: hostile names, units, descriptions"),
     ("down down down down down", None, "schema rows"),
     ("3", r"Profil", "Stats on a hostile column"),
     ("4", r"mode ", "Plot"),
