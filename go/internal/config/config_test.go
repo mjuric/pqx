@@ -258,22 +258,27 @@ func pyTempDir(t *testing.T) string {
 	return t.TempDir()
 }
 
-// python is the reference Python with this checkout's pqx, or a skip.
+// refPython is a Python interpreter where Python pqx 0.2.x (the reference)
+// imports: PQX_REF_PYTHON, or "" when it is unset or pqx doesn't import
+// (go/testdata/README.md, "The Python reference").
+func refPython() string {
+	py := os.Getenv("PQX_REF_PYTHON")
+	if py == "" || exec.Command(py, "-c", "import pqx.config, yaml").Run() != nil {
+		return ""
+	}
+	return py
+}
+
+// python runs code in the reference Python, or skips the test.
 func python(t *testing.T) func(code string, args ...string) string {
 	t.Helper()
-	py := "/root/parquet-explorer/.venv/bin/python"
-	if _, err := os.Stat(py); err != nil {
-		t.Skip("no reference Python at " + py)
-	}
-	_, file, _, _ := runtime.Caller(0)
-	repo := filepath.Join(filepath.Dir(file), "..", "..", "..")
-	if _, err := os.Stat(filepath.Join(repo, "pqx", "config.py")); err != nil {
-		t.Skip("no Python pqx in the checkout")
+	py := refPython()
+	if py == "" {
+		t.Skip("no reference Python: set PQX_REF_PYTHON to a Python where Python pqx 0.2.x imports")
 	}
 	return func(code string, args ...string) string {
 		t.Helper()
 		cmd := exec.Command(py, append([]string{"-c", code}, args...)...)
-		cmd.Env = append(os.Environ(), "PYTHONPATH="+repo)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("python: %v\n%s", err, out)
@@ -385,7 +390,7 @@ func TestLockInteroperatesWithPython(t *testing.T) {
 	}
 	python(t) // skips without the reference Python
 	p := filepath.Join(pyTempDir(t), "formats.yaml")
-	cmd := exec.Command("/root/parquet-explorer/.venv/bin/python", "-c", `import sys, time
+	cmd := exec.Command(refPython(), "-c", `import sys, time
 from pathlib import Path
 from pqx import config
 p = Path(sys.argv[1])
@@ -394,8 +399,6 @@ with config._locked(p):
     time.sleep(0.8)
     p.write_text("columns:\n  py: .1f\n")
 `, p)
-	_, file, _, _ := runtime.Caller(0)
-	cmd.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)

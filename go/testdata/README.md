@@ -4,12 +4,44 @@
 - `golden/`: JSON outputs of Python pqx (the reference) on fixed inputs and on these
   fixtures. Written by `golden/make_golden.py`; see `golden/README.md`.
 
-## Regenerating the fixtures
+## The Python reference
 
-From the repository root, with a Python that has pqx's dependencies (PyArrow 25 was used):
+The golden files here and the other `testdata/*.json` files in `go/internal` are outputs
+of Python pqx 0.2.x, the reference implementation. Python pqx is no longer in this
+repository (it was removed at the cutover; see `docs/design/go-port.md`): its last code
+is the `v0.2.0` tag and the `python-0.2` branch (made when 0.2.0 final is tagged;
+before that, the commits before the cutover), and its releases are on PyPI. The
+generators (`golden/make_golden.py`, `internal/*/testdata/make_*.py`,
+`internal/theme/testdata/gen_rich_colours.py`) need a Python where `import pqx` gives
+Python pqx 0.2.x, written `<python with pqx 0.2.x>` in their docstrings. Either
 
 ```
-PYTHONPATH=$PWD python go/testdata/make_fixtures.py
+# Python pqx from PyPI, with the versions the checked-in files were made with
+uv run --no-project --python 3.12 --with 'pqx>=0.2.0rc3,<0.3' --with pyarrow==25.0.1 \
+    --with duckdb==1.5.6 --with numpy==2.5.3 --with pandas==3.0.6 --with rich==15.0.0 \
+    --with textual==8.2.8 python <generator>
+
+# or a checkout of Python pqx (git worktree add ../pqx-0.2 python-0.2), in a Python
+# with its dependencies
+PYTHONPATH=../pqx-0.2 python <generator>
+```
+
+pandas matters: without it pyarrow can't turn nanosecond statistics into Python values
+and `make_golden.py` fails. With the first command, `make_golden.py` reproduces the
+checked-in golden files (all but the header) from pqx 0.2.0rc3 (checked 2026-10-11).
+`go/internal/config`'s tests that run Python pqx use `PQX_REF_PYTHON`, a Python
+interpreter where `import pqx` works, and skip without one.
+
+Comments in the Go tests that name `tests/test_*.py` mean Python pqx's tests, in the
+`python-0.2` branch.
+
+## Regenerating the fixtures
+
+From the repository root, with a Python that has NumPy and PyArrow (PyArrow 25 was
+used); `demo.parquet` comes from `tools/make_demo.py`, `pqx.demo`'s generator:
+
+```
+python go/testdata/make_fixtures.py
 ```
 
 The script is seeded and fixed throughout. With the same PyArrow version two runs write

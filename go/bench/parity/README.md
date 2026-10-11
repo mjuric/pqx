@@ -21,11 +21,18 @@ from the README, the `?` help and native-port.md, not from either implementation
 
 ## Running
 
-You need a Python with `pyte`, `pyyaml` and `pyarrow`, and the reference pqx venv
-(for the fixtures, which use `pqx.demo`):
+You need a Python with `pyte`, `pyyaml`, `pyarrow` and `numpy` (it also writes the
+fixtures), and the reference: Python pqx 0.2.x. Python pqx is no longer in this
+repository (it left at the cutover; its code is the `v0.2.0` tag and the `python-0.2`
+branch). By default the tools run it from PyPI with `uvx -q --from 'pqx>=0.2.0rc3,<0.3'
+pqx`, so they need [uv](https://docs.astral.sh/uv/); `PQX_PY` names another one: an
+installed pqx 0.2.x, or any command line.
 
 ```sh
-python3 -m venv /tmp/hv && /tmp/hv/bin/pip install pyte pyyaml pyarrow
+python3 -m venv /tmp/hv && /tmp/hv/bin/pip install pyte pyyaml pyarrow numpy
+# optional, faster to start than uvx: the reference in its own venv
+uv venv /tmp/pqx02 && uv pip install --python /tmp/pqx02 'pqx>=0.2.0rc3,<0.3'
+export PQX_PY=/tmp/pqx02/bin/pqx
 cd go && make build                      # the Go binary, go/bin/pqx
 cd bench/parity
 /tmp/hv/bin/python run.py                # Python vs Go: every scenario at 120x40 and 200x50
@@ -37,9 +44,9 @@ cd bench/parity
 
 | variable / option | default | |
 |---|---|---|
-| `PQX_PY` | `/root/parquet-explorer/.venv/bin/pqx` | the Python pqx command |
-| `PQX_GO` | `go/bin/pqx` | the Go binary |
-| `PQX_FIXTURE_PYTHON` | `/root/parquet-explorer/.venv/bin/python` | writes the fixtures (needs `pqx.demo`) |
+| `PQX_PY` | `uvx -q --from 'pqx>=0.2.0rc3,<0.3' pqx` | the Python pqx command: a path, or a command line split as the shell does (`PQX_PY="uvx -q --from pqx==0.2.0rc3 pqx"`; a checkout: `PQX_PY="env PYTHONPATH=<checkout> <python> -m pqx"`) |
+| `PQX_GO` | `go/bin/pqx` | the Go binary (or a command line) |
+| `PQX_FIXTURE_PYTHON` | the runner's Python | writes the fixtures (needs `numpy` and `pyarrow`; `demo` and `slow` come from `tools/make_demo.py`) |
 | `--scratch DIR` / `PQX_PARITY_SCRATCH` | `$TMPDIR/pqx-parity` | fixtures, runs and the report go here |
 | `--fixtures DIR` / `PQX_FIXTURES` | `<scratch>/fixtures` | made on first use |
 | `-j N` | 4 | runs at a time. More makes the apps slow to react, and screens can settle before the app has answered |
@@ -216,7 +223,7 @@ Writing scenarios that are stable:
 - check the result with `--a python --b python` before adding it.
 
 The fixtures (`make_fixtures.py`, facts in `fixtures.yaml`): `demo` (20,000 LSST-like
-rows from `pqx.demo`, the tests' `demo_path`), `slow` (2,000,000 rows, for a count slow
+rows from `pqx.demo`'s generator, `tools/make_demo.py`; the tests' `demo_path`), `slow` (2,000,000 rows, for a count slow
 enough to cancel), `odd` (the tests' `odd_path`: nested types, NaN/inf, a quoted name),
 `types` (one column per Arrow type, wide decimals, CJK, a long string), `units` (felis
 units, RAJ2000/DEJ2000), `wide` (60 columns), `notparquet` (a text file).
@@ -280,7 +287,8 @@ next run on the same binary is green; reasons already there are kept.
 
 ## Security test
 
-`security.py` is the port of `tests/test_security.py::test_pty_terminal_never_receives_file_escapes`.
+`security.py` is the port of Python pqx's
+`tests/test_security.py::test_pty_terminal_never_receives_file_escapes`.
 It writes a file whose values, column names, units, descriptions, key-value metadata
 and file name hold OSC title, OSC 52, OSC 8, CSI, C1, bidi and zero-width sequences,
 binary values and strings that aren't valid UTF-8, and drives the app through `=` on

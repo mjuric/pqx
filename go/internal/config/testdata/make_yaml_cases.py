@@ -2,7 +2,9 @@
 PyYAML's text for random column formats, for the Go port's differential test (yaml_test.go).
 
     cd <repo root>
-    PYTHONPATH=$PWD <python with pqx's dependencies> go/internal/config/testdata/make_yaml_cases.py
+    <python with pqx 0.2.x> go/internal/config/testdata/make_yaml_cases.py
+
+(`<python with pqx 0.2.x>`: see "The Python reference" in go/testdata/README.md).
 
 Templates and values after the WP3 review's fuzz_yaml.py. Seeded: a second run writes the same
 bytes.

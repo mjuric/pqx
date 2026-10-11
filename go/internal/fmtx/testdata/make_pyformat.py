@@ -2,7 +2,9 @@
 of the format-spec mini-language, Decimal formatting and strftime (beyond what fmt.json covers).
 
     cd <repo root>
-    PYTHONPATH=$PWD <python with pqx's dependencies> go/internal/fmtx/testdata/make_pyformat.py
+    <python with pqx 0.2.x> go/internal/fmtx/testdata/make_pyformat.py
+
+(`<python with pqx 0.2.x>`: see "The Python reference" in go/testdata/README.md)
 
 Each record: "v" (a typed value, as in go/testdata/golden/README.md), "spec", and "out" or
 "error" ("<exception type>: <message>"). Seeded, so a second run writes the same bytes.

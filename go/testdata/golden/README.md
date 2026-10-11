@@ -6,20 +6,22 @@ compare against them. `go/internal/golden` loads them.
 
 ## Regenerating
 
-From the repository root, with a Python that has pqx's dependencies (the files here were
-made with Python 3.12, PyArrow 25.0.1, DuckDB 1.5.6, NumPy 2.5, Rich 15.0, Textual 8.2):
+From the repository root, with a Python where `import pqx` gives Python pqx 0.2.x (the
+files here were made with Python 3.12, PyArrow 25.0.1, DuckDB 1.5.6, NumPy 2.5, Rich 15.0,
+Textual 8.2; how to get one is under "The Python reference" in `../README.md`):
 
 ```
-PYTHONPATH=$PWD python go/testdata/golden/make_golden.py
+<python with pqx 0.2.x> go/testdata/golden/make_golden.py
 ```
 
-`PYTHONPATH` makes it import this checkout's `pqx` (the script checks that it did). It
-reads `../fixtures/`, so regenerate those first if they changed (`../make_fixtures.py`).
+It prints which pqx it imported, and from where. It reads `../fixtures/`, so regenerate those first if they changed (`../make_fixtures.py`).
 An optional argument writes the files to another directory. It takes about 10 s.
 
 The script is deterministic: inputs are fixed or seeded and DuckDB runs with one thread
 (`PQX_GOLDEN_THREADS` changes that), so two runs write the same bytes. The header of each
-file records the versions used and `git describe` of the checkout (`pqx_git`).
+file records the versions used: `pqx` is Python pqx's version, and `pqx_git` is
+`git describe` of the checkout pqx was imported from (empty for an installed pqx; files
+made before the cutover have only `pqx_git`, of this repository).
 
 ## File layout
 

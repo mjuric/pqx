@@ -1,10 +1,10 @@
 """Write the Parquet fixtures in go/testdata/fixtures/ (checked in).
 
-    PYTHONPATH=<repo root> python go/testdata/make_fixtures.py [OUTDIR]
+    python go/testdata/make_fixtures.py [OUTDIR]       # a Python with numpy and pyarrow
 
-They mirror the fixtures of the Python tests (tests/conftest.py, tests/test_security.py,
-tests/test_fetch.py) so the Go tests and the golden files (golden/make_golden.py) see the
-same data. Everything is seeded or fixed: with the same PyArrow version, two runs write
+They mirror the fixtures of Python pqx 0.2.x's tests (tests/conftest.py,
+tests/test_security.py, tests/test_fetch.py) so the Go tests and the golden files
+(golden/make_golden.py) see the same data. Everything is seeded or fixed: with the same PyArrow version, two runs write
 byte-identical files (the footer's created_by names the PyArrow version, so another
 version changes the bytes but not the data). See README.md for what each file holds.
 """
@@ -23,9 +23,10 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from pqx.demo import make_table
-
 HERE = os.path.dirname(os.path.abspath(__file__))
+# pqx.demo's generator, from the repository's tools/
+sys.path.insert(0, os.path.join(HERE, "..", "..", "tools"))
+from make_demo import make_table  # noqa: E402
 
 # ------------------------------------------------------------------ hostile strings (test_security)
 ESC = "\x1b"

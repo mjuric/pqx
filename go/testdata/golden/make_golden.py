@@ -1,7 +1,9 @@
 """Write the golden files in go/testdata/golden/ from Python pqx, the reference implementation.
 
     cd <repo root>
-    PYTHONPATH=$PWD <python with pqx's dependencies> go/testdata/golden/make_golden.py [OUTDIR]
+    <python with pqx 0.2.x> go/testdata/golden/make_golden.py [OUTDIR]
+
+(`<python with pqx 0.2.x>`: see "The Python reference" in go/testdata/README.md).
 
 It runs pqx's ``fmt``, ``cells``, ``plots`` and ``data`` on fixed inputs and on the fixtures
 in ../fixtures/ (written by ../make_fixtures.py) and writes one JSON file per area. The Go
@@ -25,6 +27,7 @@ import numpy as np
 import pyarrow as pa
 from rich.text import Text
 
+import pqx
 from pqx import cells as C
 from pqx import fmt as F
 from pqx import plots as P
@@ -33,7 +36,6 @@ from pqx.data import ParquetDataset, View
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.normpath(os.path.join(HERE, "..", "fixtures"))
-REPO = os.path.normpath(os.path.join(HERE, "..", "..", ".."))
 sys.path.insert(0, os.path.dirname(HERE))
 import make_fixtures as MF  # noqa: E402
 
@@ -225,11 +227,12 @@ class Section(list):
 
 
 def git_describe() -> str:
+    """`git describe` of the checkout pqx was imported from, or "" for an installed pqx."""
     try:
-        return subprocess.run(["git", "-C", REPO, "describe", "--tags", "--always", "--dirty"],
-                              capture_output=True, text=True, check=True).stdout.strip()
+        return subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(pqx.__file__)), "describe",
+                               "--tags", "--always", "--dirty"], capture_output=True, text=True, check=True).stdout.strip()
     except Exception:  # noqa: BLE001
-        return "unknown"
+        return ""
 
 
 def header(what: str) -> dict:
@@ -242,6 +245,7 @@ def header(what: str) -> dict:
         "generator": "go/testdata/golden/make_golden.py",
         "encoding": "typed values, see README.md",
         "versions": {
+            "pqx": pqx.__version__,
             "pqx_git": git_describe(),
             "python": sys.version.split()[0],
             "pyarrow": pa.__version__,
@@ -1198,8 +1202,7 @@ def gen_data_common() -> dict:
 def main(argv: list[str]) -> None:
     outdir = argv[1] if len(argv) > 1 else HERE
     os.makedirs(outdir, exist_ok=True)
-    for mod in (F, C, P, D):  # this checkout's pqx, not another one on the path
-        assert os.path.dirname(mod.__file__) == os.path.join(REPO, "pqx"), (mod.__file__, REPO)
+    print(f"pqx {pqx.__version__} from {os.path.dirname(pqx.__file__)}", file=sys.stderr)
     files = {"fmt.json": gen_fmt, "cells.json": gen_cells, "plots.json": gen_plots,
              "data_common.json": gen_data_common}
     for name in FIXTURE_FILES:

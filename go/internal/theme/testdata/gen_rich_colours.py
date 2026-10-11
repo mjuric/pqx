@@ -1,8 +1,10 @@
 """Write rich_colours.json: how Python pqx (Textual on Rich) reduces colours.
 
-Run with the reference venv (Rich, Textual and pqx importable):
+Run with Python pqx 0.2.x importable (Rich, Textual and pqx):
 
-    /root/parquet-explorer/.venv/bin/python gen_rich_colours.py > rich_colours.json
+    <python with pqx 0.2.x> gen_rich_colours.py > rich_colours.json
+
+(`<python with pqx 0.2.x>`: see "The Python reference" in go/testdata/README.md).
 
 - "detect": the colour system Textual's console picks for an environment (each case
   run in a fresh process, as Textual reads TEXTUAL_COLOR_SYSTEM on import), as Textual

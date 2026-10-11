@@ -1,7 +1,9 @@
 """Write entries.json: Details entries laid out by Python pqx's EntryGrid (Rich), the spec
 for the Go pane's layout (layout_test.go). Run from the repository root:
 
-    PYTHONPATH=$PWD python go/internal/ui/detail/testdata/make_entries.py
+    <python with pqx 0.2.x> go/internal/ui/detail/testdata/make_entries.py
+
+(`<python with pqx 0.2.x>`: see "The Python reference" in go/testdata/README.md).
 """
 import json
 import os

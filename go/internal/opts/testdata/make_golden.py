@@ -2,7 +2,8 @@
 reference for go/internal/opts and go/cmd/pqx.
 
 Run from the repository root:
-    PYTHONPATH=. python go/internal/opts/testdata/make_golden.py
+    <python with pqx 0.2.x> go/internal/opts/testdata/make_golden.py
+(`<python with pqx 0.2.x>`: see "The Python reference" in go/testdata/README.md).
 The version is replaced by {VERSION}. No file is opened: every case that
 parses names a file that doesn't exist.
 """

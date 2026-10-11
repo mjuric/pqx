@@ -21,7 +21,9 @@ includes process start.
 
 Prints each run as it goes, then a table of medians against the targets (and the Go
 prototype's numbers, where a regression of more than 20% is a bug), and writes all
-results as JSON (--json). Needs pyte and pyarrow. The apps are PQX_PY and PQX_GO.
+results as JSON (--json). Needs pyte and pyarrow. The apps are PQX_PY and PQX_GO (see
+ptydrive.app_commands). PQX_PY's default runs Python pqx through uvx, which adds uv's
+start-up to the first screen: for timings, point PQX_PY at an installed Python pqx 0.2.x.
 """
 from __future__ import annotations
 
@@ -37,12 +39,10 @@ import pyarrow.parquet as pq
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from ptydrive import Session  # noqa: E402
+from ptydrive import Session, app_commands  # noqa: E402
 
-APPS = {
-    "python": os.environ.get("PQX_PY", "/root/parquet-explorer/.venv/bin/pqx"),
-    "go": os.environ.get("PQX_GO", os.path.join(HERE, "..", "..", "bin", "pqx")),
-}
+#: the apps' commands (argv prefixes), from PQX_PY and PQX_GO
+APPS = app_commands(os.path.join(HERE, "..", "..", "bin", "pqx"))
 W, H = 200, 50
 DELIVERY = "/sdf/data/rubin/user/mjuric/shutter-timing-ssp/rerun/2026-10-06/run/delivery"
 #: the filter esc.sh uses: its count on SSSource takes about 7 s
@@ -119,7 +119,7 @@ def run_file(cmd, path, col, threads, dump, timeout=60):
     pf = pq.ParquetFile(path)
     n = pf.metadata.num_rows
     mid = n // 2 + 12345 if n > 30000 else n // 2
-    argv = [cmd, path] + (["--threads", str(threads)] if threads else [])
+    argv = [*cmd, path] + (["--threads", str(threads)] if threads else [])
     out = {}
     s = Session(argv, W, H)
     try:
@@ -158,7 +158,7 @@ def run_file(cmd, path, col, threads, dump, timeout=60):
 
 def run_esc(cmd, path, threads, dump, where=SLOW_WHERE):
     """Esc on a slow count: seconds from Esc until the screen says it was cancelled."""
-    argv = [cmd, path] + (["--threads", str(threads)] if threads else [])
+    argv = [*cmd, path] + (["--threads", str(threads)] if threads else [])
     s = Session(argv, W, H)
     try:
         if not s.wait(r"\d", 60):
@@ -189,7 +189,7 @@ def run_frame(cmd, path, threads, presses=20, quiet=0.03):
     ends at the end of a synchronized update (CSI ? 2026 l) or, without one, at the last
     byte before `quiet` s of silence (that silence is not counted)."""
     import select as _select
-    argv = [cmd, path] + (["--threads", str(threads)] if threads else [])
+    argv = [*cmd, path] + (["--threads", str(threads)] if threads else [])
     s = Session(argv, W, H)
     times = []
     try:
