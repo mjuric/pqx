@@ -21,10 +21,10 @@ jobs:
       run:
         working-directory: go
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
@@ -50,9 +50,9 @@ jobs:
     env:
       UV_PYTHON: "3.12"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go/go.mod
           cache: false
@@ -67,31 +67,11 @@ jobs:
           uv run "${w[@]}" python go/bench/parity/run.py --selftest
           uv run "${w[@]}" python go/bench/parity/security.py --selftest
       - name: The fixtures come out the same without Python pqx
-        # byte for byte, except where NumPy's float functions differ in the last bit
-        # between CPUs (demo.parquet's coordinates): then the same schema, metadata
-        # and values, floats to 1e-12
+        # byte for byte, but demo.parquet by layout and value (go/testdata/check_fixtures.py)
         run: |
           w=(--no-project --with pyarrow==25.0.1 --with numpy==2.5.3)
           uv run "${w[@]}" python go/testdata/make_fixtures.py "$RUNNER_TEMP/fixtures"
-          uv run "${w[@]}" python - go/testdata/fixtures "$RUNNER_TEMP/fixtures" <<'PY'
-          import filecmp, glob, os, sys
-          import numpy as np, pyarrow as pa, pyarrow.parquet as pq
-          ref, new = sys.argv[1:]
-          for f in sorted(glob.glob(os.path.join(ref, "*.parquet"))):
-              g = os.path.join(new, os.path.basename(f))
-              if filecmp.cmp(f, g, shallow=False):
-                  print("identical", os.path.basename(f))
-                  continue
-              a, b = pq.read_table(f), pq.read_table(g)
-              assert a.schema.equals(b.schema, check_metadata=True), f
-              for name, x, y in zip(a.column_names, a.columns, b.columns):
-                  if pa.types.is_floating(x.type):
-                      ok = np.allclose(x.to_numpy(), y.to_numpy(), rtol=1e-12, atol=0, equal_nan=True)
-                  else:
-                      ok = x.equals(y)
-                  assert ok, f"{f}: column {name} differs"
-              print("same values", os.path.basename(f))
-          PY
+          uv run "${w[@]}" python go/testdata/check_fixtures.py go/testdata/fixtures "$RUNNER_TEMP/fixtures"
       - name: tools/ scripts run with uv
         run: |
           uv run tools/make_demo.py "$RUNNER_TEMP/demo.parquet" --rows 10000
