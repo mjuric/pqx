@@ -605,7 +605,9 @@ Go-only with releases wired up. Nothing publishes until a `v0.3.*` tag is pushed
     a command line, default `uvx -q --from 'pqx>=0.2.0rc3,<0.3' pqx`;
   - the fixture writers take `pqx.demo`'s generator from `tools/make_demo.py` and
     need only NumPy and PyArrow; they write the checked-in fixtures byte for byte
-    (checked in CI);
+    here. On GitHub's runners `demo.parquet` differs in the last bit of some
+    coordinates (NumPy's float functions vary by CPU), so CI checks the other
+    fixtures byte for byte and that one by value (floats to 1e-12);
   - the golden-file generators run in a Python where `import pqx` is 0.2.x
     (`uv run --with 'pqx>=0.2.0rc3,<0.3' ...` or `PYTHONPATH` on a checkout;
     `go/testdata/README.md`). With pqx 0.2.0rc3 from PyPI, `make_golden.py`

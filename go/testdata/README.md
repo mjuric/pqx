@@ -45,7 +45,9 @@ python go/testdata/make_fixtures.py
 ```
 
 The script is seeded and fixed throughout. With the same PyArrow version two runs write
-byte-identical files (checked with PyArrow 25.0.1). Another PyArrow version changes the
+byte-identical files (checked with PyArrow 25.0.1) on the same machine; on another CPU,
+NumPy's trigonometric functions can change the last bit of `demo.parquet`'s coordinates
+(as on GitHub's runners, where CI compares that file by value). Another PyArrow version changes the
 footer's `created_by` and may change the encoding, but not the data. After regenerating,
 regenerate the golden files too.
 
