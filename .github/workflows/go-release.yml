@@ -1,9 +1,14 @@
 name: Go release
 
 # Builds the Go pqx for every release platform (D6), smoke-tests each binary and
-# wheel, and keeps the wheels and the GitHub Release archives as artifacts. Uploads
-# to TestPyPI only when dispatched with publish: testpypi; this workflow never
-# uploads to PyPI and never creates a GitHub Release (docs/runbooks/release.md).
+# wheel, and keeps the wheels and the GitHub Release archives as artifacts.
+# - pull request (packaging changes): builds 0.3.0.dev<run>, uploads nothing.
+# - dispatch: builds the version given; uploads to TestPyPI only with publish: testpypi.
+# - a v0.3.* tag: builds the tag's version, uploads the wheels to PyPI (job `pypi`,
+#   environment `pypi`) and creates a *draft* GitHub Release with the archives (job
+#   `github-release`), which the owner publishes by hand. See docs/runbooks/release.md.
+# Nothing here runs on v0.2.* tags or on published Releases (Python pqx 0.2.x is
+# released from the python-0.2 branch, with its own workflow).
 on:
   workflow_dispatch:
     inputs:
@@ -15,9 +20,8 @@ on:
         type: choice
         options: [none, testpypi]
         default: none
-  # Release tags, enabled at the cutover with the owner's approval (D5):
-  # push:
-  #   tags: ["v0.3.*"]
+  push:
+    tags: ["v0.3.*"]
   pull_request:
     paths: ["go/packaging/**", ".github/workflows/go-release.yml"]
 
@@ -26,13 +30,15 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # a newer push cancels a pull request's run; a release run is never cancelled
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   version:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
     steps:
       - id: v
         env:
@@ -40,14 +46,24 @@ jobs:
         run: |
           case "$GITHUB_EVENT_NAME" in
             workflow_dispatch) v="$INPUT" ;;
-            push) v="${GITHUB_REF_NAME#v}" ;;              # tag v0.3.0rc1 -> 0.3.0rc1
+            push)                                           # tag v0.3.0rc1 -> 0.3.0rc1
+              [ "$GITHUB_REF_TYPE" = tag ] || { echo "::error::push of $GITHUB_REF is not a tag"; exit 1; }
+              v="${GITHUB_REF_NAME#v}" ;;
             *) v="0.3.0.dev${GITHUB_RUN_NUMBER}" ;;         # pull requests: a dev version
           esac
-          # normalized PEP 440: N.N.N[{a|b|rc}N][.postN][.devN]
+          # normalized PEP 440: N.N.N[{a|b|rc}N][.postN][.devN]; the build job checks
+          # that every binary's --version prints exactly this
           echo "$v" | grep -Eq '^[0-9]+(\.[0-9]+)*((a|b|rc)[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$' \
             || { echo "::error::'$v' is not a normalized PEP 440 version"; exit 1; }
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            [ "$GITHUB_REF_NAME" = "v$v" ] || { echo "::error::tag $GITHUB_REF_NAME is not v$v"; exit 1; }
+            case "$v" in 0.3.*) ;; *) echo "::error::$v is not a 0.3.x version"; exit 1 ;; esac
+          fi
+          # a, b, rc and dev versions are pre-releases (PEP 440)
+          if echo "$v" | grep -Eq '(a|b|rc)[0-9]+|\.dev[0-9]+'; then pre=true; else pre=false; fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "version $v"
+          echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
+          echo "version $v, prerelease $pre"
 
   build:
     needs: version
@@ -88,12 +104,12 @@ jobs:
           git config --global --add safe.directory '*'
           # the manylinux images keep each CPython under /opt/python
           echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         if: ${{ !matrix.container }}
         with:
           python-version: "3.12"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
@@ -108,7 +124,7 @@ jobs:
           curl -sSfL -o "$RUNNER_TEMP/mingw.7z" "$URL"
           echo "$SHA256  $RUNNER_TEMP/mingw.7z" | sha256sum -c -
           7z x -y -o"$RUNNER_TEMP" "$RUNNER_TEMP/mingw.7z" > /dev/null
-          echo "$(cygpath -w "$RUNNER_TEMP/mingw64/bin")" >> "$GITHUB_PATH"
+          cygpath -w "$RUNNER_TEMP/mingw64/bin" >> "$GITHUB_PATH"
       - name: Toolchain
         run: |
           go version
@@ -149,9 +165,9 @@ jobs:
 
       - name: Smoke test the binary
         run: |
-          out/$EXE --version
-          out/$EXE --version | head -1 | grep -qx "pqx $VERSION"
-          out/$EXE --help > /dev/null
+          "out/$EXE" --version
+          "out/$EXE" --version | head -1 | grep -qx "pqx $VERSION"
+          "out/$EXE" --help > /dev/null
           if [ "$RUNNER_OS" = Windows ]; then python -m pip install -q pywinpty; fi
           python go/packaging/smoke.py "out/$EXE" go/testdata/fixtures/demo.parquet \
             --expect "20,000 rows" --expect diaSourceId
@@ -181,7 +197,7 @@ jobs:
             echo "::error::the wheel doesn't meet ${{ matrix.plat }}"; exit 1
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pqx-${{ matrix.target }}
           path: dist/*
@@ -191,10 +207,10 @@ jobs:
     needs: [version, build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: pqx-*
           path: dist
@@ -206,15 +222,15 @@ jobs:
           twine check --strict dist/*.whl
           # W007 ("library is empty") is expected: the wheel holds only the binary
           check-wheel-contents --ignore W007 dist/*.whl
-          test "$(ls dist/*.whl | wc -l)" = 5
-          test "$(ls dist/*.tar.gz dist/*.zip | wc -l)" = 5
-      - uses: actions/upload-artifact@v4
+          test "$(find dist -name '*.whl' | wc -l)" = 5
+          test "$(find dist -name '*.tar.gz' -o -name '*.zip' | wc -l)" = 5
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wheels
           path: dist/*.whl
 
   testpypi:
-    # only on an explicit dispatch with publish: testpypi; never PyPI here
+    # only on an explicit dispatch with publish: testpypi
     if: github.event_name == 'workflow_dispatch' && inputs.publish == 'testpypi'
     needs: check
     runs-on: ubuntu-latest
@@ -222,10 +238,71 @@ jobs:
     permissions:
       id-token: write   # OIDC for TestPyPI trusted publishing
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: wheels
           path: dist
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    # only on a v0.3.* tag, after every platform build and the check job passed
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.3.')
+    needs: [version, check]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pqx/${{ needs.version.outputs.version }}/
+    permissions:
+      id-token: write   # OIDC for PyPI trusted publishing: no API token stored
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: wheels
+          path: dist
+      - name: Check the wheels are this version's five
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          ls -l dist
+          test "$(find dist -name '*.whl' | wc -l)" = 5
+          test "$(find dist -name "pqx-$VERSION-py3-none-*.whl" | wc -l)" = 5
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+
+  github-release:
+    # only on a v0.3.* tag: a draft Release with the five archives, for the owner
+    # to review and publish; this job never publishes it
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.3.')
+    needs: [version, check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the draft Release and upload its files
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.version.outputs.version }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: pqx-*
+          path: dist
+          merge-multiple: true
+      - name: Draft the GitHub Release
+        run: |
+          ls -l dist
+          shopt -s nullglob
+          files=(dist/pqx-"$VERSION"-*.tar.gz dist/pqx-"$VERSION"-*.zip)
+          test "${#files[@]}" = 5
+          if state=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            # a re-run: replace the files of the draft, never touch a published Release
+            [ "$state" = true ] || { echo "::error::Release $TAG is already published"; exit 1; }
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            pre=(); [ "$PRERELEASE" = true ] && pre=(--prerelease)
+            gh release create "$TAG" "${files[@]}" --draft --verify-tag "${pre[@]}" \
+              --title "pqx $VERSION" --generate-notes
+          fi
+          gh release view "$TAG" --json url,isDraft,isPrerelease,assets --jq '{url, isDraft, isPrerelease, assets: [.assets[].name]}'

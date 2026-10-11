@@ -3,9 +3,12 @@ name: Go
 on:
   push:
     branches: [master, native-port]
-    paths: ["go/**", ".github/workflows/go.yml"]
+    paths: ["go/**", "tools/**", "ruff.toml", ".github/workflows/**"]
   pull_request:
-    paths: ["go/**", ".github/workflows/go.yml"]
+    paths: ["go/**", "tools/**", "ruff.toml", ".github/workflows/**"]
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -39,3 +42,36 @@ jobs:
           time make build
           ls -l bin/pqx
           bin/pqx --version
+
+  scripts:
+    # the repository's Python (tools/, the test-data generators, the pty harness,
+    # packaging) and the workflows; none of it needs Python pqx
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache: false
+      - name: ruff
+        run: uvx ruff@0.16.9 check .
+      - name: actionlint
+        # pinned; uses the runner's shellcheck for the run: scripts
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Parity harness selftests
+        run: |
+          w=(--no-project --with pyte==0.8.2 --with pyyaml --with pyarrow --with numpy)
+          uv run "${w[@]}" python go/bench/parity/run.py --selftest
+          uv run "${w[@]}" python go/bench/parity/security.py --selftest
+      - name: The fixtures come out byte-identical without Python pqx
+        run: |
+          uv run --no-project --with pyarrow==25.0.1 --with numpy==2.5.3 \
+            python go/testdata/make_fixtures.py "$RUNNER_TEMP/fixtures"
+          for f in go/testdata/fixtures/*.parquet; do cmp "$f" "$RUNNER_TEMP/fixtures/${f##*/}"; done
+      - name: tools/ scripts run with uv
+        run: |
+          uv run tools/make_demo.py "$RUNNER_TEMP/demo.parquet" --rows 10000
+          uv run tools/make_trips.py "$RUNNER_TEMP/trips.parquet" 10000
