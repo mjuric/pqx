@@ -159,6 +159,7 @@ Press **?** in pqx for the full list.
 | `r` | Plot: rotate the sky-map centre between RA 0° and 180° |
 | Esc | cancel running queries; when none are running, leave the filter bar or close the detail panel |
 | `?` · `q` | help · quit |
+| `Ctrl+Z` | suspend pqx; `fg` in the shell brings it back (not on Windows) |
 
 Data, Schema and Stats stay on the same column: move to a column in one of them
 and the others are on it when you switch tabs.
