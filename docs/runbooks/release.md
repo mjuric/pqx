@@ -120,8 +120,9 @@ workflow.
    ```
    Also check the TestPyPI project page renders the README.
 5. **The owner's terminal checks** (iTerm2, GNU screen, macOS; suspend with Ctrl+Z
-   during a heavy query) on the release-candidate binaries, as listed in
-   go-port.md.
+   during a heavy query; Ctrl+Z through `uvx pqx` and `uv run pqx`, where the shell
+   should get its prompt back and `fg` restore pqx) on the release-candidate
+   binaries, as listed in go-port.md.
 
 ## Release to PyPI (after the cutover)  **[owner]**
 

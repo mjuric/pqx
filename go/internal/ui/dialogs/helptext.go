@@ -66,6 +66,7 @@ They change only the grid and stats; the detail panel and **y** keep full precis
 | **m** | toggle sampling for stats and plots on large files |
 | **Esc** | cancel running queries; when nothing is running, leave the filter box or close the detail panel |
 | **?** | this help · **q** quit |
+| **Ctrl+Z** | suspend pqx; ‵fg‵ in the shell brings it back (not on Windows) |
 
 Data, Schema and Stats stay on the same column: move to a column in one and
 the others are on it when you switch tabs (the grid keeps its row). If the

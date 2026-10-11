@@ -1,6 +1,7 @@
 package term
 
 import (
+	"fmt"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,13 @@ type Session struct {
 	sig     atomic.Value // the os.Signal that ended the app
 
 	exit func(code int) // os.Exit; ends pqx from a signal while suspended
+
+	// suspendKey carries the suspend key (Ctrl+Z) from the input filter and
+	// the app to the signal handler, which suspends pqx; nil when the key is
+	// off (stty susp undef, -isig) and on Windows. suspName is the key's
+	// name, as Bubble Tea gives it ("ctrl+z").
+	suspendKey chan struct{}
+	suspName   string
 }
 
 var active atomic.Pointer[Session]
@@ -44,12 +52,69 @@ func (s *Session) ProgramOptions() []tea.ProgramOption {
 // Run runs the app on the session's terminal. The session handles the
 // signals: SIGINT quits as q does; SIGTERM, SIGHUP and SIGQUIT stop the app
 // (Signal says which); SIGTSTP suspends it, with the terminal restored,
-// until SIGCONT. Options are added to the session's.
+// until SIGCONT. The terminal's suspend key (Ctrl+Z; raw mode turns the
+// terminal's own handling off) suspends it as the terminal would, on Unix;
+// the app never sees the key. Options are added to the session's.
 func (s *Session) Run(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
+	if s.suspendKey != nil && s.suspName != "" {
+		m = ctrlZ{m, s.suspendKey, s.suspName}
+	}
 	p := tea.NewProgram(m, append(s.ProgramOptions(), opts...)...)
 	stop := s.handleSignals(p)
 	defer stop()
-	return p.Run()
+	m, err := p.Run()
+	if z, ok := m.(ctrlZ); ok {
+		m = z.Model
+	}
+	return m, err
+}
+
+// ctrlZ is the app with the suspend key taken out of its keys, in every
+// focus and dialog: the key asks the signal handler to suspend pqx. The
+// input filter normally takes the key out first (WatchSuspend); this is for
+// an encoding it didn't see (cut in two by a read).
+type ctrlZ struct {
+	tea.Model
+	req  chan<- struct{}
+	name string // the key, "ctrl+z"
+}
+
+func (z ctrlZ) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if k, ok := msg.(tea.KeyPressMsg); ok && k.String() == z.name {
+		select {
+		case z.req <- struct{}{}:
+		default: // one is pending already
+		}
+		return z, nil
+	}
+	m, cmd := z.Model.Update(msg)
+	z.Model = m
+	return z, cmd
+}
+
+// drain drops the suspend requests pending in ch.
+func drain(ch <-chan struct{}) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
+// suspKeys are the encodings of the suspend key c (a control character) and
+// its name in Bubble Tea, "" if it has none pqx knows: c itself, and for
+// Ctrl+letter the forms of the keyboard protocols pqx turns on (kitty's
+// CSI u, xterm's modifyOtherKeys).
+func suspKeys(c byte) ([][]byte, string) {
+	keys := [][]byte{{c}}
+	if c < 1 || c > 26 {
+		return keys, ""
+	}
+	l := int('a' + c - 1)
+	keys = append(keys, fmt.Appendf(nil, "\x1b[%d;5u", l), fmt.Appendf(nil, "\x1b[27;5;%d~", l))
+	return keys, "ctrl+" + string(rune(l))
 }
 
 // Signal is the signal that ended the app (Run), or nil.

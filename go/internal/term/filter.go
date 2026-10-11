@@ -266,6 +266,39 @@ type Filter struct {
 	mu     sync.Mutex
 	cur    cancelreader.CancelReader // the reader pump uses
 	resume chan cancelreader.CancelReader
+	susp   atomic.Pointer[suspWatch] // the suspend key (WatchSuspend)
+	paused atomic.Bool               // stopped at the suspend key until Resume
+}
+
+// suspWatch is the suspend key's encodings, and what to call on it.
+type suspWatch struct {
+	keys [][]byte
+	fn   func()
+}
+
+// find is where the first of the key's encodings starts in p, or -1.
+func (w *suspWatch) find(p []byte) int {
+	at := -1
+	for _, k := range w.keys {
+		if i := bytes.Index(p, k); i >= 0 && (at < 0 || i < at) {
+			at = i
+		}
+	}
+	return at
+}
+
+// WatchSuspend makes a terminal filter (NewTTYFilter) watch for the suspend
+// key, as any of keys (its encodings: the control character, and the CSI
+// forms of the keyboard protocols pqx turns on). On the key the filter
+// passes on what came before it, drops the rest of that read and the key
+// itself, stops reading, as Pause, and calls fn; it reads again after
+// Resume. So what is typed after the key stays in the terminal for the shell
+// that takes it over, as with the terminal's own Ctrl+Z. The rest of the
+// read is dropped rather than kept for after fg: it was typed for the shell,
+// and handing pqx a q typed after Ctrl+Z would quit it. A key cut in two by
+// a read isn't seen here.
+func (f *Filter) WatchSuspend(keys [][]byte, fn func()) {
+	f.susp.Store(&suspWatch{keys, fn})
 }
 
 // NewTTYFilter is NewFilter for a terminal, read through a reader Pause can
@@ -297,7 +330,11 @@ func (f *Filter) Pause() {
 	}
 }
 
-// Resume reads the terminal again after Pause.
+// Paused reports whether the filter stopped reading at the suspend key
+// (WatchSuspend) and waits for Resume.
+func (f *Filter) Paused() bool { return f.paused.Load() }
+
+// Resume reads the terminal again after Pause, or after the suspend key.
 func (f *Filter) Resume() error {
 	if f.in == nil {
 		return nil
@@ -353,9 +390,33 @@ func (f *Filter) pump(src io.Reader) {
 				return
 			}
 		}
+		w := f.susp.Load()
+		suspend := false
+		if w != nil && f.resume != nil && n > 0 {
+			if i := w.find(buf[:n]); i >= 0 {
+				n, suspend = i, true
+			}
+		}
 		if n > 0 {
 			select {
 			case f.data <- append([]byte(nil), buf[:n]...):
+			case <-f.done:
+				return
+			}
+		}
+		if suspend {
+			// paused until Resume; the reader stays open, as Pause may
+			// still cancel it
+			f.paused.Store(true)
+			w.fn()
+			select {
+			case next := <-f.resume:
+				f.paused.Store(false)
+				if c, ok := src.(io.Closer); ok {
+					_ = c.Close()
+				}
+				src = next
+				continue
 			case <-f.done:
 				return
 			}

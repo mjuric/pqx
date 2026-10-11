@@ -387,9 +387,14 @@ failure). `region: screen` leaves out the whole checkpoint, so its patterns must
 difference down. In use: detail-wrap and types-grid's `detail-null-row` (`region: pane`) (exact 47-digit decimal), raw-smart's `raw`
 (shortest float32) and `smart` (columns never shrink, so they keep raw mode's widths), cli-bad-theme (D2's usage error), filter-unbalanced's
 `two-statements` (Go pqx's own message; it must still come as a notification: the step
-waits for either app's), help's scrollbar thumb (`region: scrollbar`, `anchor:` the help's header: D2, no command palette, so Go's help is one line shorter, #88; pinned by `expect_app` that only Python's help ends with Ctrl+P), esc-cancel-count's status line after Esc (`region: status`, the
+waits for either app's), esc-cancel-count's status line after Esc (`region: status`, the
 grid's `│ ✓ …` / `│ * …` line: Python shows "Counting rows" until DuckDB has stopped,
 Go the cancelled state at once).
+
+The help's own differences are pinned with `expect_app` / `expect_not_app` instead
+(`help`): only Python's help lists the command palette (Ctrl+P, D2, #88) and only Go's
+lists Ctrl+Z (D11). With one line each, the two helps are the same length, so the
+checkpoints (and the scrollbar thumb) match.
 
 ## Python behaviour the scenarios work around
 
