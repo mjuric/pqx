@@ -669,6 +669,10 @@ Go-only with releases wired up. Nothing publishes until a `v0.3.*` tag is pushed
     Without that, any branch can mint a PyPI token: a same-repository PR that edits
     the workflow, or a dispatch from a branch, can name the environment. `pypi` has
     no protection rules today;
+  - recommended: branch protection on `master` (PRs required, `go.yml` green),
+    which makes the release's "tag on master" check mean "reviewed and tested";
+    that check catches mistakes, while the environment's reviewer and tag rule are
+    the gates against a hostile tag;
   - then add `go-release.yml` (environment `pypi`) as a trusted publisher on
     pypi.org, keeping `publish.yml`'s for the `python-0.2` branch, and the same on
     test.pypi.org with environment `testpypi`.

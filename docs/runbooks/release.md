@@ -108,7 +108,15 @@ release runs.
 4. **TestPyPI trusted publisher**, only after step 2. On test.pypi.org, for project
    `pqx` (a pending publisher if the project doesn't exist there yet): owner
    `mjuric`, repository `pqx`, workflow `go-release.yml`, environment `testpypi`.
-5. **Dispatch.** GitHub only offers "Run workflow" for workflows on the default
+5. **Branch protection on `master`** (recommended): pull requests required, the
+   `Go` workflow's jobs (`test (ubuntu-latest)`, `test (macos-latest)`, `scripts`)
+   required to pass, no direct pushes or force pushes. That is what makes
+   `go-release.yml`'s check "the tagged commit is on `master`" mean "reviewed and
+   tested". The check itself guards against mistakes (a tag on `native-port` or a
+   feature branch), not against someone hostile: whoever can push a `v*` tag can
+   also push to an unprotected `master` first. The real gates are the `pypi`
+   environment's required reviewer and its `v*` tag rule, plus the tag ruleset.
+6. **Dispatch.** GitHub only offers "Run workflow" for workflows on the default
    branch. Once `native-port` is merged, `go-release.yml` is on `master` and can be
    dispatched (the `testpypi` environment then admits only runs on `master`).
 

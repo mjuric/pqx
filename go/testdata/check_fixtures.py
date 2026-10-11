@@ -2,11 +2,20 @@
 
     python go/testdata/check_fixtures.py go/testdata/fixtures NEWDIR
 
-Every file must be byte-identical, except demo.parquet and units.parquet: NumPy's
-float functions (arcsin, sin, powers) can change the last bit of their values on
-another CPU (GitHub's runners), so those two must have the same Parquet layout (schema, row groups and their row counts, each
-column chunk's codec, encodings and null count), the same Arrow schema and metadata,
-the same nulls, and the same values, floats to a relative 1e-12 (NaN only where NaN).
+Both directories must hold the same *.parquet files, and every file must be
+byte-identical, except demo.parquet and units.parquet: NumPy's float functions
+(arcsin, sin, powers) can change the last bit of their values on another CPU (GitHub's
+runners), so those two are compared by layout and value instead:
+
+- the Parquet layout: writer, format version, schema leaves, row groups and their row
+  counts, and for each column chunk its codec, encodings, value and null counts, and
+  whether it has a dictionary page, a column index, an offset index and a bloom
+  filter. Byte offsets and sizes are left out (other float bits compress to
+  other sizes), and so is the number of data pages per chunk, which pyarrow's metadata
+  doesn't expose (it is in the offset index, which pyarrow doesn't read); the writer
+  splits pages by row count and size limits that last bits don't move;
+- the same Arrow schema and metadata, the same nulls, NaN only where NaN, and the same
+  values, floats to a relative 1e-12.
 """
 from __future__ import annotations
 
@@ -33,13 +42,15 @@ def layout(path):
         for j in range(rg.num_columns):
             c = rg.column(j)
             st = c.statistics
-            cols.append((c.path_in_schema, c.physical_type, c.compression, tuple(sorted(c.encodings)),
-                         st.null_count if st is not None and st.has_null_count else None))
+            cols.append((c.path_in_schema, c.physical_type, c.compression, tuple(sorted(c.encodings)), c.num_values,
+                         st.null_count if st is not None and st.has_null_count else None,
+                         c.has_dictionary_page, c.has_column_index, c.has_offset_index,
+                         c.bloom_filter_offset is not None))
         groups.append((rg.num_rows, tuple(cols)))
     sch = md.schema
     leaves = tuple((c.path, c.physical_type, str(c.logical_type), c.max_definition_level, c.max_repetition_level)
                    for c in (sch.column(i) for i in range(len(sch))))
-    return sch.to_arrow_schema(), leaves, md.num_rows, tuple(groups)
+    return md.created_by, md.format_version, sch.to_arrow_schema(), leaves, md.num_rows, tuple(groups)
 
 
 def same_values(a: pa.ChunkedArray, b: pa.ChunkedArray) -> bool:
@@ -62,6 +73,11 @@ def main(ref: str, new: str) -> int:
     if not files:
         print(f"no fixtures in {ref}")
         return 1
+    known = {os.path.basename(f) for f in files}
+    for g in sorted(glob.glob(os.path.join(new, "*.parquet"))):
+        if os.path.basename(g) not in known:
+            print(f"EXTRA {os.path.basename(g)} (written, but not checked in)")
+            bad += 1
     for f in files:
         name = os.path.basename(f)
         g = os.path.join(new, name)
