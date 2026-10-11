@@ -577,3 +577,30 @@ func TestSchemaDecimalStatistics(t *testing.T) {
 		}
 	}
 }
+
+// A column name longer than the screen widens its column as Textual's
+// DataTable does (Python bounds it no more): the later columns are off the
+// screen, and right scrolls the table to them.
+func TestSchemaLongColumnName(t *testing.T) {
+	long := strings.Repeat("x", 250)
+	tb := open(t, "demo", false, func(d *ft.DS) {
+		old := d.Cols[0].Name
+		d.Cols[0].Name = long
+		for i := range d.Summary {
+			if d.Summary[i].Path == old {
+				d.Summary[i].Path = long
+			}
+		}
+	})
+	tb.read()
+	tb.Press("2")
+	if strings.Contains(tb.line("#  column"), "null %") {
+		t.Fatalf("header %q", tb.line("#  column"))
+	}
+	for range 70 {
+		tb.Press("right")
+	}
+	if !strings.Contains(tb.text(), "null %") {
+		t.Fatalf("right didn't reach the later columns:\n%s", tb.text())
+	}
+}
