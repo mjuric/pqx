@@ -1,6 +1,7 @@
 package term
 
 import (
+	"fmt"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -20,7 +21,7 @@ func (m keysModel) View() tea.View { return tea.NewView("") }
 func TestCtrlZRequestsSuspend(t *testing.T) {
 	var got []tea.Msg
 	req := make(chan struct{}, 1)
-	var m tea.Model = ctrlZ{keysModel{&got}, req}
+	var m tea.Model = ctrlZ{keysModel{&got}, req, "ctrl+z"}
 	ctrlz := tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl}
 	if ctrlz.String() != "ctrl+z" {
 		t.Fatalf("key %q", ctrlz.String())
@@ -49,5 +50,35 @@ func TestCtrlZRequestsSuspend(t *testing.T) {
 	}
 	if len(got) != 2 || got[0] != tea.Msg(z) || len(req) != 0 {
 		t.Fatalf("other keys: %v, %d requests", got, len(req))
+	}
+}
+
+// drain empties the queue of suspend requests, however many are pending.
+func TestDrainSuspendRequests(t *testing.T) {
+	ch := make(chan struct{}, 4)
+	for range 3 {
+		ch <- struct{}{}
+	}
+	drain(ch)
+	if len(ch) != 0 {
+		t.Fatalf("%d requests left", len(ch))
+	}
+	drain(ch) // and returns when there are none
+}
+
+func TestSuspKeys(t *testing.T) {
+	for _, c := range []struct {
+		c    byte
+		keys string
+		name string
+	}{
+		{0x1a, `["\x1a" "\x1b[122;5u" "\x1b[27;5;122~"]`, "ctrl+z"},
+		{0x19, `["\x19" "\x1b[121;5u" "\x1b[27;5;121~"]`, "ctrl+y"},
+		{0x1c, `["\x1c"]`, ""},
+	} {
+		keys, name := suspKeys(c.c)
+		if got := fmt.Sprintf("%q", keys); got != c.keys || name != c.name {
+			t.Errorf("%#x: %s %q, want %s %q", c.c, got, name, c.keys, c.name)
+		}
 	}
 }

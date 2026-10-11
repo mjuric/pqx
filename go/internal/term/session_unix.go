@@ -97,6 +97,11 @@ func open(stdin, stdout, stderr *os.File) (*Session, error) {
 		closeAll()
 		return nil, fmt.Errorf("could not read the terminal's mode: %w", err)
 	}
+	// the suspend key as the terminal has it before raw mode turns it off
+	var susp byte
+	if tio, err := unix.IoctlGetTermios(int(in.Fd()), ioctlGetTermios); err == nil {
+		susp = suspChar(tio)
+	}
 	t := &ttyState{fd: in.Fd(), saved: saved}
 	if err := t.raw(); err != nil {
 		t.cooked()
@@ -110,12 +115,34 @@ func open(stdin, stdout, stderr *os.File) (*Session, error) {
 		return nil, err
 	}
 	s := &Session{out: NewOutput(out), input: f, tty: t, exit: os.Exit}
+	if susp != 0 {
+		keys, name := suspKeys(susp)
+		s.suspendKey, s.suspName = make(chan struct{}, 1), name
+		f.WatchSuspend(keys, func() {
+			select {
+			case s.suspendKey <- struct{}{}:
+			default: // one is pending already, which resumes the filter
+			}
+		})
+	}
 	s.restore = func() {
 		_ = f.Close()
 		t.cooked()
 		closeAll()
 	}
 	return s, nil
+}
+
+// suspChar is the terminal's suspend character (VSUSP, Ctrl+Z), or 0 when
+// the terminal wouldn't suspend on a key: signal characters off (-isig) or
+// no suspend character (stty susp undef: _POSIX_VDISABLE, 0 on Linux and
+// 0xff on the BSDs and macOS).
+func suspChar(tio *unix.Termios) byte {
+	c := byte(tio.Cc[unix.VSUSP])
+	if tio.Lflag&unix.ISIG == 0 || c == 0 || c == 0xff {
+		return 0
+	}
+	return c
 }
 
 // handleSignals handles the signals while p runs; the returned function
@@ -128,15 +155,21 @@ func (s *Session) handleSignals(p *tea.Program) func() {
 		syscall.SIGCONT)
 	done := make(chan struct{})
 	go func() {
+		var resumed time.Time // when the last suspend ended
 		for {
 			var group int // the process group to stop with pqx (0: pqx alone)
 			select {
 			case <-done:
 				return
 			case <-s.suspendKey:
-				// Ctrl+Z: stop the terminal's foreground job, as the
-				// terminal's Ctrl+Z would, if pqx is in it; otherwise pqx
-				// alone, as on SIGTSTP
+				if time.Since(resumed) < keyGrace {
+					// a suspend key read before the last suspend ended
+					s.skipSuspend()
+					continue
+				}
+				// stop the terminal's foreground job, as the terminal's
+				// Ctrl+Z would, if pqx is in it; otherwise pqx alone, as on
+				// SIGTSTP
 				if pg, err := unix.IoctlGetInt(int(s.tty.fd), unix.TIOCGPGRP); err == nil && pg == unix.Getpgrp() {
 					group = pg
 				}
@@ -158,27 +191,40 @@ func (s *Session) handleSignals(p *tea.Program) func() {
 				// nothing would resume pqx (it leads its own session: ssh
 				// -t host pqx f, setsid): ignore SIGTSTP and Ctrl+Z, as the
 				// kernel ignores the terminal's Ctrl+Z there
+				s.skipSuspend()
 				continue
 			}
 			// run on Bubble Tea's event loop like an external program: it
 			// releases the terminal, then restores and repaints it when
 			// suspend returns. Meanwhile the signals are suspend's.
-			resumed := make(chan struct{})
-			p.Send(tea.Exec(suspend{s, ch, resumed, group}, nil)())
+			ended := make(chan struct{})
+			p.Send(tea.Exec(suspend{s, ch, ended, group}, nil)())
 			select {
-			case <-resumed:
+			case <-ended:
 			case <-done:
 				return
 			}
-			select {
-			case <-s.suspendKey: // a second Ctrl+Z, sent before pqx stopped
-			default:
-			}
+			// suspend keys sent before pqx stopped, or read before it
+			// stopped reading, don't suspend it again
+			drain(s.suspendKey)
+			resumed = time.Now()
 		}
 	}()
 	return func() {
 		signal.Stop(ch)
 		close(done)
+	}
+}
+
+// keyGrace is how long after a suspend the suspend key is ignored: Bubble
+// Tea may still hold keys read before pqx stopped.
+const keyGrace = 250 * time.Millisecond
+
+// skipSuspend ignores a suspend key: the input filter, if it stopped
+// reading at the key, reads again.
+func (s *Session) skipSuspend() {
+	if s.input != nil && s.input.Paused() {
+		_ = s.input.Resume()
 	}
 }
 

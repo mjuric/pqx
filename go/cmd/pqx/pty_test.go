@@ -898,3 +898,99 @@ func TestShellCtrlZDuringQuery(t *testing.T) {
 		t.Fatalf("q didn't quit: %q", procState(pid))
 	}
 }
+
+// What is typed right after Ctrl+Z goes to the shell, as with the
+// terminal's own Ctrl+Z (pqx stops reading at the key), or, when it came in
+// the same read as the key, is dropped; never to pqx (where e would open
+// the export dialog and the rest be typed into it).
+func TestShellCtrlZTypeAhead(t *testing.T) {
+	a, pid := startShell(t)
+	shell := 0
+	for round := 0; round < 5; round++ {
+		n := len(a.output())
+		a.write("\x1a")
+		if round > 0 {
+			time.Sleep(time.Duration(round) * time.Millisecond)
+		}
+		a.write("echo SHELL-$((40+2))\r")
+		if !waitProc(pid, "T", 5*time.Second) || !a.waitFor("PROMPT$ ", 5*time.Second) {
+			t.Fatalf("pqx didn't stop: state %q", procState(pid))
+		}
+		time.Sleep(300 * time.Millisecond)
+		if strings.Contains(a.output()[n:], "SHELL-42") {
+			shell++
+		}
+		m := len(a.output())
+		fg(t, a, pid, "diaSourceId")
+		time.Sleep(300 * time.Millisecond)
+		if st := procState(pid); st == "" || st == "T" {
+			t.Fatalf("pqx after fg: state %q", st)
+		}
+		if tail := a.output()[m:]; strings.Contains(tail, "SHELL") || strings.Contains(tail, "Export") {
+			t.Fatalf("round %d: pqx got the keys typed after Ctrl+Z: %q", round, tail)
+		}
+	}
+	t.Logf("the shell ran the line in %d of 5 rounds", shell)
+	if shell == 0 {
+		t.Error("the shell never got the line typed after Ctrl+Z")
+	}
+	a.write("q")
+	if !waitProc(pid, "", 5*time.Second) || !a.waitFor("PROMPT$ ", 5*time.Second) {
+		t.Fatalf("q didn't quit: %q", procState(pid))
+	}
+}
+
+// Several Ctrl+Z, or keys after it, in one read suspend pqx once: what came
+// after the first Ctrl+Z is dropped (a q typed there doesn't quit pqx after
+// fg), and pqx stays running after fg.
+func TestShellCtrlZRepeated(t *testing.T) {
+	a, pid := startShell(t)
+	for _, keys := range []string{"\x1a\x1a\x1a", "\x1aj\x1a", "\x1aq", "\x1b[122;5u\x1b[122;5u"} {
+		n := len(a.output())
+		a.write(keys)
+		if !waitProc(pid, "T", 5*time.Second) || !a.waitFor("PROMPT$ ", 5*time.Second) {
+			t.Fatalf("%q: pqx didn't stop: state %q, %q", keys, procState(pid), a.output()[n:])
+		}
+		fg(t, a, pid, "diaSourceId")
+		time.Sleep(time.Second)
+		if st := procState(pid); st == "" || st == "T" {
+			t.Fatalf("%q: pqx after fg: state %q", keys, st)
+		}
+	}
+	a.write("q")
+	if !waitProc(pid, "", 5*time.Second) || !a.waitFor("PROMPT$ ", 5*time.Second) {
+		t.Fatalf("q didn't quit: %q", procState(pid))
+	}
+}
+
+// pqx follows the terminal's suspend setting: none with stty susp undef or
+// -isig; another key with stty susp.
+func TestShellSuspSetting(t *testing.T) {
+	for _, c := range []struct {
+		stty string
+		key  string // the key that suspends, "" for none
+	}{
+		{"susp undef", ""},
+		{"-isig", ""},
+		{"susp ^Y", "\x19"},
+	} {
+		a, pid := startShellWith(t, "sh -c 'stty "+c.stty+"; exec $PQX'")
+		n := len(a.output())
+		a.write("\x1a")
+		time.Sleep(700 * time.Millisecond)
+		if st := procState(pid); st == "T" || strings.Contains(a.output()[n:], "Stopped") {
+			t.Fatalf("stty %s: Ctrl+Z stopped pqx", c.stty)
+		}
+		if c.key != "" {
+			a.write(c.key)
+			if !waitProc(pid, "T", 5*time.Second) || !a.waitFor("Stopped", 5*time.Second) {
+				t.Fatalf("stty %s: %q didn't stop pqx: state %q", c.stty, c.key, procState(pid))
+			}
+			fg(t, a, pid, "diaSourceId")
+		}
+		a.write("q")
+		if !waitProc(pid, "", 5*time.Second) {
+			t.Fatalf("stty %s: q didn't quit: %q", c.stty, procState(pid))
+		}
+	}
+}
