@@ -587,3 +587,60 @@ Owner report: under GNU screen (`TERM=screen`, no `COLORTERM`) the Plot tab's sk
   - Results: the nine scenarios pass Python vs Python and Python vs Go. The Go before the fix fails the 16-colour plot and theme scenarios. The whole suite at `--env TERM=screen --size 120x40`: 67 PASS, 12 PYBUG, 7 INTENDED, nothing else. The whole suite as before (256 colours, both sizes; on native-port with #100): 116 PASS, 20 PYBUG, 14 INTENDED, nothing else.
 - **Real data.** SSSource, Plot tab sky mode under `TERM=screen` in the pty: Go's screen has the same colour in every cell as Python's (legend magenta, magenta, bright red, bright red, white, bright white).
 - **GNU screen without `defbce on`.** Bubble Tea's renderer erases and shifts cells (ECH, EL, DCH) assuming background colour erase, which GNU screen has off by default. The integrator's review checked a real screen session with bce off: the theme background is filled in both apps.
+
+### Cutover (prepared 2026-10-11)
+
+Owner-approved 2026-10-11: prepare the cutover as a PR into `native-port`, so that
+merging `native-port` into `master` (the owner's separate approval) leaves `master`
+Go-only with releases wired up. Nothing publishes until a `v0.3.*` tag is pushed.
+
+- **Removed** (D5): `pqx/`, `tests/`, `pyproject.toml`, `MANIFEST.in`, `ci.yml`
+  (Python tests and the sdist/wheel check) and `publish.yml` (uploaded to PyPI on
+  every published GitHub Release). Python pqx's benchmarks `bench/grid_bench.py` and
+  `bench/startup_bench.py` moved to `tools/` as `uv run` scripts that install Python
+  pqx 0.2.x from PyPI (D8). ruff's settings are in `ruff.toml`.
+- **The Python reference from outside the tree.** Python pqx 0.2.x stays the
+  reference (D7), installed rather than imported from the checkout:
+  - the pty tools (`run.py`, `security.py`, `bench.py`) take `PQX_PY` as a path or
+    a command line, default `uvx -q --from 'pqx>=0.2.0rc3,<0.3' pqx`;
+  - the fixture writers take `pqx.demo`'s generator from `tools/make_demo.py` and
+    need only NumPy and PyArrow; they write the checked-in fixtures byte for byte
+    (checked in CI);
+  - the golden-file generators run in a Python where `import pqx` is 0.2.x
+    (`uv run --with 'pqx>=0.2.0rc3,<0.3' ...` or `PYTHONPATH` on a checkout;
+    `go/testdata/README.md`). With pqx 0.2.0rc3 from PyPI, `make_golden.py`
+    reproduces every golden file but the header, and the other generators their
+    files (`yaml_cases.json` differs only in random temporary paths, as before);
+  - `go/internal/config`'s tests against Python pqx use `PQX_REF_PYTHON` and skip
+    without it.
+  - Until 0.2.0 final is on PyPI the default reference is 0.2.0rc3, which predates
+    "Esc closes the detail pane" (master after rc3): `detail-pane` fails against it
+    (ERROR-REF) and passes against a checkout of `master`
+    (`PQX_PY="env PYTHONPATH=<checkout> <python> -m pqx"`). A check run: startup,
+    cursor-keys, clear-x, cli-help and the `filter-*` scenarios at 120x40 against
+    rc3 through uvx gave 12 PASS, 1 INTENDED; the `detail-*` scenarios against the
+    `master` checkout 7 PASS, 1 PYBUG, 1 INTENDED.
+- **Workflows.**
+  - `go-release.yml` runs on `v0.3.*` tags as well as pull requests and dispatch.
+    On a tag: the version is the tag minus `v` (normalized PEP 440, 0.3.x, printed
+    by every binary); after the five platform builds and `check`, job `pypi`
+    (environment `pypi`, trusted publishing, `id-token: write` in that job only)
+    uploads the wheels, and job `github-release` (`contents: write` in that job only)
+    creates a draft GitHub Release with the five archives, pre-release for
+    a/b/rc/dev versions. Actions are pinned by commit SHA.
+  - `go.yml` is the CI on `master`: the Go tests on Linux and macOS, and a `scripts`
+    job with ruff, actionlint, the harness selftests, the fixtures check and the
+    `tools/` scripts.
+  - Nothing runs on `v0.2.*` tags or on a published Release.
+- **What happens when.**
+  - Merging `native-port` into `master`: `go.yml` runs; nothing is built for
+    release or uploaded.
+  - Pushing `v0.3.0rc1`: the wheels go to PyPI as a pre-release (pip installs them
+    only with `--pre` or `==0.3.0rc1`) and a draft pre-release GitHub Release is made.
+  - Pushing `v0.3.0`: the same as a final release; the owner publishes the draft.
+- **Owner steps** (`docs/runbooks/release.md`, "The cutover"): tag and release
+  Python 0.2.0 final from `master` before the merge and branch `python-0.2` from
+  `v0.2.0` for 0.2.x fixes; add `go-release.yml` (environment `pypi`) as a trusted
+  publisher on pypi.org, keeping `publish.yml`'s for the `python-0.2` branch;
+  optionally a required reviewer on the `pypi` environment (it has none, so a tag
+  uploads at once).

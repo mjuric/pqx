@@ -5,7 +5,10 @@ PyPI. Decisions D4 (one PyPI name, binary-only wheels, release candidates first)
 D5 (cutover) and D6 (platforms) are in [go-port.md](../design/go-port.md).
 
 Steps marked **[owner]** need the owner's approval or are done by the owner. The
-release workflow never uploads to PyPI and never creates a GitHub Release by itself.
+release workflow (`.github/workflows/go-release.yml`) uploads to PyPI only when a
+`v0.3.*` tag is pushed, to TestPyPI only when dispatched with `publish: testpypi`,
+and never publishes a GitHub Release: on a tag it creates a draft, which the owner
+publishes.
 
 ## What a release is
 
@@ -52,7 +55,8 @@ release workflow never uploads to PyPI and never creates a GitHub Release by its
   version with a `v`: `v0.3.0rc1`.
 - `pqx --version` prints the same version (`-X main.version`).
 - Pull-request runs of the workflow build `0.3.0.dev<run number>`; a dispatch builds
-  the version given; a release tag (once enabled) builds the tag minus its `v`.
+  the version given; a `v0.3.*` tag builds the tag minus its `v` (the workflow fails
+  unless that is a normalized PEP 440 0.3.x version and every binary prints it).
 - Release candidates (`rcN`) are pre-releases: pip, pipx and uv install them only
   when asked (`--pre`, `pqx==0.3.0rc1`).
 
@@ -78,21 +82,24 @@ workflow.
 1. **TestPyPI trusted publisher.** On test.pypi.org, for project `pqx` (a pending
    publisher if the project doesn't exist there yet): owner `mjuric`, repository
    `pqx`, workflow `go-release.yml`, environment `testpypi`.
-2. **GitHub environment** `testpypi` in the repository settings (optionally with the
-   owner as required reviewer, so every upload waits for a click).
-3. **Make the workflow dispatchable.** GitHub only offers "Run workflow" for
-   workflows that exist on the default branch (`master`). Before the cutover, either
-   - merge `.github/workflows/go-release.yml` alone into `master` (it then runs from
-     whichever ref is dispatched, e.g. `native-port`); or
-   - enable the `push: tags: ["v0.3.*"]` trigger on `native-port` and push a release
-     candidate tag there (the tag runs the workflow file of the tagged commit). Note
-     `ci.yml` also runs on `v*` tags.
+2. **PyPI trusted publisher.** On pypi.org, project `pqx`, add a second trusted
+   publisher: owner `mjuric`, repository `pqx`, workflow `go-release.yml`,
+   environment `pypi`. Keep the existing one (`publish.yml`, environment `pypi`):
+   the `python-0.2` branch uses it for 0.2.x fixes.
+3. **GitHub environments** `testpypi` (new) and `pypi` (exists, used by
+   `publish.yml` too) in the repository settings. Recommended: the owner as
+   required reviewer on both, so every upload waits for a click; `pypi` has no
+   protection rules today, so a pushed `v0.3.*` tag would upload at once.
+4. **Dispatch.** GitHub only offers "Run workflow" for workflows on the default
+   branch. Once `native-port` is merged, `go-release.yml` is on `master` and can be
+   dispatched from any ref. Before that, dispatching it needs `go-release.yml`
+   merged alone into `master`.
 
 ## Release candidate to TestPyPI
 
 1. **Build without uploading.** Check the run is green on all five platforms:
    ```bash
-   gh workflow run go-release.yml --ref native-port -f version=0.3.0rc1 -f publish=none
+   gh workflow run go-release.yml --ref master -f version=0.3.0rc1 -f publish=none
    gh run watch
    ```
    Each platform job builds, prints the binary's libraries (`NEEDED`/`otool -L`/DLLs),
@@ -105,7 +112,7 @@ workflow.
    dist-info files.
 3. **Upload to TestPyPI.  [owner approves]**
    ```bash
-   gh workflow run go-release.yml --ref native-port -f version=0.3.0rc1 -f publish=testpypi
+   gh workflow run go-release.yml --ref master -f version=0.3.0rc1 -f publish=testpypi
    ```
    A version can be uploaded once only; a fix needs `rc2`.
 4. **Check the installs on each platform** (Linux x86-64 and arm64, macOS arm64 and
@@ -123,27 +130,80 @@ workflow.
    during a heavy query) on the release-candidate binaries, as listed in
    go-port.md.
 
-## Release to PyPI (after the cutover)  **[owner]**
+## The cutover (prepared in the `cutover` PR into `native-port`, 2026-10-11)
 
-Not wired up yet: `go-release.yml` has no PyPI job. At the cutover (D5), with the
-owner's approval:
+Done in that PR, so `master` is Go-only once `native-port` merges (D5):
 
-1. Merge `native-port` into `master` (the integration PR) **[owner]**.
-2. In the same change: delete or retarget `publish.yml` (Python's). It runs on every
-   published GitHub Release and would try to build the removed Python package.
-3. Enable the `push: tags: ["v0.3.*"]` trigger in `go-release.yml` and add a `pypi`
-   job like `testpypi` (environment `pypi`, no `repository-url`), gated on the tag.
-4. On pypi.org, add `go-release.yml` with environment `pypi` as a second trusted
-   publisher of `pqx` **[owner]**; remove `publish.yml`'s once 0.3.0 is out.
-5. Tag and push: `git tag v0.3.0 && git push origin v0.3.0` **[owner approves]**.
-   The workflow builds, checks and uploads the wheels.
-6. Create the GitHub Release from the tag with the five archives from the run's
-   artifacts **[owner approves]**:
+- [x] Python pqx removed: `pqx/`, `tests/`, `pyproject.toml`, `MANIFEST.in`; its
+  benchmarks moved to `tools/` as `uv run` scripts. The golden-file generators and
+  the parity harness take Python pqx 0.2.x from PyPI (`go/testdata/README.md`,
+  `go/bench/parity/README.md`).
+- [x] `ci.yml` and `publish.yml` removed: `publish.yml` ran on every published
+  GitHub Release and would have tried to build the removed package.
+- [x] `go-release.yml` runs on `v0.3.*` tags, with a `pypi` job (environment
+  `pypi`, trusted publishing) and a `github-release` job (a draft Release with the
+  five archives).
+- [x] `go.yml` is the CI: Go tests on Linux and macOS, ruff, actionlint and the
+  harness selftests.
+
+Left for the owner, in this order:
+
+1. **Python 0.2.0 final**, from `master` *before* `native-port` merges (it is still
+   Python there): publish the GitHub Release `v0.2.0` as for the release candidates
+   (`publish.yml` uploads it). Then keep a branch for 0.2.x fixes:
    ```bash
-   gh run download <run-id> -p 'pqx-*' -D release
-   gh release create v0.3.0 release/*/*.tar.gz release/*/*.zip --verify-tag --notes-file notes.md
+   git fetch origin --tags
+   git branch python-0.2 v0.2.0 && git push origin python-0.2
    ```
-7. Repeat the install checks of step 4 above against pypi.org.
+   The branch has Python pqx with its own `ci.yml` and `publish.yml`.
+2. The one-time setup above (PyPI trusted publisher for `go-release.yml`,
+   environments).
+3. **Merge `native-port` into `master`** (the integration PR).
+4. **Release candidate**: `git tag v0.3.0rc1 <commit on master> && git push origin
+   v0.3.0rc1` (below).
+5. **0.3.0 final** the same way, after the checks on the release candidate.
 
-0.2.x fixes are released from the `python-0.2` branch with its own `publish.yml`
-(D5).
+## Release to PyPI  **[owner]**
+
+A tag runs the whole release; there is nothing to upload by hand.
+
+1. **Tag and push** **[owner approves]**: `git tag v0.3.0 && git push origin v0.3.0`
+   (or `v0.3.0rc1` for a release candidate). The tag must be on a commit whose
+   `go-release.yml` has the tag trigger (anything on `master` after the merge, or on
+   `native-port` after the `cutover` PR: a tag there publishes too).
+2. **The `Go release` run** (`gh run watch`): `version` derives `0.3.0` from the tag;
+   the five platform builds and `check` run as for a candidate; then
+   - `pypi` uploads the five wheels to pypi.org (it waits for the owner's approval if
+     the `pypi` environment has a required reviewer). A version can be uploaded once
+     only: a broken release needs a new version (`0.3.1`, or `rc2`).
+   - `github-release` creates a **draft** GitHub Release for the tag, titled
+     `pqx 0.3.0`, with the five archives and generated notes, marked pre-release for
+     `aN`/`bN`/`rcN`/`.devN` versions. Re-running the job replaces the draft's files;
+     it refuses to touch a published Release.
+3. **Publish the GitHub Release** **[owner]**: edit the draft's notes on GitHub and
+   publish it (or `gh release edit v0.3.0 --draft=false`). Nothing runs when a
+   Release is published.
+4. **Check the installs** against pypi.org as in step 4 of the release candidate
+   (`pip install pqx==0.3.0`, `pipx`, `uvx pqx@0.3.0`); a release candidate needs
+   `--pre` or the exact version.
+
+A `v0.2.*` tag, any other tag, and a published Release run nothing from
+`go-release.yml`.
+
+## Python pqx 0.2.x fixes
+
+Released from the `python-0.2` branch, which keeps Python pqx's `ci.yml` and
+`publish.yml` (unchanged from `master` before the cutover):
+
+1. Commit the fix to `python-0.2` (through a PR into `python-0.2`); its `ci.yml`
+   runs the Python tests.
+2. Publish a GitHub Release with a new tag on that branch, not marked latest
+   **[owner approves]**:
+   ```bash
+   gh release create v0.2.1 --target python-0.2 --latest=false --notes-file notes.md
+   ```
+   `publish.yml` runs from the tagged commit, builds Python pqx (setuptools-scm takes
+   `0.2.1` from the tag) and uploads it to PyPI with the existing trusted publisher.
+   `go-release.yml` doesn't run (not a `v0.3.*` tag).
+3. pip keeps installing 0.3.x where a 0.3 wheel matches, and 0.2.1 elsewhere (the
+   fallback in "What a release is").

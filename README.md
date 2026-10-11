@@ -8,7 +8,7 @@ Browse rows, filter with SQL, profile columns, plot, and export.<br>
 Files of any size open in under a second.
 
 [![PyPI](https://img.shields.io/pypi/v/pqx?include_prereleases&color=7aa2f7)](https://pypi.org/project/pqx/)
-[![CI](https://github.com/mjuric/pqx/actions/workflows/go.yml/badge.svg)](https://github.com/mjuric/pqx/actions/workflows/go.yml)
+[![CI](https://github.com/mjuric/pqx/actions/workflows/go.yml/badge.svg?branch=master)](https://github.com/mjuric/pqx/actions/workflows/go.yml?query=branch%3Amaster)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-7aa2f7)](#license)
 
 [Install](#install) · [Tour](#a-quick-tour) · [Big files](#built-for-big-files) · [Keys](#keys) · [Astronomy](#for-astronomers)
@@ -265,8 +265,10 @@ needs. CI also runs `staticcheck` (settings in `go/staticcheck.conf`).
 - `go/internal/ui/...` is the UI: `app` is the root model, `kit` the parts'
   shared interfaces, and one package per part (`grid`, `detail`, `filter`,
   `schema`, `stats`, `plot`, `meta`, `dialogs`, `chrome`, `footer`, …).
-- `go/testdata` has the test fixtures and golden files: outputs of Python pqx,
-  the reference for the port, that the Go tests must match.
+- `go/testdata` has the test fixtures and golden files: outputs of Python pqx
+  0.2.x, the reference for the port, that the Go tests must match. Python pqx
+  is no longer in this repository (its code is the `python-0.2` branch); the
+  generators take it from PyPI ([`go/testdata/README.md`](go/testdata/README.md)).
 - `go/bench/parity` is the pty parity harness, which runs Python and Go pqx on
   the same key scripts and compares their screens;
   [its README](go/bench/parity/README.md) says how to run it.
@@ -275,12 +277,15 @@ needs. CI also runs `staticcheck` (settings in `go/staticcheck.conf`).
 Design notes are in [`docs/design`](docs/design), the port's in
 [`go-port.md`](docs/design/go-port.md). `uv run go/bench/screenshots/make_screenshots.py`
 regenerates the screenshots on this page from the Go binary (it needs Go and
-headless Chrome or Chromium). `tools/` has the scripts that write the
-synthetic files (`make_demo.py`, `make_trips.py`).
+headless Chrome or Chromium). `tools/` has `uv run` scripts that write the
+synthetic files (`make_demo.py`, `make_trips.py`) and Python pqx's own
+benchmarks (`grid_bench.py`, `startup_bench.py`). `ruff check .` lints the
+repository's Python.
 
 Releases are built by the `go-release.yml` workflow: a wheel per platform for
-PyPI and an archive per platform for GitHub Releases, with release candidates
-going to TestPyPI first. The steps are in the
+PyPI and an archive per platform for GitHub Releases. Pushing a `v0.3.*` tag
+uploads the wheels to PyPI and drafts the GitHub Release; release candidates
+can go to TestPyPI first. The steps are in the
 [release runbook](docs/runbooks/release.md).
 
 ## License
