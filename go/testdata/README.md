@@ -9,8 +9,8 @@
 The golden files here and the other `testdata/*.json` files in `go/internal` are outputs
 of Python pqx 0.2.x, the reference implementation. Python pqx is no longer in this
 repository (it was removed at the cutover; see `docs/design/go-port.md`): its last code
-is the `v0.2.0` tag and the `python-0.2` branch (made when 0.2.0 final is tagged;
-before that, the commits before the cutover), and its releases are on PyPI. The
+is the `v0.2.0` tag and the `python-0.2` branch (which the owner makes when 0.2.0 final
+is released; before that, `master` before the cutover), and its releases are on PyPI. The
 generators (`golden/make_golden.py`, `internal/*/testdata/make_*.py`,
 `internal/theme/testdata/gen_rich_colours.py`) need a Python where `import pqx` gives
 Python pqx 0.2.x, written `<python with pqx 0.2.x>` in their docstrings. Either

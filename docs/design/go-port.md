@@ -622,27 +622,52 @@ Go-only with releases wired up. Nothing publishes until a `v0.3.*` tag is pushed
     cursor-keys, clear-x, cli-help and the `filter-*` scenarios at 120x40 against
     rc3 through uvx gave 12 PASS, 1 INTENDED; the `detail-*` scenarios against the
     `master` checkout 7 PASS, 1 PYBUG, 1 INTENDED.
-- **Workflows.**
+- **Workflows** (after the integrator's independent review of the PR).
   - `go-release.yml` runs on `v0.3.*` tags as well as pull requests and dispatch.
-    On a tag: the version is the tag minus `v` (normalized PEP 440, 0.3.x, printed
-    by every binary); after the five platform builds and `check`, job `pypi`
-    (environment `pypi`, trusted publishing, `id-token: write` in that job only)
-    uploads the wheels, and job `github-release` (`contents: write` in that job only)
-    creates a draft GitHub Release with the five archives, pre-release for
-    a/b/rc/dev versions. Actions are pinned by commit SHA.
+    On a tag:
+    - `version` fails unless the tagged commit is on `master` (so only code that
+      went through master's PRs is released) and the tag is `v` plus a normalized
+      PEP 440 0.3.x version (checked with `[[ =~ ]]`, no leading zeros); every
+      binary must print that version;
+    - `test` runs `make vet` and `make test` on the tagged commit (in every run of
+      the workflow), so the release doesn't rest on an earlier `go.yml` run;
+    - after the five platform builds, `check` and `test`: job `pypi` (environment
+      `pypi`, trusted publishing, `id-token: write` in that job only,
+      `skip-existing` so a re-run can finish a cut-off upload) uploads the wheels
+      straight from the platform builds' artifacts, and job `github-release`
+      (`contents: write` in that job only) creates a draft GitHub Release targeting
+      the tagged commit, with the five archives, pre-release for a/b/rc/dev
+      versions. A re-run replaces its own draft's files; it refuses a published
+      Release, a draft of another commit, and any lookup error.
+  - Supply chain of the jobs whose files are published: actions pinned by commit
+    SHA, manylinux images by digest, `setup-go` without its cache, and the Python
+    tools (uv and pywinpty in the builds, twine and check-wheel-contents in `check`)
+    installed from `go/packaging/requirements/*.txt` with `--require-hashes`.
   - `go.yml` is the CI on `master`: the Go tests on Linux and macOS, and a `scripts`
-    job with ruff, actionlint, the harness selftests, the fixtures check and the
-    `tools/` scripts.
+    job with ruff, actionlint, the harness selftests, the fixtures check
+    (`go/testdata/check_fixtures.py`: byte-identical, except `demo.parquet`, whose
+    coordinates differ in the last bit on GitHub's runners; it must match in Parquet
+    layout, null counts, schema, nulls and values to 1e-12) and the `tools/` scripts.
   - Nothing runs on `v0.2.*` tags or on a published Release.
 - **What happens when.**
   - Merging `native-port` into `master`: `go.yml` runs; nothing is built for
-    release or uploaded.
-  - Pushing `v0.3.0rc1`: the wheels go to PyPI as a pre-release (pip installs them
-    only with `--pre` or `==0.3.0rc1`) and a draft pre-release GitHub Release is made.
+    release or uploaded. A `v0.3.*` tag on any other branch publishes nothing.
+  - Pushing `v0.3.0rc1` on `master`: after the owner approves the `pypi`
+    deployment, the wheels go to PyPI as a pre-release (pip installs them only with
+    `--pre` or `==0.3.0rc1`), and a draft pre-release GitHub Release is made.
   - Pushing `v0.3.0`: the same as a final release; the owner publishes the draft.
-- **Owner steps** (`docs/runbooks/release.md`, "The cutover"): tag and release
-  Python 0.2.0 final from `master` before the merge and branch `python-0.2` from
-  `v0.2.0` for 0.2.x fixes; add `go-release.yml` (environment `pypi`) as a trusted
-  publisher on pypi.org, keeping `publish.yml`'s for the `python-0.2` branch;
-  optionally a required reviewer on the `pypi` environment (it has none, so a tag
-  uploads at once).
+    v0.3.x Releases are never made by hand.
+- **Owner steps** (`docs/runbooks/release.md`, "One-time setup" and "The
+  cutover"):
+  - tag and release Python 0.2.0 final from `master` before the merge, and branch
+    `python-0.2` from `v0.2.0` for 0.2.x fixes;
+  - **required, before adding any trusted publisher:** protect the `pypi`
+    environment (required reviewer; deployment only from tags `v*`, which covers
+    `publish.yml` on `v0.2.*` too; optionally a ruleset reserving `v*` tags) and the
+    new `testpypi` environment (required reviewer; deployment only from `master`).
+    Without that, any branch can mint a PyPI token: a same-repository PR that edits
+    the workflow, or a dispatch from a branch, can name the environment. `pypi` has
+    no protection rules today;
+  - then add `go-release.yml` (environment `pypi`) as a trusted publisher on
+    pypi.org, keeping `publish.yml`'s for the `python-0.2` branch, and the same on
+    test.pypi.org with environment `testpypi`.

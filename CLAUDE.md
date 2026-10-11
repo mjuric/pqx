@@ -2,7 +2,8 @@
 
 pqx is a terminal Parquet explorer written in Go (`go/`). Python pqx 0.2.x, the
 version it was ported from, is no longer here: its code is the `v0.2.0` tag and
-the `python-0.2` branch, and it stays the reference the port is checked against
+the `python-0.2` branch (made by the owner when 0.2.0 final is released; before
+that, `master` before the cutover), and it stays the reference the port is checked against
 (golden files, the pty parity harness). Plan and history of the port:
 `docs/design/go-port.md`.
 

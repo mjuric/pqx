@@ -24,8 +24,8 @@ from the README, the `?` help and native-port.md, not from either implementation
 You need a Python with `pyte`, `pyyaml`, `pyarrow` and `numpy` (it also writes the
 fixtures), and the reference: Python pqx 0.2.x. Python pqx is no longer in this
 repository (it left at the cutover; its code is the `v0.2.0` tag and the `python-0.2`
-branch). By default the tools run it from PyPI with `uvx -q --from 'pqx>=0.2.0rc3,<0.3'
-pqx`, so they need [uv](https://docs.astral.sh/uv/); `PQX_PY` names another one: an
+branch, which the owner makes at the 0.2.0 release). By default the tools run it
+from PyPI with `uvx -q --from 'pqx>=0.2.0rc3,<0.3' pqx`, so they need [uv](https://docs.astral.sh/uv/); `PQX_PY` names another one: an
 installed pqx 0.2.x, or any command line.
 
 ```sh
@@ -46,6 +46,10 @@ cd bench/parity
 |---|---|---|
 | `PQX_PY` | `uvx -q --from 'pqx>=0.2.0rc3,<0.3' pqx` | the Python pqx command: a path, or a command line split as the shell does (`PQX_PY="uvx -q --from pqx==0.2.0rc3 pqx"`; a checkout: `PQX_PY="env PYTHONPATH=<checkout> <python> -m pqx"`) |
 | `PQX_GO` | `go/bin/pqx` | the Go binary (or a command line) |
+
+`PQX_PY` and `PQX_GO` are split into words as the shell would (Python's `shlex`),
+so a path with spaces must be quoted inside the value:
+`PQX_PY="'/opt/my tools/pqx'"`.
 | `PQX_FIXTURE_PYTHON` | the runner's Python | writes the fixtures (needs `numpy` and `pyarrow`; `demo` and `slow` come from `tools/make_demo.py`) |
 | `--scratch DIR` / `PQX_PARITY_SCRATCH` | `$TMPDIR/pqx-parity` | fixtures, runs and the report go here |
 | `--fixtures DIR` / `PQX_FIXTURES` | `<scratch>/fixtures` | made on first use |

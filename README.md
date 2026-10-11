@@ -267,7 +267,8 @@ needs. CI also runs `staticcheck` (settings in `go/staticcheck.conf`).
   `schema`, `stats`, `plot`, `meta`, `dialogs`, `chrome`, `footer`, …).
 - `go/testdata` has the test fixtures and golden files: outputs of Python pqx
   0.2.x, the reference for the port, that the Go tests must match. Python pqx
-  is no longer in this repository (its code is the `python-0.2` branch); the
+  is no longer in this repository (its code is the `python-0.2` branch, made at
+  the 0.2.0 release); the
   generators take it from PyPI ([`go/testdata/README.md`](go/testdata/README.md)).
 - `go/bench/parity` is the pty parity harness, which runs Python and Go pqx on
   the same key scripts and compares their screens;
