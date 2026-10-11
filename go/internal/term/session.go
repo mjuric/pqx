@@ -21,6 +21,10 @@ type Session struct {
 	sig     atomic.Value // the os.Signal that ended the app
 
 	exit func(code int) // os.Exit; ends pqx from a signal while suspended
+
+	// suspendKey carries Ctrl+Z from the app to the signal handler, which
+	// suspends pqx (Unix only; nil elsewhere)
+	suspendKey chan struct{}
 }
 
 var active atomic.Pointer[Session]
@@ -44,12 +48,42 @@ func (s *Session) ProgramOptions() []tea.ProgramOption {
 // Run runs the app on the session's terminal. The session handles the
 // signals: SIGINT quits as q does; SIGTERM, SIGHUP and SIGQUIT stop the app
 // (Signal says which); SIGTSTP suspends it, with the terminal restored,
-// until SIGCONT. Options are added to the session's.
+// until SIGCONT. Ctrl+Z (raw mode turns the terminal's own off) suspends it
+// as the terminal's would, on Unix; the app never sees the key. Options are
+// added to the session's.
 func (s *Session) Run(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
+	if s.tty != nil {
+		s.suspendKey = make(chan struct{}, 1)
+		m = ctrlZ{m, s.suspendKey}
+	}
 	p := tea.NewProgram(m, append(s.ProgramOptions(), opts...)...)
 	stop := s.handleSignals(p)
 	defer stop()
-	return p.Run()
+	m, err := p.Run()
+	if z, ok := m.(ctrlZ); ok {
+		m = z.Model
+	}
+	return m, err
+}
+
+// ctrlZ is the app with Ctrl+Z taken out of its keys, in every focus and
+// dialog: the key asks the signal handler to suspend pqx.
+type ctrlZ struct {
+	tea.Model
+	req chan<- struct{}
+}
+
+func (z ctrlZ) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if k, ok := msg.(tea.KeyPressMsg); ok && k.String() == "ctrl+z" {
+		select {
+		case z.req <- struct{}{}:
+		default: // one is pending already
+		}
+		return z, nil
+	}
+	m, cmd := z.Model.Update(msg)
+	z.Model = m
+	return z, cmd
 }
 
 // Signal is the signal that ended the app (Run), or nil.

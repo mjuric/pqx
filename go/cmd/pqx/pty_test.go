@@ -727,3 +727,174 @@ func TestPtySavedFormats(t *testing.T) {
 		}
 	}
 }
+
+// pqx leading its own session (ssh -t host pqx f) ignores Ctrl+Z, as the
+// kernel ignores the terminal's Ctrl+Z there: nothing would continue it.
+func TestPtyCtrlZOrphanedIgnored(t *testing.T) {
+	a := startPty(t, "1", fixtureFile(t))
+	a.started()
+	a.write("\x1a")
+	time.Sleep(500 * time.Millisecond)
+	if st := a.state(); st == "T" {
+		t.Fatal("pqx stopped with nothing to resume it")
+	}
+	a.checkRaw()
+	a.write("?")
+	if !a.waitFor("Parquet explorer", 5*time.Second) {
+		t.Fatal("keys don't work after Ctrl+Z")
+	}
+	time.Sleep(300 * time.Millisecond)
+	a.write("q") // closes the help
+	time.Sleep(300 * time.Millisecond)
+	a.write("q")
+	if ok, err := a.exited(5 * time.Second); !ok || err != nil {
+		t.Fatalf("q didn't quit: %v %v", ok, err)
+	}
+}
+
+// ctrlZ presses Ctrl+Z (the key: raw mode turns the terminal's own off)
+// and checks that pid stops with the terminal restored, as a job of the
+// shell.
+func ctrlZ(t *testing.T, a *ptyApp, pid int) {
+	t.Helper()
+	n := len(a.output())
+	a.write("\x1a")
+	if !waitProc(pid, "T", 5*time.Second) || !a.waitFor("Stopped", 5*time.Second) {
+		t.Fatalf("pqx didn't stop: state %q, %q", procState(pid), a.output()[n:])
+	}
+	if !a.waitFor("PROMPT$ ", 5*time.Second) {
+		t.Fatalf("the shell didn't take the terminal back: %q", a.output()[n:])
+	}
+	tail := a.output()[n:]
+	checkCleared(t, tail)
+	for _, off := range []string{"\x1b[?1002l", "\x1b[?1003l", "\x1b[?1006l"} {
+		if !strings.Contains(tail, off) {
+			t.Errorf("%q not written on suspend: %q", off, tail)
+		}
+	}
+	// the cursor is shown (in the filter box it was already)
+	if out := a.output(); strings.LastIndex(out, "\x1b[?25l") > strings.LastIndex(out, "\x1b[?25h") {
+		t.Errorf("the cursor left hidden: %q", tail)
+	}
+}
+
+// fg continues the job: pqx takes the terminal back and repaints.
+func fg(t *testing.T, a *ptyApp, pid int, want string) {
+	t.Helper()
+	n := len(a.output())
+	a.write("fg\n")
+	if !a.waitFor("\x1b[?1049h", 5*time.Second) {
+		t.Fatalf("fg: no alternate screen: %q", a.output()[n:])
+	}
+	time.Sleep(300 * time.Millisecond)
+	tail := a.output()[n:]
+	for _, on := range []string{"\x1b[?1049h", "\x1b[?1006h", want} {
+		if !strings.Contains(tail, on) {
+			t.Errorf("%q not written on resume: %q", on, tail)
+		}
+	}
+	if st := procState(pid); st == "T" {
+		t.Fatal("pqx still stopped after fg")
+	}
+}
+
+// Ctrl+Z suspends pqx as a job, from the grid, the filter box and a
+// dialog; fg brings it back as it was, and keys work.
+func TestShellCtrlZ(t *testing.T) {
+	a, pid := startShell(t)
+	ctrlZ(t, a, pid)
+	fg(t, a, pid, "diaSourceId")
+	// in a dialog
+	a.write("?")
+	if !a.waitFor("Parquet explorer", 5*time.Second) {
+		t.Fatal("? after fg: no help")
+	}
+	ctrlZ(t, a, pid)
+	fg(t, a, pid, "Parquet explorer")
+	a.write("\x1b") // Esc closes the help
+	time.Sleep(300 * time.Millisecond)
+	// typing a filter: the text typed so far survives
+	a.write("/")
+	time.Sleep(200 * time.Millisecond)
+	a.write("diaSourceId < ")
+	time.Sleep(500 * time.Millisecond)
+	ctrlZ(t, a, pid)
+	fg(t, a, pid, "diaSourceId <")
+	n := len(a.output())
+	a.write("5\r")
+	if !a.waitFor("No matching rows", 5*time.Second) {
+		t.Fatalf("typing after fg: %q", a.output()[n:])
+	}
+	time.Sleep(300 * time.Millisecond)
+	a.write("\x1b") // to the grid
+	time.Sleep(300 * time.Millisecond)
+	a.write("q")
+	if !waitProc(pid, "", 5*time.Second) || !a.waitFor("PROMPT$ ", 5*time.Second) {
+		t.Fatalf("q didn't quit: %q", procState(pid))
+	}
+}
+
+// Ctrl+Z under a wrapper that doesn't exec pqx (uv run, pipx run, a shell
+// script) stops the whole job, wrapper too, so the shell gets the terminal
+// back; fg continues both.
+func TestShellWrapperCtrlZ(t *testing.T) {
+	a, pid := startShellWith(t, "sh -c '$PQX; echo WRAPPER-DONE'")
+	pg, _ := unix.Getpgid(pid)
+	if pg == unix.Getpgrp() || pg == pid {
+		t.Fatalf("pqx's group %d: not a wrapper's job", pg)
+	}
+	var others []int
+	for _, p := range inSession(a.cmd.Process.Pid) {
+		if g, _ := unix.Getpgid(p); g == pg && p != pid {
+			others = append(others, p)
+		}
+	}
+	if len(others) == 0 {
+		t.Fatal("no wrapper beside pqx")
+	}
+	for round := 0; round < 2; round++ {
+		ctrlZ(t, a, pid)
+		for _, p := range others {
+			if !waitProc(p, "T", 2*time.Second) {
+				t.Errorf("the wrapper %d wasn't stopped: state %q", p, procState(p))
+			}
+		}
+		fg(t, a, pid, "diaSourceId")
+		for _, p := range others {
+			if st := procState(p); st == "T" {
+				t.Errorf("the wrapper %d still stopped after fg", p)
+			}
+		}
+	}
+	a.write("q")
+	if !waitProc(pid, "", 5*time.Second) || !a.waitFor("WRAPPER-DONE", 5*time.Second) ||
+		!a.waitFor("PROMPT$ ", 5*time.Second) {
+		t.Fatalf("q didn't quit: %q", procState(pid))
+	}
+}
+
+// Ctrl+Z while a query runs (one DuckDB thread, a few seconds of work):
+// the query goes on after fg and its result is shown.
+func TestShellCtrlZDuringQuery(t *testing.T) {
+	a, pid := startShellWith(t, "sh -c 'exec $PQX --threads 1'")
+	a.write("/")
+	time.Sleep(200 * time.Millisecond)
+	n := len(a.output())
+	a.write("select count(*) filter (where hash(range) % 7 = 0) >= 0 as ok, 1500000000 + 7 as n_rows from range(600000000)\r")
+	time.Sleep(700 * time.Millisecond)
+	if strings.Contains(a.output()[n:], "1500000007") {
+		t.Skip("the query finished before Ctrl+Z")
+	}
+	ctrlZ(t, a, pid)
+	time.Sleep(500 * time.Millisecond)
+	fg(t, a, pid, "n_rows")
+	if !a.waitFor("1500000007", 30*time.Second) {
+		t.Fatalf("no result after fg: %q", a.output()[n:])
+	}
+	a.write("\x1b")
+	time.Sleep(300 * time.Millisecond)
+	a.write("q")
+	if !waitProc(pid, "", 5*time.Second) || !a.waitFor("PROMPT$ ", 5*time.Second) {
+		t.Fatalf("q didn't quit: %q", procState(pid))
+	}
+}
