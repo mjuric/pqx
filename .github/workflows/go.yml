@@ -67,7 +67,8 @@ jobs:
           uv run "${w[@]}" python go/bench/parity/run.py --selftest
           uv run "${w[@]}" python go/bench/parity/security.py --selftest
       - name: The fixtures come out the same without Python pqx
-        # byte for byte, but demo.parquet by layout and value (go/testdata/check_fixtures.py)
+        # byte for byte, but demo.parquet and units.parquet by layout and value
+        # (go/testdata/check_fixtures.py)
         run: |
           w=(--no-project --with pyarrow==25.0.1 --with numpy==2.5.3)
           uv run "${w[@]}" python go/testdata/make_fixtures.py "$RUNNER_TEMP/fixtures"

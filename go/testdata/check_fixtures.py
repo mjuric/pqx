@@ -2,9 +2,9 @@
 
     python go/testdata/check_fixtures.py go/testdata/fixtures NEWDIR
 
-Every file must be byte-identical, except demo.parquet: NumPy's float functions can
-change the last bit of its coordinates on another CPU (GitHub's runners), so that one
-must have the same Parquet layout (schema, row groups and their row counts, each
+Every file must be byte-identical, except demo.parquet and units.parquet: NumPy's
+float functions (arcsin, sin, powers) can change the last bit of their values on
+another CPU (GitHub's runners), so those two must have the same Parquet layout (schema, row groups and their row counts, each
 column chunk's codec, encodings and null count), the same Arrow schema and metadata,
 the same nulls, and the same values, floats to a relative 1e-12 (NaN only where NaN).
 """
@@ -20,7 +20,8 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-BY_VALUE = {"demo.parquet"}
+#: the fixtures with values from NumPy's transcendental functions
+BY_VALUE = {"demo.parquet", "units.parquet"}
 
 
 def layout(path):

@@ -605,9 +605,9 @@ Go-only with releases wired up. Nothing publishes until a `v0.3.*` tag is pushed
     a command line, default `uvx -q --from 'pqx>=0.2.0rc3,<0.3' pqx`;
   - the fixture writers take `pqx.demo`'s generator from `tools/make_demo.py` and
     need only NumPy and PyArrow; they write the checked-in fixtures byte for byte
-    here. On GitHub's runners `demo.parquet` differs in the last bit of some
-    coordinates (NumPy's float functions vary by CPU), so CI checks the other
-    fixtures byte for byte and that one by value (floats to 1e-12);
+    here. On GitHub's runners `demo.parquet` and `units.parquet` differ in the last
+    bit of some values (NumPy's float functions vary by CPU), so CI checks the
+    other fixtures byte for byte and those two by layout and value;
   - the golden-file generators run in a Python where `import pqx` is 0.2.x
     (`uv run --with 'pqx>=0.2.0rc3,<0.3' ...` or `PYTHONPATH` on a checkout;
     `go/testdata/README.md`). With pqx 0.2.0rc3 from PyPI, `make_golden.py`
@@ -645,8 +645,9 @@ Go-only with releases wired up. Nothing publishes until a `v0.3.*` tag is pushed
     installed from `go/packaging/requirements/*.txt` with `--require-hashes`.
   - `go.yml` is the CI on `master`: the Go tests on Linux and macOS, and a `scripts`
     job with ruff, actionlint, the harness selftests, the fixtures check
-    (`go/testdata/check_fixtures.py`: byte-identical, except `demo.parquet`, whose
-    coordinates differ in the last bit on GitHub's runners; it must match in Parquet
+    (`go/testdata/check_fixtures.py`: byte-identical, except `demo.parquet` and
+    `units.parquet`, whose values differ in the last bit on GitHub's runners; they
+    must match in Parquet
     layout, null counts, schema, nulls and values to 1e-12) and the `tools/` scripts.
   - Nothing runs on `v0.2.*` tags or on a published Release.
 - **What happens when.**
