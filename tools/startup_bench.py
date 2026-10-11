@@ -1,16 +1,22 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pqx>=0.2.0rc3,<0.3", "numpy", "pyarrow"]
+# ///
 """Time pqx's startup: until the grid is usable, and until the Schema/Metadata tabs are built.
 
-    python bench/startup_bench.py FILE [FILE ...]
-    python bench/startup_bench.py --cols 300      # 300 float columns x 5000 rows, generated
-    python bench/startup_bench.py --profile FILE  # cProfile (pqx frames) up to tabs-ready
+    uv run tools/startup_bench.py FILE [FILE ...]
+    uv run tools/startup_bench.py --cols 300      # 300 float columns x 5000 rows, generated
+    uv run tools/startup_bench.py --profile FILE  # cProfile (pqx frames) up to tabs-ready
 
 For each file: wall and CPU (process time: all threads) from constructing the
 app to (1) the first page in the grid, (2) the Schema and Metadata tabs filled,
 (3) no work left; how long a key press (→) sent as the first page appears takes
 to move the cursor; and the longest the event loop went unresponsive before and
 after the first page (what a key press would have waited). Headless at 200x50
-through Textual's pilot; run from the repo root where `import pqx` resolves to
-this checkout.
+through Textual's pilot. It times Python pqx 0.2.x (the Textual version, installed
+from PyPI by `uv run`); the Go version's benchmarks are `go/bench/pty/bench.py`. To
+time a checkout of Python pqx (the `python-0.2` branch), run it with
+`PYTHONPATH=<checkout> uv run tools/startup_bench.py`.
 """
 from __future__ import annotations
 

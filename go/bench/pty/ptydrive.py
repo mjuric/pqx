@@ -20,12 +20,27 @@ import fcntl
 import os
 import re
 import select
+import shlex
 import signal
 import struct
 import termios
 import time
 
 import pyte
+
+#: Python pqx, the reference, when PQX_PY is unset: 0.2.x from PyPI, through uvx. The
+#: Python package left this repository at the cutover (docs/design/go-port.md); it lives
+#: on in the v0.2.0 tag and the python-0.2 branch.
+PYTHON_PQX = "uvx -q --from 'pqx>=0.2.0rc3,<0.3' pqx"
+
+
+def app_commands(go_binary: str) -> dict[str, list[str]]:
+    """The apps' commands, as argv prefixes: PQX_PY (default PYTHON_PQX) and PQX_GO
+    (default `go_binary`). Each variable is a path or a command line, split as the shell
+    would (PQX_PY="uvx -q --from 'pqx==0.2.0rc3' pqx", PQX_PY=/opt/pqx02/bin/pqx)."""
+    go = os.environ.get("PQX_GO")
+    return {"python": shlex.split(os.environ.get("PQX_PY") or PYTHON_PQX),
+            "go": shlex.split(go) if go else [go_binary]}
 
 #: named keys, as an xterm sends them (Textual and Bubble Tea both decode these)
 KEYS = {

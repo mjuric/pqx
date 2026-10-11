@@ -33,8 +33,9 @@ PLATFORMS = {
     "macosx_13_0_x86_64",
     "win_amd64",
 }
-# PEP 440 public versions: N(.N)*[{a|b|rc}N][.postN][.devN]
-VERSION_RE = re.compile(r"^\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?(\.dev\d+)?$")
+# normalized PEP 440 public versions: N(.N)*[{a|b|rc}N][.postN][.devN], no leading zeros
+_N = r"(0|[1-9][0-9]*)"
+VERSION_RE = re.compile(rf"{_N}(\.{_N})*((a|b|rc){_N})?(\.post{_N})?(\.dev{_N})?")
 
 
 def record_hash(data):
@@ -77,7 +78,7 @@ def wheel_file(plat):
 
 
 def build(binary, version, plat, readme_path, license_path, out_dir):
-    if not VERSION_RE.match(version):
+    if not VERSION_RE.fullmatch(version):
         raise SystemExit(f"make_wheel: {version!r} is not a normalized PEP 440 version (e.g. 0.3.0, 0.3.0rc1)")
     if plat not in PLATFORMS:
         raise SystemExit(f"make_wheel: unknown platform tag {plat!r}; expected one of {sorted(PLATFORMS)}")

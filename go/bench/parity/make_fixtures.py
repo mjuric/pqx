@@ -2,9 +2,9 @@
 
     python make_fixtures.py OUTDIR [--only NAME ...]
 
-Run it with a Python that has pyarrow and numpy (the reference pqx venv has both;
-`demo` and `slow` also use `pqx.demo` when it imports, else a copy of its generator
-isn't attempted and those two are skipped with a message). Files already present are
+Run it with a Python that has pyarrow and numpy. `demo` and `slow` come from
+tools/make_demo.py, the generator of Python pqx's `pqx.demo` (same output with the same
+pyarrow). Files already present are
 kept unless --force is given. The facts the scenarios rely on are listed per fixture
 below and in README.md.
 """
@@ -20,16 +20,18 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+# pqx.demo's generator, from the repository's tools/
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "tools"))
+from make_demo import make_table  # noqa: E402
+
 
 def demo(path):
     """20,000 LSST-like rows (pqx.demo, seed 7) in 2,500-row row groups: the tests' demo_path."""
-    from pqx.demo import make_table
     pq.write_table(make_table(20_000, seed=7), path, row_group_size=2_500, compression="zstd")
 
 
 def slow(path):
     """2,000,000 LSST-like rows (pqx.demo, seed 3) in 8 row groups: big enough for a slow count."""
-    from pqx.demo import make_table
     pq.write_table(make_table(2_000_000, seed=3), path, row_group_size=250_000, compression="zstd")
 
 
@@ -156,11 +158,7 @@ def main(argv=None):
         if os.path.exists(path) and not a.force:
             continue
         tmp = path + ".tmp"
-        try:
-            fn(tmp)
-        except ImportError as e:
-            print(f"skipping {name}: {e}", file=sys.stderr)
-            continue
+        fn(tmp)
         os.replace(tmp, path)
         print(f"wrote {path}", file=sys.stderr)
 

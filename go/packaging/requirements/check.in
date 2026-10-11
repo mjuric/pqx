@@ -1,0 +1,5 @@
+# Python tools for go-release.yml's check job, pinned with hashes in check.txt.
+# Regenerate: cd go/packaging/requirements &&
+#   uv pip compile --universal --python-version 3.12 --generate-hashes check.in -o check.txt
+twine
+check-wheel-contents

@@ -3,7 +3,7 @@
     security.py [--app python|go|both] [--keep] [--size 200x50]
     security.py --selftest
 
-A port of tests/test_security.py::test_pty_terminal_never_receives_file_escapes,
+A port of Python pqx's tests/test_security.py::test_pty_terminal_never_receives_file_escapes,
 runnable against either app (PQX_PY, PQX_GO as for run.py). It writes a file whose
 strings, column names, units, descriptions, key-value metadata and file name hold
 ESC/CSI/OSC/C1/bidi/zero-width sequences, binary values and invalid UTF-8, and drives
@@ -29,12 +29,10 @@ import pyarrow.parquet as pq
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "pty"))
-from ptydrive import Session  # noqa: E402
+from ptydrive import Session, app_commands  # noqa: E402
 
-APPS = {
-    "python": os.environ.get("PQX_PY", "/root/parquet-explorer/.venv/bin/pqx"),
-    "go": os.environ.get("PQX_GO", os.path.join(os.path.dirname(os.path.dirname(HERE)), "bin", "pqx")),
-}
+#: the apps' commands (argv prefixes), from PQX_PY and PQX_GO
+APPS = app_commands(os.path.join(os.path.dirname(os.path.dirname(HERE)), "bin", "pqx"))
 
 ESC = "\x1b"
 OSC_TITLE = ESC + "]0;PWNED-TITLE\x07"
@@ -342,12 +340,12 @@ def selftest() -> int:
     return 1 if bad else 0
 
 
-def run_app(app: str, cmd: str, size, keep: bool) -> tuple[list[str], str]:
+def run_app(app: str, cmd: list[str], size, keep: bool) -> tuple[list[str], str]:
     d = tempfile.mkdtemp(prefix=f"pqx-sec-{app}-", dir=os.environ.get("PQX_PARITY_SCRATCH"))
     try:
         path, pwns = make_evil(d, FILE_NAME)
         env = dict(os.environ, XDG_CONFIG_HOME=os.path.join(d, "config"))
-        s = Session([cmd, path], size[0], size[1], env=env, cwd=d)
+        s = Session([*cmd, path], size[0], size[1], env=env, cwd=d)
         fails = []
         try:
             if not s.wait(r"\S", 30):
@@ -395,7 +393,7 @@ def main(argv=None):
     bad = 0
     for app in (["python", "go"] if a.app == "both" else [a.app]):
         fails, d = run_app(app, APPS[app], size, a.keep)
-        print(f"{'PASS' if not fails else 'FAIL'} {app} ({APPS[app]})" + (f"  [kept {d}]" if a.keep else ""))
+        print(f"{'PASS' if not fails else 'FAIL'} {app} ({' '.join(APPS[app])})" + (f"  [kept {d}]" if a.keep else ""))
         for f in fails:
             print(f"   - {f}")
         bad += bool(fails)

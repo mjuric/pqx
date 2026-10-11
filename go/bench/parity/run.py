@@ -5,8 +5,8 @@
     run.py --only go cursor-keys             # just run one app and dump its screens
 
 SCENARIO is a scenario name or a glob over names (scenarios/*.yaml). The apps are
-PQX_PY (default /root/parquet-explorer/.venv/bin/pqx) and PQX_GO (default go/bin/pqx).
-Needs pyte and pyyaml (and pyarrow for exported-file checks). See README.md for the
+PQX_PY (default: Python pqx 0.2.x through uvx) and PQX_GO (default go/bin/pqx).
+Needs pyte, pyyaml, pyarrow and numpy. See README.md for the
 scenario format and how to read the report.
 """
 from __future__ import annotations
@@ -18,6 +18,7 @@ import glob
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -30,15 +31,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 GO_ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(GO_ROOT, "bench", "pty"))
 import pyte  # noqa: E402
-from ptydrive import SPINNER, ByteStream, Screen, Session, key_bytes, styles_changed  # noqa: E402
+from ptydrive import SPINNER, ByteStream, Screen, Session, app_commands, key_bytes, styles_changed  # noqa: E402
 
 SCRATCH_DEFAULT = os.environ.get("PQX_PARITY_SCRATCH", os.path.join(tempfile.gettempdir(), "pqx-parity"))
-APPS = {
-    "python": os.environ.get("PQX_PY", "/root/parquet-explorer/.venv/bin/pqx"),
-    "go": os.environ.get("PQX_GO", os.path.join(GO_ROOT, "bin", "pqx")),
-}
-#: the Python that writes the fixtures (needs pyarrow, numpy and pqx.demo)
-FIXTURE_PYTHON = os.environ.get("PQX_FIXTURE_PYTHON", "/root/parquet-explorer/.venv/bin/python")
+#: the apps' commands (argv prefixes), from PQX_PY and PQX_GO
+APPS = app_commands(os.path.join(GO_ROOT, "bin", "pqx"))
+#: the Python that writes the fixtures (needs pyarrow and numpy)
+FIXTURE_PYTHON = os.environ.get("PQX_FIXTURE_PYTHON", sys.executable)
 DEFAULT_SIZES = [(120, 40), (200, 50)]
 #: seconds of an unchanged screen that count as settled (a scenario or step can set `quiet`)
 QUIET = 0.5
@@ -148,7 +147,7 @@ def run_unit(sc, slot, app, cmd, size, fixtures, scratch, threads, timeout_scale
     # the slot in a path cut by wrapping or by an input box's edge
     extra = [(r"(?<=runs/)[ab](?=/)", "_")] + sc.get("normalize", [])
     norm_line, norm = make_normalizer(extra, subs_norm)
-    argv = [cmd, *[fill(a) for a in sc.get("args", [])]]
+    argv = [*cmd, *[fill(a) for a in sc.get("args", [])]]
     if sc.get("file", True):
         argv.append(subs["fixture"])
     threads = sc.get("threads", threads)  # a scenario can ask for 1 (deterministic aggregates)
@@ -758,8 +757,8 @@ def main(argv=None):
     for app in set(apps):
         if app not in APPS:
             raise SystemExit(f"unknown app {app!r} (python or go)")
-        if not shutil.which(APPS[app]) and not os.access(APPS[app], os.X_OK):
-            raise SystemExit(f"{app}: {APPS[app]} is not executable (set PQX_PY / PQX_GO)")
+        if not shutil.which(APPS[app][0]) and not os.access(APPS[app][0], os.X_OK):
+            raise SystemExit(f"{app}: {APPS[app][0]} is not executable (set PQX_PY / PQX_GO)")
     versions = {app: version_of(APPS[app]) for app in set(apps)}
 
     sizes_cli = [tuple(int(v) for v in s.lower().split("x")) for s in (a.size or [])]
@@ -771,7 +770,7 @@ def main(argv=None):
                 units.append((n, size, lab, app))
 
     print(f"{len(scen)} scenarios, {len(units)} runs, {a.jobs} at a time; "
-          + ", ".join(f"{k} = {APPS[k]} ({versions[k]})" for k in sorted(set(apps))), file=sys.stderr)
+          + ", ".join(f"{k} = {shlex.join(APPS[k])} ({versions[k]})" for k in sorted(set(apps))), file=sys.stderr)
     results = {}
     t0 = time.perf_counter()
     with cf.ThreadPoolExecutor(a.jobs) as ex:
@@ -793,7 +792,7 @@ def main(argv=None):
 
 def version_of(cmd):
     try:
-        p = subprocess.run([cmd, "--version"], capture_output=True, text=True, timeout=30)
+        p = subprocess.run([*cmd, "--version"], capture_output=True, text=True, timeout=300)
         return (p.stdout or p.stderr).strip().splitlines()[0]
     except Exception as e:  # noqa: BLE001
         return f"? ({e})"
@@ -959,7 +958,7 @@ def report(scen, results, labels, out, xfail, a, versions, elapsed):
     with open(rep, "w") as fh:
         fh.write(f"pqx pty parity: {la} vs {lb}\n")
         for k, v in versions.items():
-            fh.write(f"  {k}: {APPS[k]} ({v})\n")
+            fh.write(f"  {k}: {shlex.join(APPS[k])} ({v})\n")
         if len(set(versions.values())) > 1:
             fh.write("  note: the versions differ; the title bar's version is normalized but its length "
                      "changes what fits (build Go with VERSION=<python's>)\n")
