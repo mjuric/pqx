@@ -1,13 +1,19 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pqx>=0.2.0rc3,<0.3", "numpy", "pyarrow"]
+# ///
 """Time pqx's data grid on a wide file.
 
-    python bench/grid_bench.py                    # 300 float columns x 5000 rows, generated
-    python bench/grid_bench.py --cols 16          # narrower
-    python bench/grid_bench.py --file x.parquet   # your own file
-    python bench/grid_bench.py --profile right    # cProfile one operation
+    uv run tools/grid_bench.py                    # 300 float columns x 5000 rows, generated
+    uv run tools/grid_bench.py --cols 16          # narrower
+    uv run tools/grid_bench.py --file x.parquet   # your own file
+    uv run tools/grid_bench.py --profile right    # cProfile one operation
 
 Reports CPU time per operation (process time, so waits don't count), driving the
-app headless at 200x50 through Textual's pilot. Run it from the repo root, in an
-environment where `import pqx` resolves to this checkout.
+app headless at 200x50 through Textual's pilot. It times Python pqx 0.2.x (the
+Textual version, installed from PyPI by `uv run`); the Go version's benchmarks are
+`go/bench/pty/bench.py`. To time a checkout of Python pqx (the `python-0.2` branch),
+run it with `PYTHONPATH=<checkout> uv run tools/grid_bench.py`.
 """
 from __future__ import annotations
 

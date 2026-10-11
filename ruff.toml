@@ -1,0 +1,7 @@
+# ruff settings for the repository's Python: tools/ and the scripts under go/
+# (test-data generators, the pty harness, packaging). Python pqx's own settings
+# were in its pyproject.toml.
+line-length = 120
+
+[lint]
+select = ["F", "E9"]  # pyflakes + syntax errors

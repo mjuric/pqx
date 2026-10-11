@@ -1,20 +1,9 @@
 .venv/
 __pycache__/
-*.egg-info/
 *.parquet
-!tests/data/*.parquet
-.pytest_cache/
-# setuptools-scm generated version file
-pqx/_version.py
-# build output (uv build / pip wheel)
+# build output
 build/
 dist/
-# Textual debug input log (TEXTUAL_DEBUG=1 writes it to the current directory)
-keys.log
-# coverage
-.coverage
-.coverage.*
-htmlcov/
 # OS and editor files
 .DS_Store
 *.swp
